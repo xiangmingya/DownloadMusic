@@ -181,12 +181,12 @@ function renderLocalPage() {
                         <p>${song.artist}</p>
                     </div>
                 </div>
-                <div class="inline-lyrics" id="inline-lyrics-${globalIndex}"></div>
                 <div>
                     <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${song.name.replace(/'/g, "\\'")}', '${song.artist.replace(/'/g, "\\'")}', ${globalIndex})">▶</button>
                     <button onclick="downloadSong('${platform}', '${song.id}', '${song.name.replace(/'/g, "\\'")}', '${song.artist.replace(/'/g, "\\'")}')">下载</button>
                 </div>
             </div>
+            <div class="inline-lyrics" id="inline-lyrics-${globalIndex}"></div>
             <div class="inline-player" id="player-${globalIndex}" style="display: none;">
                 <div class="progress-bar">
                     <div class="progress-fill" id="progress-${globalIndex}"></div>
