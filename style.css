@@ -135,7 +135,6 @@ button:hover {
 .options-row {
     display: flex;
     gap: 30px;
-    justify-content: center;
     align-items: center;
     margin-bottom: 30px;
 }
@@ -270,7 +269,7 @@ button:hover {
     text-overflow: ellipsis;
     text-align: center;
     padding: 0 20px;
-    line-height: 60px;
+    line-height: 20px;
 }
 
 .song-cover {
@@ -495,7 +494,8 @@ footer {
 
     .options-row {
         flex-wrap: wrap;
-        gap: 8px;
+        justify-content: center;
+        gap: 2px;
     }
 
     .search-type {
@@ -527,13 +527,19 @@ footer {
     }
 
     .song-header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: stretch;
+        flex-wrap: wrap;
+        gap: 8px;
     }
 
     .song-header > div:first-child {
         gap: 12px;
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .song-header > div:last-child {
+        display: flex;
+        gap: 4px;
     }
 
     .song-cover {
@@ -550,9 +556,9 @@ footer {
     }
 
     .inline-lyrics {
-        padding: 0;
+        padding: 8px 0 0 0;
         line-height: 1.5;
-        text-align: left;
+        font-size: 12px;
     }
 
     .result-item button {
