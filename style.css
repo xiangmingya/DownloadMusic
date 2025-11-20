@@ -135,6 +135,7 @@ button:hover {
 .options-row {
     display: flex;
     gap: 30px;
+    justify-content: center;
     align-items: center;
     margin-bottom: 30px;
 }
@@ -518,7 +519,7 @@ footer {
         padding: 8px;
         height: 34px;
         font-size: 12px;
-        width: 88px;
+        width: 80px;
     }
 
     .result-item {
