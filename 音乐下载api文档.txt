@@ -1,0 +1,79 @@
+{
+"code": 200,
+"message": "success",
+"data": {
+"service": "TuneHub",
+"description": "音乐信息解析服务 - 统一的音乐平台 API 接口",
+"version": "1.0.0",
+"endpoints": {
+"api": {
+"url": "https://music-dl.sayqz.com/api/",
+"method": "GET",
+"description": "主要 API 接口",
+"parameters": {
+"source": "音乐平台标识 (如: netease, 聚合搜索时不需要)",
+"id": "歌曲/歌单/排行榜 ID (除搜索和获取列表外必需)",
+"type": "请求类型 (info/url/pic/lrc/search/aggregateSearch/playlist/toplist/toplists)",
+"br": "音质参数 (仅 type=url 时使用, 支持: 128k/320k/flac/flac24bit)",
+"keyword": "搜索关键词 (仅 type=search/aggregateSearch 时使用)",
+"limit": "搜索结果数量限制 (仅搜索时使用, 默认20, 聚合搜索默认10)",
+"page": "页数 (仅搜索时使用, 默认1)"
+},
+"examples": {
+"info": "https://music-dl.sayqz.com/api/?source=netease&id=123456&type=info",
+"url": "https://music-dl.sayqz.com/api/?source=netease&id=123456&type=url&br=320k",
+"pic": "https://music-dl.sayqz.com/api/?source=netease&id=123456&type=pic",
+"lrc": "https://music-dl.sayqz.com/api/?source=netease&id=123456&type=lrc",
+"search": "https://music-dl.sayqz.com/api/?source=netease&type=search&keyword=周杰伦&limit=10&page=1",
+"aggregateSearch": "https://music-dl.sayqz.com/api/?type=aggregateSearch&keyword=周杰伦&limit=5&page=1",
+"playlist": "https://music-dl.sayqz.com/api/?source=netease&id=2037067301&type=playlist",
+"toplists": "https://music-dl.sayqz.com/api/?source=netease&type=toplists",
+"toplist": "https://music-dl.sayqz.com/api/?source=netease&id=19723756&type=toplist"
+}
+},
+"status": {
+"url": "https://music-dl.sayqz.com/status",
+"method": "GET",
+"description": "服务状态查询"
+},
+"health": {
+"url": "https://music-dl.sayqz.com/health", "url" : "https://music-dl.sayqz.com/health",
+"method": "GET",
+"description": "健康检查"
+}
+},
+"supportedPlatforms": {
+"netease": {
+"name": "网易云音乐",
+"enabled": true
+},
+"kuwo": {
+"name": "酷我音乐",
+"enabled": true
+},
+"qq": {
+"name": "QQ音乐",
+"enabled": true
+},
+"kugou": {
+"name": "酷狗音乐",
+"enabled": false
+},
+"migu": {
+"name": "咪咕音乐",
+"enabled": false
+}
+},
+"autoSwitch": {
+"enabled": true,
+"description": "当某个平台获取URL失败时，自动尝试其他平台",
+"responseHeader": "X-Source-Switch: 原平台 -> 新平台"
+},
+"aggregateSearch": {
+"enabled": true,
+"description": "同时搜索所有平台并混合排列结果",
+"mixResults": true
+}
+},
+"timestamp": "2025-11-20T17:40:13.898+08:00"
+}
