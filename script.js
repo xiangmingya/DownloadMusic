@@ -70,9 +70,17 @@ async function checkStatus() {
 // 更新平台下拉框
 function updatePlatformSelect() {
     const platformSelect = document.getElementById('platform');
-    platformSelect.innerHTML = supportedPlatforms.map(key =>
+    const searchMode = document.getElementById('searchMode').value;
+
+    let options = '';
+    if (searchMode === 'keyword' && currentSearchType === 'song') {
+        options = '<option value="all">全部</option>';
+    }
+    options += supportedPlatforms.map(key =>
         `<option value="${key}">${platformNames[key]}</option>`
     ).join('');
+
+    platformSelect.innerHTML = options;
 }
 
 // 搜索
@@ -96,11 +104,16 @@ async function search() {
                 url = `${API_BASE}/api/?source=${platform}&id=${input}&type=playlist`;
             }
         } else {
+            const platform = document.getElementById('platform').value;
             if (currentSearchType === 'song') {
-                url = `${API_BASE}/api/?type=aggregateSearch&keyword=${encodeURIComponent(input)}`;
-                currentSearchParams = { type: 'aggregateSearch', keyword: input };
+                if (platform === 'all') {
+                    url = `${API_BASE}/api/?type=aggregateSearch&keyword=${encodeURIComponent(input)}`;
+                    currentSearchParams = { type: 'aggregateSearch', keyword: input };
+                } else {
+                    url = `${API_BASE}/api/?source=${platform}&type=search&keyword=${encodeURIComponent(input)}`;
+                    currentSearchParams = { type: 'search', platform, keyword: input };
+                }
             } else {
-                const platform = document.getElementById('platform').value;
                 url = `${API_BASE}/api/?source=${platform}&type=search&keyword=${encodeURIComponent(input)}`;
                 currentSearchParams = { type: 'search', platform, keyword: input };
             }
@@ -445,12 +458,9 @@ document.querySelectorAll('.type-btn').forEach(btn => {
     });
 });
 
-// 切换搜索模式时显示/隐藏平台选择器
+// 切换搜索模式时更新平台选择器
 function updatePlatformSelector() {
-    const searchMode = document.getElementById('searchMode').value;
-    const platformSelector = document.getElementById('platformSelector');
-
-    platformSelector.style.display = (searchMode === 'id' || currentSearchType === 'playlist') ? 'flex' : 'none';
+    updatePlatformSelect();
 }
 
 document.getElementById('searchMode').addEventListener('change', updatePlatformSelector);
