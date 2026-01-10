@@ -24,6 +24,44 @@ async function checkStatus() {
             fetch(`${API_BASE}/health`).then(r => r.json())
         ]);
 
+        // 兼容不同 /status 平台结构：
+        // - { data: { platforms: { platforms: ["netease", ...] } } }
+        // - { data: { platforms: ["netease", ...] } }
+        // - { data: { platforms: [{ name: "netease", enabled: true }, ...] } }
+        // - { data: { platforms: { netease: { enabled: true }, ... } } }
+        function extractEnabledPlatformKeys(statusJson) {
+            const raw = statusJson?.data?.platforms;
+            if (!raw) return [];
+
+            // data.platforms = ["netease", ...]
+            if (Array.isArray(raw) && raw.every(p => typeof p === 'string')) return raw;
+
+            // data.platforms = [{name, enabled}, ...]
+            if (Array.isArray(raw)) {
+                return raw
+                    .filter(p => p && (p.enabled === undefined || p.enabled))
+                    .map(p => p.name)
+                    .filter(Boolean);
+            }
+
+            // data.platforms.platforms = [...]
+            if (Array.isArray(raw.platforms)) {
+                return raw.platforms
+                    .filter(p => (typeof p === 'string') || (p && (p.enabled === undefined || p.enabled)))
+                    .map(p => (typeof p === 'string' ? p : p.name))
+                    .filter(Boolean);
+            }
+
+            // data.platforms = { netease: {enabled:true}, ... }
+            if (typeof raw === 'object') {
+                return Object.entries(raw)
+                    .filter(([, v]) => v && (v.enabled === undefined || v.enabled))
+                    .map(([k]) => k);
+            }
+
+            return [];
+        }
+
         // 平台名称映射
         const platformNameMap = {
             netease: '网易云音乐',
@@ -33,8 +71,10 @@ async function checkStatus() {
             migu: '咪咕音乐'
         };
 
-        if (status.code === 200 && status.data.platforms && status.data.platforms.platforms) {
-            supportedPlatforms = status.data.platforms.platforms;
+        const enabledPlatformKeys = extractEnabledPlatformKeys(status);
+
+        if (status.code === 200 && enabledPlatformKeys.length > 0) {
+            supportedPlatforms = enabledPlatformKeys;
             platformNames = {};
             const enabledPlatformNames = [];
 
@@ -52,7 +92,14 @@ async function checkStatus() {
                 `服务状态: <span class="offline">异常</span>`;
         }
 
-        if (health.code === 200) {
+        const healthOk =
+            health?.code === 200 ||
+            health?.status === 'ok' ||
+            health?.status === 'healthy' ||
+            health?.data?.status === 'ok' ||
+            health?.data?.status === 'healthy';
+
+        if (healthOk) {
             document.getElementById('healthStatus').innerHTML =
                 `健康状态: <span class="online">正常</span>`;
         } else {
