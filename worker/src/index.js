@@ -724,6 +724,11 @@ async function upstreamJson(url, init = {}) {
   return { status: resp.status, json, text };
 }
 
+const NETEASE_WEB_HEADERS = {
+  Referer: "https://music.163.com/",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+};
+
 async function callSearch(platform, keyword, page, limit) {
   if (platform === "netease") {
     const endpoint = new URL("https://music.163.com/api/search/get/web");
@@ -732,7 +737,7 @@ async function callSearch(platform, keyword, page, limit) {
     endpoint.searchParams.set("offset", String((page - 1) * limit));
     endpoint.searchParams.set("limit", String(limit));
     const { status, json } = await upstreamJson(endpoint.toString(), {
-      headers: { Referer: "https://music.163.com/" },
+      headers: NETEASE_WEB_HEADERS,
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
     return parseSearchNetease(json);
@@ -810,7 +815,7 @@ async function callPlaylist(platform, id) {
     endpoint.searchParams.set("n", "100000");
     endpoint.searchParams.set("s", "8");
     const { status, json } = await upstreamJson(endpoint.toString(), {
-      headers: { Referer: "https://music.163.com/" },
+      headers: NETEASE_WEB_HEADERS,
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
     return parsePlaylistNetease(json);
