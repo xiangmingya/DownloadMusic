@@ -46,6 +46,7 @@ const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUs
 let playlistSongs = [];
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
+let playlistSheetHideTimer = null;
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -1022,13 +1023,42 @@ function renderPlaylistSheet() {
 
 function setPlaylistSheetOpen(open) {
     const sheet = document.getElementById('playlistSheet');
+    const panel = sheet ? sheet.querySelector('.playlist-sheet-panel') : null;
     if (!sheet) return;
-    isPlaylistSheetOpen = Boolean(open);
-    sheet.style.display = isPlaylistSheetOpen ? '' : 'none';
-    sheet.classList.toggle('open', isPlaylistSheetOpen);
-    if (isPlaylistSheetOpen) {
-        renderPlaylistSheet();
+
+    if (playlistSheetHideTimer) {
+        clearTimeout(playlistSheetHideTimer);
+        playlistSheetHideTimer = null;
     }
+
+    if (open) {
+        isPlaylistSheetOpen = true;
+        sheet.style.display = '';
+        sheet.classList.add('visible');
+        // Force layout so transition always starts from hidden state.
+        void sheet.offsetHeight;
+        requestAnimationFrame(() => {
+            sheet.classList.add('open');
+        });
+        renderPlaylistSheet();
+        return;
+    }
+
+    isPlaylistSheetOpen = false;
+    sheet.classList.remove('open');
+    const finishHide = () => {
+        if (isPlaylistSheetOpen) return;
+        sheet.classList.remove('visible');
+        sheet.style.display = 'none';
+    };
+    if (panel) {
+        panel.addEventListener('transitionend', function onEnd(e) {
+            if (e.target !== panel) return;
+            panel.removeEventListener('transitionend', onEnd);
+            finishHide();
+        });
+    }
+    playlistSheetHideTimer = setTimeout(finishHide, 340);
 }
 
 function setFullPlayerOpen(open) {
