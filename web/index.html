@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音楽 - Music Downloader</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="style.css">
+    <script>
+        // 静态托管时请改成你的 Worker 完整地址，例如：
+        // window.AUTH_API_BASE = 'https://your-worker.workers.dev/api/auth';
+        // window.APP_API_BASE = 'https://your-worker.workers.dev/api/proxy';
+        window.AUTH_API_BASE = window.AUTH_API_BASE || '/api/auth';
+        window.APP_API_BASE = window.APP_API_BASE || '/api/proxy';
+    </script>
+</head>
+<body class="auth-body">
+    <div class="login-shell" id="loginShell">
+        <div class="login-paper">
+            <p class="login-kicker">ようこそ</p>
+            <h1 class="login-title">音楽</h1>
+            <p class="login-subtitle">Private Access</p>
+
+            <form id="passwordLoginForm" class="login-form">
+                <label for="passwordInput">访问密码</label>
+                <input id="passwordInput" name="password" type="password" placeholder="输入密码" autocomplete="current-password" required>
+                <button type="submit">入る</button>
+            </form>
+
+            <div class="login-divider" id="linuxdoDivider">OR</div>
+            <a class="linuxdo-btn" id="linuxdoLoginBtn" href="#">使用 Linux DO 登录</a>
+            <p class="login-tip login-tip-subtle" id="linuxdoLoginHint">正在检测 Linux DO 连通性...</p>
+
+            <a class="apply-key-link" href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">去申请 TuneHub Key</a>
+            <p class="login-tip" id="loginErrorTip"></p>
+            <p class="login-tip">密码登录使用站点Key，Linux DO登录需填写个人Key。</p>
+            <p class="login-tip">Linux DO 模式下：我们不会在服务器保存你的 Key，只保存在你的浏览器。</p>
+        </div>
+    </div>
+
+    <div class="container" id="appContainer" style="display:none;">
+        <header>
+            <div class="header-actions">
+                <span class="user-chip" id="userChip">用户</span>
+                <a class="logout-link" id="logoutBtn" href="#">退出</a>
+            </div>
+            <h1>音楽</h1>
+            <p class="subtitle">Music Downloader</p>
+        </header>
+
+        <main>
+            <section class="key-panel key-panel-admin" id="adminKeyPanel" style="display:none;">
+                <h2>Key 模式</h2>
+                <p>当前为密码登录，默认使用服务器配置的 TuneHub Key。</p>
+            </section>
+
+            <section class="key-panel" id="userKeyPanel" style="display:none;">
+                <h2>你的 TuneHub API Key</h2>
+                <p class="key-panel-desc">Linux DO 登录不会使用服务器 Key。你的 Key 仅保存在当前浏览器，不保存到服务器。</p>
+                <p class="privacy-note">隐私说明：我们不会在服务器保存你的 Key；Key 只存在你当前浏览器（localStorage），可随时清空。</p>
+                <div class="key-form">
+                    <input id="userApiKeyInput" type="password" placeholder="输入 th_ 开头的 Key" autocomplete="off">
+                    <button id="saveUserKeyBtn" type="button">保存 Key</button>
+                    <button id="clearUserKeyBtn" type="button" class="ghost-btn">清空</button>
+                    <a class="apply-key-link app-apply-link" href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">去申请 TuneHub Key</a>
+                </div>
+                <p id="userKeyStatus" class="key-status"></p>
+            </section>
+
+            <div class="search-section">
+                <div class="search-box">
+                    <select id="searchMode">
+                        <option value="keyword">关键词</option>
+                        <option value="id">ID</option>
+                    </select>
+                    <input type="text" id="searchInput" placeholder="搜索歌曲或歌单...">
+                    <button id="searchBtn">検索</button>
+                </div>
+                <div class="options-row">
+                    <div class="search-type">
+                        <button class="type-btn active" data-type="song">单曲</button>
+                        <button class="type-btn" data-type="playlist">歌单</button>
+                    </div>
+                    <div class="platform-selector" id="platformSelector">
+                        <label>平台:</label>
+                        <select id="platform"></select>
+                    </div>
+                    <div class="quality-selector">
+                        <label>音质:</label>
+                        <select id="quality">
+                            <option value="128k">128k</option>
+                            <option value="320k" selected>320k</option>
+                            <option value="flac">FLAC</option>
+                            <option value="flac24bit">FLAC 24bit</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div id="results" class="results"></div>
+            <audio id="audio"></audio>
+            <div id="toast" class="toast"></div>
+        </main>
+
+        <footer>
+            <div class="status">
+                <span id="serviceStatus">服务状态: <span class="loading">检查中...</span></span>
+                <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+    (function () {
+        const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
+        const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
+        window.AUTH_API_BASE = AUTH_BASE;
+        window.APP_API_BASE = APP_BASE;
+
+        let appScriptLoaded = false;
+
+        function setLoginTip(message, isError) {
+            const el = document.getElementById('loginErrorTip');
+            if (!el) return;
+            el.textContent = message || '';
+            if (isError) {
+                el.classList.add('warn');
+            } else {
+                el.classList.remove('warn');
+            }
+        }
+
+        async function authFetch(path, init = {}) {
+            const response = await fetch(`${AUTH_BASE}${path}`, {
+                credentials: 'include',
+                ...init
+            });
+            const text = await response.text();
+            let data = {};
+            try {
+                data = JSON.parse(text);
+            } catch {
+                data = { message: text };
+            }
+            return { response, data };
+        }
+
+        async function checkLinuxdoStatus() {
+            const btn = document.getElementById('linuxdoLoginBtn');
+            const hint = document.getElementById('linuxdoLoginHint');
+            const divider = document.getElementById('linuxdoDivider');
+            if (!btn || !hint) return;
+
+            const redirect = encodeURIComponent(window.location.origin + window.location.pathname);
+            btn.href = `${AUTH_BASE}/login/linuxdo?redirect=${redirect}`;
+
+            try {
+                const { response, data } = await authFetch('/linuxdo-status');
+                const status = data && data.data ? data.data : {};
+                const reachable = Boolean(status.reachable);
+                const configured = Boolean(status.configured);
+                if (response.ok && configured && reachable) {
+                    hint.style.display = 'none';
+                    return;
+                }
+                btn.style.display = 'none';
+                if (divider) divider.style.display = 'none';
+                hint.classList.add('warn');
+                hint.textContent = configured
+                    ? '当前服务器网络无法连接 Linux DO，已隐藏该登录方式。'
+                    : 'Linux DO 登录未配置，已隐藏该登录方式。';
+            } catch {
+                btn.style.display = 'none';
+                if (divider) divider.style.display = 'none';
+                hint.classList.add('warn');
+                hint.textContent = 'Linux DO 状态检测失败，已隐藏该登录方式。';
+            }
+        }
+
+        function mountApp(meData) {
+            const authType = String(meData.auth_type || '');
+            const user = meData.user || {};
+
+            window.APP_CONTEXT = {
+                authType: authType,
+                user: {
+                    id: String(user.id || ''),
+                    name: String(user.name || '用户'),
+                    linuxdo_id: String(user.linuxdo_id || ''),
+                    avatar: String(user.avatar || '')
+                }
+            };
+
+            document.body.classList.remove('auth-body');
+            document.body.classList.add('app-body');
+            document.getElementById('loginShell').style.display = 'none';
+            document.getElementById('appContainer').style.display = '';
+            document.getElementById('userChip').textContent =
+                `${window.APP_CONTEXT.user.name} · ${authType === 'password' ? '密码登录' : 'Linux DO'}`;
+
+            document.getElementById('adminKeyPanel').style.display = authType === 'password' ? '' : 'none';
+            document.getElementById('userKeyPanel').style.display = authType === 'linuxdo' ? '' : 'none';
+
+            if (!appScriptLoaded) {
+                const s = document.createElement('script');
+                s.src = 'script.js';
+                s.onload = function () {
+                    appScriptLoaded = true;
+                };
+                document.body.appendChild(s);
+            }
+        }
+
+        async function checkLoginAndStart() {
+            const { response, data } = await authFetch('/me');
+            if (response.ok && Number(data.code) === 0 && data.data) {
+                setLoginTip('', false);
+                mountApp(data.data);
+                return true;
+            }
+            return false;
+        }
+
+        async function doPasswordLogin(password) {
+            const { response, data } = await authFetch('/login/password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: password })
+            });
+
+            if (!response.ok || Number(data.code) !== 0) {
+                throw new Error(data.message || '登录失败');
+            }
+        }
+
+        async function doLogout() {
+            await authFetch('/logout', {
+                method: 'POST'
+            });
+            window.location.href = window.location.origin + window.location.pathname;
+        }
+
+        document.getElementById('passwordLoginForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const input = document.getElementById('passwordInput');
+            const password = String(input.value || '');
+            try {
+                await doPasswordLogin(password);
+                await checkLoginAndStart();
+            } catch (err) {
+                setLoginTip(err.message || '密码错误，请重试。', true);
+            }
+        });
+
+        document.getElementById('logoutBtn').addEventListener('click', async function (e) {
+            e.preventDefault();
+            await doLogout();
+        });
+
+        const loginState = new URLSearchParams(window.location.search).get('login');
+        if (loginState && loginState.startsWith('failed')) {
+            setLoginTip('Linux DO 登录失败，请稍后重试。', true);
+            history.replaceState(null, '', window.location.origin + window.location.pathname);
+        }
+
+        (async function init() {
+            await checkLinuxdoStatus();
+            const ok = await checkLoginAndStart();
+            if (!ok) {
+                document.getElementById('passwordInput').focus();
+            }
+        })();
+    })();
+    </script>
+</body>
+</html>

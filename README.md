@@ -1,67 +1,64 @@
-# 音楽 - Music Downloader（PHP + 密码登录）
+# 音楽 - Music Downloader
 
-这是一个纯 PHP 版本：
-- 单密码登录（无注册）
-- 登录后才能调用代理接口
-- 不需要 Node，不需要 `npm install`
+当前推荐架构：
 
-## 上线前只改 2 处
+1. 前端静态页（可放帽子云）  
+2. Cloudflare Worker 负责：
+   - 密码登录
+   - Linux DO OAuth 登录
+   - 会话鉴权
+   - TuneHub/API 代理
 
-1. 编辑 `auth/config.php`，设置登录密码：
+## 目录说明
 
-```php
-$APP_LOGIN_PASSWORD = 'your-password';
+- `web/`：静态前端目录（帽子云发布目录）
+  - `web/index.html`
+  - `web/script.js`
+  - `web/style.css`
+  - `web/favicon.ico`
+- `worker/`：Cloudflare Worker 代码与部署说明
+
+## 前端部署（帽子云）
+
+上传整个仓库后，帽子云发布目录请设置为：
+
+`web/`
+
+然后编辑 `web/index.html` 顶部配置 Worker 地址：
+
+```js
+window.AUTH_API_BASE = 'https://你的worker域名/api/auth';
+window.APP_API_BASE = 'https://你的worker域名/api/proxy';
 ```
 
-2. 编辑 `proxy/config.php`，设置 TuneHub Key：
+## Worker 部署
 
-```php
-$LOCAL_TUNEHUB_API_KEY = 'th_xxx_replace_with_your_real_key';
-```
+见 `worker/README.md`。
 
-## 宝塔部署（最简单）
+最关键的环境：
 
-1. 把整个项目上传到宝塔站点目录（PHP 网站）。
-2. 确认站点开启 PHP。
-3. 按上面两处配置好密码和 Key。
-4. 访问站点首页 `index.php`，输入密码后使用。
+- `SESSION_SECRET`
+- `ADMIN_PASSWORD`
+- `TUNEHUB_API_KEY`
+- `LINUXDO_CLIENT_ID`
+- `LINUXDO_CLIENT_SECRET`
+- `LINUXDO_REDIRECT_URI`
+- `ALLOWED_ORIGIN`（必须填你的前端域名）
 
-不需要：
-- `npm install`
-- `npm start`
-- PM2
+## Linux DO 回调地址
 
-## 认证与代理
+在 Linux DO 后台填写：
 
-- 登录页：`index.php`
-- 应用页：`app.php`
-- 退出：`auth/logout.php`
-- 代理接口（登录态可访问）：
-  - `proxy/methods.php`
-  - `proxy/method.php`
-  - `proxy/parse.php`
+`https://你的worker域名/api/auth/callback/linuxdo`
 
-## 项目结构（关键）
+并确保与 `LINUXDO_REDIRECT_URI` 完全一致。
 
-```text
-DownloadMusic/
-├── index.php
-├── app.php
-├── index.html
-├── style.css
-├── script.js
-├── auth/
-│   ├── config.php
-│   ├── session.php
-│   └── logout.php
-└── proxy/
-    ├── config.php
-    ├── methods.php
-    ├── method.php
-    └── parse.php
-```
+## 用户 Key 策略
 
-## 注意
+- 密码登录：走 Worker 中的 `TUNEHUB_API_KEY`
+- Linux DO 登录：用户自己的 Key 只保存在浏览器本地（localStorage）
+- Worker 不持久化保存用户 Key
 
-- 请不要把真实 Key 和登录密码提交到公开仓库。
-- 如果接口报 `Unauthorized`，说明未登录或会话失效，请重新登录。
+## 说明
+
+当前版本只维护 Worker 路由（`/api/auth/*`、`/api/proxy/*`），不再支持旧 PHP 代理路由。

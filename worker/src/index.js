@@ -1,0 +1,989 @@
+const METHODS_MAP = {
+  netease: ["search", "playlist"],
+  qq: ["search", "playlist"],
+  kuwo: ["search", "playlist"],
+};
+
+export default {
+  async fetch(request, env) {
+    return handleRequest(request, env);
+  },
+};
+
+async function handleRequest(request, env) {
+  const url = new URL(request.url);
+
+  if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+    return withCors(request, env, new Response(null, { status: 204 }));
+  }
+
+  try {
+    if (url.pathname === "/api/auth/login/password" && request.method === "POST") {
+      return withCors(request, env, await handlePasswordLogin(request, env));
+    }
+    if (url.pathname === "/api/auth/login/linuxdo" && request.method === "GET") {
+      return withCors(request, env, await handleLinuxdoLoginStart(request, env));
+    }
+    if (url.pathname === "/api/auth/callback/linuxdo" && request.method === "GET") {
+      return withCors(request, env, await handleLinuxdoLoginCallback(request, env));
+    }
+    if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+      return withCors(request, env, await handleLogout(env));
+    }
+    if (url.pathname === "/api/auth/me" && request.method === "GET") {
+      return withCors(request, env, await handleMe(request, env));
+    }
+    if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
+      return withCors(request, env, await handleLinuxdoStatus(env));
+    }
+
+    if (url.pathname === "/api/proxy/methods" && request.method === "GET") {
+      return withCors(request, env, await handleMethods(request, env));
+    }
+    if (url.pathname === "/api/proxy/method" && request.method === "GET") {
+      return withCors(request, env, await handleMethod(request, env));
+    }
+    if (url.pathname === "/api/proxy/parse" && request.method === "POST") {
+      return withCors(request, env, await handleParse(request, env));
+    }
+    if (url.pathname === "/api/proxy/meta" && request.method === "GET") {
+      return withCors(request, env, await handleMeta(request, env));
+    }
+
+    return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
+  } catch (err) {
+    return withCors(
+      request,
+      env,
+      jsonResponse(500, {
+        code: 500,
+        message: err instanceof Error ? err.message : "Internal Error",
+      }),
+    );
+  }
+}
+
+function getAllowedOrigin(request, env) {
+  const requestOrigin = request.headers.get("Origin");
+  const configured = String(env.ALLOWED_ORIGIN || "").trim();
+
+  if (!requestOrigin) {
+    return configured || "*";
+  }
+  if (!configured) {
+    return requestOrigin;
+  }
+  if (configured === requestOrigin) {
+    return requestOrigin;
+  }
+  return "";
+}
+
+function withCors(request, env, response) {
+  const headers = new Headers(response.headers);
+  const allowOrigin = getAllowedOrigin(request, env);
+
+  if (allowOrigin) {
+    headers.set("Access-Control-Allow-Origin", allowOrigin);
+  }
+  headers.set("Vary", "Origin");
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, X-Tunehub-Key");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+
+  return new Response(response.body, {
+    status: response.status,
+    headers,
+  });
+}
+
+function jsonResponse(status, payload, extraHeaders = {}) {
+  const headers = new Headers({
+    "Content-Type": "application/json; charset=utf-8",
+  });
+  for (const [k, v] of Object.entries(extraHeaders)) {
+    headers.set(k, v);
+  }
+  return new Response(JSON.stringify(payload), { status, headers });
+}
+
+async function parseJsonBody(request) {
+  try {
+    const data = await request.json();
+    return typeof data === "object" && data !== null ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function getOAuthConfig(env) {
+  return {
+    clientId: String(env.LINUXDO_CLIENT_ID || "").trim(),
+    clientSecret: String(env.LINUXDO_CLIENT_SECRET || "").trim(),
+    authorizationEndpoint: String(env.LINUXDO_AUTHORIZATION_ENDPOINT || "https://connect.linux.do/oauth2/authorize").trim(),
+    tokenEndpoint: String(env.LINUXDO_TOKEN_ENDPOINT || "https://connect.linux.do/oauth2/token").trim(),
+    userEndpoint: String(env.LINUXDO_USER_ENDPOINT || "https://connect.linux.do/api/user").trim(),
+    redirectUri: String(env.LINUXDO_REDIRECT_URI || "").trim(),
+    scope: String(env.LINUXDO_SCOPE || "openid profile").trim(),
+  };
+}
+
+function oauthConfigured(cfg) {
+  return Boolean(
+    cfg.clientId &&
+      cfg.clientSecret &&
+      cfg.authorizationEndpoint &&
+      cfg.tokenEndpoint &&
+      cfg.userEndpoint &&
+      cfg.redirectUri,
+  );
+}
+
+async function handleLinuxdoStatus(env) {
+  const cfg = getOAuthConfig(env);
+  if (!oauthConfigured(cfg)) {
+    return jsonResponse(200, {
+      code: 0,
+      message: "Success",
+      data: { configured: false, reachable: false, reason: "not_configured" },
+    });
+  }
+
+  try {
+    const resp = await fetch(cfg.authorizationEndpoint, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(6000),
+    });
+    return jsonResponse(200, {
+      code: 0,
+      message: "Success",
+      data: {
+        configured: true,
+        reachable: resp.status > 0,
+        reason: resp.status > 0 ? "ok" : "no_http_status",
+      },
+    });
+  } catch (err) {
+    return jsonResponse(200, {
+      code: 0,
+      message: "Success",
+      data: {
+        configured: true,
+        reachable: false,
+        reason: err instanceof Error ? err.message : "network_error",
+      },
+    });
+  }
+}
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function b64urlEncode(input) {
+  const arr = typeof input === "string" ? encoder.encode(input) : input;
+  let binary = "";
+  for (let i = 0; i < arr.length; i += 1) {
+    binary += String.fromCharCode(arr[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function b64urlDecode(input) {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(normalized + padding);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+async function signPayload(payloadB64, secret) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payloadB64));
+  return b64urlEncode(new Uint8Array(signature));
+}
+
+function safeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let out = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return out === 0;
+}
+
+async function encodeSignedToken(payload, secret) {
+  const body = b64urlEncode(JSON.stringify(payload));
+  const sig = await signPayload(body, secret);
+  return `${body}.${sig}`;
+}
+
+async function decodeSignedToken(token, secret) {
+  const [body, sig] = String(token || "").split(".");
+  if (!body || !sig) return null;
+  const expected = await signPayload(body, secret);
+  if (!safeEqual(expected, sig)) return null;
+  try {
+    const parsed = JSON.parse(decoder.decode(b64urlDecode(body)));
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function sessionSecret(env) {
+  const value = String(env.SESSION_SECRET || "").trim();
+  if (!value) {
+    throw new Error("SESSION_SECRET is required");
+  }
+  return value;
+}
+
+function cookieName(env) {
+  return String(env.SESSION_COOKIE_NAME || "dm_session").trim() || "dm_session";
+}
+
+function parseCookies(header) {
+  const out = {};
+  for (const pair of String(header || "").split(";")) {
+    const idx = pair.indexOf("=");
+    if (idx < 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+function buildSessionCookie(env, token, maxAgeSeconds) {
+  const name = cookieName(env);
+  const sameSite = String(env.SESSION_COOKIE_SAMESITE || "None").trim() || "None";
+  const domain = String(env.SESSION_COOKIE_DOMAIN || "").trim();
+  const parts = [
+    `${name}=${token}`,
+    "Path=/",
+    `Max-Age=${maxAgeSeconds}`,
+    "HttpOnly",
+    "Secure",
+    `SameSite=${sameSite}`,
+  ];
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
+  return parts.join("; ");
+}
+
+function buildSessionClearCookie(env) {
+  return buildSessionCookie(env, "", 0);
+}
+
+async function createSessionToken(payload, env) {
+  const now = Math.floor(Date.now() / 1000);
+  const ttl = Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600);
+  const data = {
+    ...payload,
+    iat: now,
+    exp: now + ttl,
+  };
+  return encodeSignedToken(data, sessionSecret(env));
+}
+
+async function getSession(request, env) {
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  const token = cookies[cookieName(env)];
+  if (!token) return null;
+  const parsed = await decodeSignedToken(token, sessionSecret(env));
+  if (!parsed || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+  return parsed;
+}
+
+async function requireSession(request, env) {
+  const session = await getSession(request, env);
+  if (!session) {
+    return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
+  }
+  return { ok: true, session };
+}
+
+async function handlePasswordLogin(request, env) {
+  const body = await parseJsonBody(request);
+  const password = String(body.password || "");
+  const configured = String(env.ADMIN_PASSWORD || "").trim();
+  if (!configured) {
+    return jsonResponse(500, { code: -1, message: "ADMIN_PASSWORD is not configured" });
+  }
+  if (!password || password !== configured) {
+    return jsonResponse(401, { code: -1, message: "密码错误，请重试。" });
+  }
+
+  const token = await createSessionToken(
+    {
+      type: "password",
+      user: {
+        id: "admin",
+        name: "管理员",
+        linuxdo_id: "",
+        avatar: "",
+      },
+    },
+    env,
+  );
+
+  return jsonResponse(
+    200,
+    { code: 0, message: "Success" },
+    { "Set-Cookie": buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600)) },
+  );
+}
+
+async function createOAuthStateToken(redirectUrl, env) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iat: now,
+    exp: now + 10 * 60,
+    nonce: crypto.randomUUID(),
+    redirect: redirectUrl,
+  };
+  return encodeSignedToken(payload, sessionSecret(env));
+}
+
+async function verifyOAuthStateToken(state, env) {
+  const payload = await decodeSignedToken(state, sessionSecret(env));
+  if (!payload) return null;
+  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+  return payload;
+}
+
+function safeRedirectUrl(url, env, requestUrl) {
+  const fallback = String(env.FRONTEND_URL || "").trim();
+  if (!url) return fallback || new URL(requestUrl).origin;
+  try {
+    const parsed = new URL(url);
+    if (fallback) {
+      const allowed = new URL(fallback);
+      if (parsed.origin !== allowed.origin) return allowed.toString();
+    }
+    return parsed.toString();
+  } catch {
+    return fallback || new URL(requestUrl).origin;
+  }
+}
+
+async function handleLinuxdoLoginStart(request, env) {
+  const cfg = getOAuthConfig(env);
+  if (!oauthConfigured(cfg)) {
+    return jsonResponse(500, { code: -1, message: "Linux DO OAuth not configured" });
+  }
+
+  const url = new URL(request.url);
+  const redirectUrl = safeRedirectUrl(url.searchParams.get("redirect"), env, request.url);
+  const state = await createOAuthStateToken(redirectUrl, env);
+
+  const authUrl = new URL(cfg.authorizationEndpoint);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("client_id", cfg.clientId);
+  authUrl.searchParams.set("redirect_uri", cfg.redirectUri);
+  authUrl.searchParams.set("state", state);
+  if (cfg.scope) {
+    authUrl.searchParams.set("scope", cfg.scope);
+  }
+
+  return Response.redirect(authUrl.toString(), 302);
+}
+
+async function fetchJson(url, init = {}) {
+  const resp = await fetch(url, init);
+  const text = await resp.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+  return { resp, text, json };
+}
+
+function pickLinuxdoPayload(raw) {
+  if (raw && typeof raw === "object" && raw.data && typeof raw.data === "object") {
+    return raw.data;
+  }
+  return raw;
+}
+
+function pickLinuxdoUserId(payload) {
+  for (const key of ["id", "sub", "user_id"]) {
+    const value = String(payload?.[key] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function pickLinuxdoName(payload, fallbackId) {
+  for (const key of ["username", "name", "login", "nickname"]) {
+    const value = String(payload?.[key] ?? "").trim();
+    if (value) return value;
+  }
+  return `linuxdo_${fallbackId}`;
+}
+
+function pickLinuxdoAvatar(payload) {
+  for (const key of ["avatar", "avatar_url", "picture"]) {
+    const value = String(payload?.[key] ?? "").trim();
+    if (value) return normalizeMediaUrl(value);
+  }
+  return "";
+}
+
+async function handleLinuxdoLoginCallback(request, env) {
+  const cfg = getOAuthConfig(env);
+  const url = new URL(request.url);
+  const code = String(url.searchParams.get("code") || "").trim();
+  const state = String(url.searchParams.get("state") || "").trim();
+
+  if (!oauthConfigured(cfg) || !code || !state) {
+    return Response.redirect(`${safeRedirectUrl("", env, request.url)}?login=failed`, 302);
+  }
+
+  const statePayload = await verifyOAuthStateToken(state, env);
+  if (!statePayload) {
+    return Response.redirect(`${safeRedirectUrl("", env, request.url)}?login=failed_state`, 302);
+  }
+
+  const tokenRes = await fetchJson(cfg.tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      redirect_uri: cfg.redirectUri,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!tokenRes.resp.ok || !tokenRes.json?.access_token) {
+    return Response.redirect(`${safeRedirectUrl(statePayload.redirect, env, request.url)}?login=failed_token`, 302);
+  }
+
+  const userRes = await fetchJson(cfg.userEndpoint, {
+    headers: {
+      Authorization: `Bearer ${tokenRes.json.access_token}`,
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!userRes.resp.ok || !userRes.json) {
+    return Response.redirect(`${safeRedirectUrl(statePayload.redirect, env, request.url)}?login=failed_user`, 302);
+  }
+
+  const payload = pickLinuxdoPayload(userRes.json);
+  const linuxdoId = pickLinuxdoUserId(payload);
+  if (!linuxdoId) {
+    return Response.redirect(`${safeRedirectUrl(statePayload.redirect, env, request.url)}?login=failed_userid`, 302);
+  }
+
+  const userName = pickLinuxdoName(payload, linuxdoId);
+  const avatar = pickLinuxdoAvatar(payload);
+  const token = await createSessionToken(
+    {
+      type: "linuxdo",
+      user: {
+        id: linuxdoId,
+        name: userName,
+        linuxdo_id: linuxdoId,
+        avatar,
+      },
+    },
+    env,
+  );
+
+  const redirectTo = safeRedirectUrl(statePayload.redirect, env, request.url);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: redirectTo,
+      "Set-Cookie": buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600)),
+    },
+  });
+}
+
+async function handleLogout(env) {
+  return jsonResponse(200, { code: 0, message: "Success" }, { "Set-Cookie": buildSessionClearCookie(env) });
+}
+
+async function handleMe(request, env) {
+  const session = await getSession(request, env);
+  if (!session) {
+    return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  }
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: {
+      auth_type: String(session.type || ""),
+      user: session.user || {},
+      using_server_key: session.type === "password",
+    },
+  });
+}
+
+async function handleMethods(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  return jsonResponse(200, { code: 0, message: "Success", data: METHODS_MAP });
+}
+
+function toPositiveInt(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function normalizeMediaUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (value.startsWith("//")) return `https:${value}`;
+  if (value.startsWith("http://")) return `https://${value.slice(7)}`;
+  return value;
+}
+
+function qqAlbumCoverUrl(album) {
+  const mid = String(album?.mid || album?.albummid || "").trim();
+  if (!mid) return "";
+  return `https://y.qq.com/music/photo_new/T002R300x300M000${mid}.jpg`;
+}
+
+function kuwoAlbumCoverUrl(item) {
+  const short = String(item?.web_albumpic_short || "").trim();
+  if (short) {
+    if (short.startsWith("http://") || short.startsWith("https://") || short.startsWith("//")) {
+      return normalizeMediaUrl(short);
+    }
+    return normalizeMediaUrl(`https://img4.kuwo.cn/star/albumcover/${short.replace(/^\/+/, "")}`);
+  }
+
+  const pic = String(item?.pic || "").trim();
+  if (pic) return normalizeMediaUrl(pic);
+
+  const hts = String(item?.hts_MVPIC || "").trim();
+  if (hts) return normalizeMediaUrl(hts);
+
+  const mv = String(item?.MVPIC || "").trim();
+  if (mv) return normalizeMediaUrl(`https://img1.kuwo.cn/wmvpic/${mv.replace(/^\/+/, "")}`);
+
+  return "";
+}
+
+function parseSearchNetease(resp) {
+  const songs = Array.isArray(resp?.result?.songs) ? resp.result.songs : [];
+  return songs.map((item) => ({
+    id: String(item?.id ?? ""),
+    name: String(item?.name || "未知歌曲"),
+    artist: (Array.isArray(item?.artists) ? item.artists : []).map((a) => a?.name).filter(Boolean).join(", "),
+    album: String(item?.album?.name || ""),
+    cover: normalizeMediaUrl(item?.album?.picUrl || ""),
+  }));
+}
+
+function parseSearchQQ(resp) {
+  const songs = Array.isArray(resp?.req?.data?.body?.song?.list) ? resp.req.data.body.song.list : [];
+  return songs.map((item) => ({
+    id: String(item?.mid ?? ""),
+    name: String(item?.name || "未知歌曲"),
+    artist: (Array.isArray(item?.singer) ? item.singer : []).map((s) => s?.name).filter(Boolean).join(", "),
+    album: String(item?.album?.name || ""),
+    cover: normalizeMediaUrl(qqAlbumCoverUrl(item?.album || {})),
+  }));
+}
+
+function parseSearchKuwo(resp) {
+  const songs = Array.isArray(resp?.abslist) ? resp.abslist : [];
+  return songs.map((item) => {
+    const rid = String(item?.MUSICRID || "");
+    return {
+      id: rid.replace("MUSIC_", ""),
+      name: String(item?.SONGNAME || "未知歌曲"),
+      artist: String(item?.ARTIST || "").replaceAll("&", ", "),
+      album: String(item?.ALBUM || ""),
+      cover: normalizeMediaUrl(kuwoAlbumCoverUrl(item)),
+    };
+  });
+}
+
+function parsePlaylistNetease(resp) {
+  const tracks = Array.isArray(resp?.result?.tracks) ? resp.result.tracks : [];
+  return {
+    list: tracks.map((item) => ({
+      id: String(item?.id ?? ""),
+      name: String(item?.name || "未知歌曲"),
+      artist: (Array.isArray(item?.artists) ? item.artists : []).map((a) => a?.name).filter(Boolean).join(", "),
+      album: String(item?.album?.name || ""),
+      cover: normalizeMediaUrl(item?.album?.picUrl || ""),
+    })),
+  };
+}
+
+function parsePlaylistQQ(resp) {
+  const first = Array.isArray(resp?.cdlist) ? resp.cdlist[0] : null;
+  const songs = Array.isArray(first?.songlist) ? first.songlist : [];
+  return {
+    list: songs.map((item) => ({
+      id: String(item?.mid ?? ""),
+      name: String(item?.title || "未知歌曲"),
+      artist: (Array.isArray(item?.singer) ? item.singer : []).map((s) => s?.name).filter(Boolean).join(", "),
+      album: String(item?.album?.name || ""),
+      cover: normalizeMediaUrl(qqAlbumCoverUrl(item?.album || {})),
+    })),
+  };
+}
+
+function parsePlaylistKuwo(resp) {
+  if (String(resp?.result || "") !== "ok") return { list: [] };
+  const songs = Array.isArray(resp?.musiclist) ? resp.musiclist : [];
+  return {
+    list: songs.map((item) => ({
+      id: String(item?.id ?? ""),
+      name: String(item?.name || "未知歌曲"),
+      artist: String(item?.artist || "").replaceAll("&", ", "),
+      album: String(item?.album || ""),
+      cover: normalizeMediaUrl(kuwoAlbumCoverUrl(item)),
+    })),
+  };
+}
+
+async function upstreamJson(url, init = {}) {
+  const resp = await fetch(url, init);
+  const text = await resp.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+  return { status: resp.status, json, text };
+}
+
+async function callSearch(platform, keyword, page, limit) {
+  if (platform === "netease") {
+    const endpoint = new URL("https://music.163.com/api/search/get/web");
+    endpoint.searchParams.set("s", keyword);
+    endpoint.searchParams.set("type", "1");
+    endpoint.searchParams.set("offset", String((page - 1) * limit));
+    endpoint.searchParams.set("limit", String(limit));
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: { Referer: "https://music.163.com/" },
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseSearchNetease(json);
+  }
+
+  if (platform === "qq") {
+    const body = {
+      comm: {
+        cv: 4747474,
+        ct: 24,
+        format: "json",
+        inCharset: "utf-8",
+        outCharset: "utf-8",
+        uin: 0,
+      },
+      req: {
+        method: "DoSearchForQQMusicDesktop",
+        module: "music.search.SearchCgiService",
+        param: {
+          query: keyword,
+          page_num: String(page),
+          num_per_page: String(limit),
+        },
+      },
+    };
+    const { status, json } = await upstreamJson("https://u.y.qq.com/cgi-bin/musicu.fcg", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Referer: "https://y.qq.com/",
+      },
+      body: JSON.stringify(body),
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseSearchQQ(json);
+  }
+
+  if (platform === "kuwo") {
+    const endpoint = new URL("http://search.kuwo.cn/r.s");
+    const query = {
+      client: "kt",
+      all: keyword,
+      pn: String(page - 1),
+      rn: String(limit),
+      uid: "794762570",
+      ver: "kwplayer_ar_9.2.2.1",
+      vipver: "1",
+      show_copyright_off: "1",
+      newver: "1",
+      ft: "music",
+      cluster: "0",
+      strategy: "2012",
+      encoding: "utf8",
+      rformat: "json",
+      vermerge: "1",
+      mobi: "1",
+      issubtitle: "1",
+    };
+    Object.entries(query).forEach(([k, v]) => endpoint.searchParams.set(k, v));
+
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseSearchKuwo(json);
+  }
+
+  throw new Error("不支持的平台");
+}
+
+async function callPlaylist(platform, id) {
+  if (platform === "netease") {
+    const endpoint = new URL("https://music.163.com/api/playlist/detail");
+    endpoint.searchParams.set("id", id);
+    endpoint.searchParams.set("n", "100000");
+    endpoint.searchParams.set("s", "8");
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: { Referer: "https://music.163.com/" },
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parsePlaylistNetease(json);
+  }
+
+  if (platform === "qq") {
+    const endpoint = new URL("https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg");
+    const query = {
+      type: "1",
+      json: "1",
+      utf8: "1",
+      onlysong: "0",
+      new_format: "1",
+      disstid: id,
+      loginUin: "0",
+      hostUin: "0",
+      format: "json",
+      inCharset: "utf8",
+      outCharset: "utf-8",
+      notice: "0",
+      platform: "yqq.json",
+      needNewCode: "0",
+    };
+    Object.entries(query).forEach(([k, v]) => endpoint.searchParams.set(k, v));
+
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: {
+        Origin: "https://y.qq.com",
+        Referer: "https://y.qq.com/",
+      },
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parsePlaylistQQ(json);
+  }
+
+  if (platform === "kuwo") {
+    const endpoint = new URL("http://nplserver.kuwo.cn/pl.svc");
+    const query = {
+      op: "getlistinfo",
+      pid: id,
+      pn: "0",
+      rn: "1000",
+      encode: "utf8",
+      keyset: "pl2012",
+      identity: "kuwo",
+      pcmp4: "1",
+      vipver: "MUSIC_9.0.5.0_W1",
+      newver: "1",
+    };
+    Object.entries(query).forEach(([k, v]) => endpoint.searchParams.set(k, v));
+
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parsePlaylistKuwo(json);
+  }
+
+  throw new Error("不支持的平台");
+}
+
+async function handleMethod(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const url = new URL(request.url);
+  const platform = String(url.searchParams.get("platform") || "").trim();
+  const functionName = String(url.searchParams.get("functionName") || "").trim();
+  if (!platform || !functionName) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: platform / functionName" });
+  }
+
+  try {
+    if (functionName === "search") {
+      const keyword = String(url.searchParams.get("keyword") || "").trim();
+      if (!keyword) return jsonResponse(400, { code: -1, message: "缺少参数: keyword" });
+      const page = toPositiveInt(url.searchParams.get("page"), 1);
+      const limit = toPositiveInt(url.searchParams.get("limit"), 20);
+      const data = await callSearch(platform, keyword, page, limit);
+      return jsonResponse(200, { code: 0, message: "Success", data });
+    }
+
+    if (functionName === "playlist") {
+      const id = String(url.searchParams.get("id") || "").trim();
+      if (!id) return jsonResponse(400, { code: -1, message: "缺少参数: id" });
+      const data = await callPlaylist(platform, id);
+      return jsonResponse(200, { code: 0, message: "Success", data });
+    }
+
+    return jsonResponse(400, { code: -1, message: "不支持的方法，只支持 search / playlist" });
+  } catch (err) {
+    return jsonResponse(500, {
+      code: -1,
+      message: err instanceof Error ? err.message : "请求失败",
+    });
+  }
+}
+
+function keyLooksInvalid(key) {
+  const value = String(key || "").trim();
+  if (!value) return true;
+  if (!value.startsWith("th_")) return true;
+  if (value.includes("replace_with_your_real_key")) return true;
+  return false;
+}
+
+function resolveTunehubKey(session, request, env) {
+  if (session.type === "password") {
+    return String(env.TUNEHUB_API_KEY || "").trim();
+  }
+  return String(request.headers.get("X-Tunehub-Key") || "").trim();
+}
+
+async function handleParse(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const body = await parseJsonBody(request);
+  const platform = String(body.platform || "").trim();
+  const ids = String(body.ids || "").trim();
+  const quality = String(body.quality || "").trim();
+  if (!platform || !ids || !quality) {
+    return jsonResponse(400, {
+      code: -1,
+      message: "缺少参数: platform / ids / quality",
+    });
+  }
+
+  const key = resolveTunehubKey(auth.session, request, env);
+  if (keyLooksInvalid(key)) {
+    const message =
+      auth.session.type === "password"
+        ? "请先在 Worker Secret 配置 TUNEHUB_API_KEY"
+        : "请先在页面填写你自己的 TuneHub API Key";
+    return jsonResponse(400, { code: -1, message });
+  }
+
+  const resp = await fetch("https://tunehub.sayqz.com/api/v1/parse", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": key,
+    },
+    body: JSON.stringify({ platform, ids, quality }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  const text = await resp.text();
+  return new Response(text, {
+    status: resp.status,
+    headers: {
+      "Content-Type": resp.headers.get("Content-Type") || "application/json; charset=utf-8",
+    },
+  });
+}
+
+function extractOgImage(html) {
+  if (!html) return "";
+  const m = html.match(/<meta\s+property="og:image"\s+content="([^"]*)"\s*\/?>/i);
+  return normalizeMediaUrl(m?.[1] || "");
+}
+
+function extractReduxState(html) {
+  if (!html) return null;
+  const m = html.match(/window\.REDUX_STATE\s*=\s*(\{[\s\S]*?\})\s*;/);
+  if (!m?.[1]) return null;
+  try {
+    const parsed = JSON.parse(m[1]);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleMeta(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const url = new URL(request.url);
+  const platform = String(url.searchParams.get("platform") || "").trim();
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!platform || !id) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: platform / id" });
+  }
+  if (platform !== "netease") {
+    return jsonResponse(200, { code: 0, message: "Success", data: {} });
+  }
+
+  const target = `https://y.music.163.com/m/song?id=${encodeURIComponent(id)}`;
+  const resp = await fetch(target, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Mobile Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Referer: "https://music.163.com/",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!resp.ok) {
+    return jsonResponse(500, { code: -1, message: `上游请求失败 (${resp.status})` });
+  }
+  const html = await resp.text();
+  const state = extractReduxState(html);
+  const song = state?.Song || {};
+
+  const artist = Array.isArray(song?.ar) ? song.ar.map((a) => a?.name).filter(Boolean).join(", ") : "";
+  let cover = normalizeMediaUrl(song?.al?.picUrl || song?.album?.picUrl || "");
+  if (!cover) {
+    cover = extractOgImage(html);
+  }
+
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: {
+      id: String(song?.id || id),
+      name: String(song?.name || ""),
+      artist,
+      album: String(song?.al?.name || song?.album?.name || ""),
+      cover,
+    },
+  });
+}

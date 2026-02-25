@@ -1,2 +1,4 @@
 .DS_Store
 .env
+worker/wrangler.toml
+worker/.wrangler/

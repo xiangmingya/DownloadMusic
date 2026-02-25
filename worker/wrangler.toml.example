@@ -1,0 +1,30 @@
+name = "downloadmusic-auth-proxy"
+main = "src/index.js"
+compatibility_date = "2026-02-25"
+
+# 部署后请在 Cloudflare Dashboard 或 wrangler secret 配置 secrets：
+# - SESSION_SECRET
+# - ADMIN_PASSWORD
+# - TUNEHUB_API_KEY
+# - LINUXDO_CLIENT_ID
+# - LINUXDO_CLIENT_SECRET
+# - LINUXDO_REDIRECT_URI
+
+[vars]
+# 静态前端域名（用于 CORS）
+ALLOWED_ORIGIN = "https://your-frontend-domain.com"
+
+# Linux DO 端点（可不改）
+LINUXDO_AUTHORIZATION_ENDPOINT = "https://connect.linux.do/oauth2/authorize"
+LINUXDO_TOKEN_ENDPOINT = "https://connect.linux.do/oauth2/token"
+LINUXDO_USER_ENDPOINT = "https://connect.linux.do/api/user"
+LINUXDO_SCOPE = "openid profile"
+
+# 回调后跳回前端（建议填首页）
+FRONTEND_URL = "https://your-frontend-domain.com/"
+
+# Cookie 可选配置
+SESSION_COOKIE_NAME = "dm_session"
+SESSION_COOKIE_SAMESITE = "None"
+# SESSION_COOKIE_DOMAIN = ".your-domain.com"
+SESSION_TTL_SECONDS = "2592000"

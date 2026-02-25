@@ -1,4 +1,12 @@
-const API_BASE = 'proxy';
+const API_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
+const API_ROUTES = {
+    parse: `${API_BASE}/parse`,
+    meta: `${API_BASE}/meta`,
+    method: `${API_BASE}/method`,
+    methods: `${API_BASE}/methods`
+};
+const APP_CONTEXT = window.APP_CONTEXT || {};
+const AUTH_TYPE = APP_CONTEXT.authType || 'password';
 
 const defaultPlatformNameMap = {
     netease: '网易云音乐',
@@ -26,6 +34,11 @@ const audio = document.getElementById('audio');
 
 // 缓存
 const parseCache = new Map();
+const metaCache = new Map();
+const LOCAL_KEY_PREFIX = 'downloadmusic_tunehub_key_';
+const linuxdoUserId = String(APP_CONTEXT?.user?.linuxdo_id || '').trim();
+const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
+let linuxdoUserKey = '';
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -45,6 +58,14 @@ function escapeForSingleQuote(text) {
         .replace(/'/g, "\\'");
 }
 
+function normalizeMediaUrl(url) {
+    const u = String(url || '').trim();
+    if (!u) return '';
+    if (u.startsWith('//')) return `https:${u}`;
+    if (u.startsWith('http://')) return `https://${u.slice(7)}`;
+    return u;
+}
+
 function parseResponseText(text) {
     if (!text) return {};
     try {
@@ -54,12 +75,144 @@ function parseResponseText(text) {
     }
 }
 
+async function apiFetch(url, init = {}) {
+    return fetch(url, {
+        credentials: 'include',
+        ...init
+    });
+}
+
+function isLinuxdoLogin() {
+    return AUTH_TYPE === 'linuxdo';
+}
+
+function setUserKeyStatus(message, cls = '') {
+    const statusEl = document.getElementById('userKeyStatus');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = `key-status ${cls}`.trim();
+}
+
+function maskKey(key) {
+    const text = String(key || '').trim();
+    if (!text) return '';
+    if (text.length <= 10) return '****';
+    return `${text.slice(0, 4)}****${text.slice(-4)}`;
+}
+
+function loadLinuxdoKeyFromLocalStorage() {
+    if (!isLinuxdoLogin()) return '';
+    try {
+        return String(localStorage.getItem(linuxdoKeyStorageKey) || '').trim();
+    } catch {
+        return '';
+    }
+}
+
+function saveLinuxdoKeyToLocalStorage(key) {
+    if (!isLinuxdoLogin()) return;
+    try {
+        localStorage.setItem(linuxdoKeyStorageKey, key);
+    } catch {
+        // ignore storage failures
+    }
+}
+
+function clearLinuxdoKeyFromLocalStorage() {
+    if (!isLinuxdoLogin()) return;
+    try {
+        localStorage.removeItem(linuxdoKeyStorageKey);
+    } catch {
+        // ignore storage failures
+    }
+}
+
+function applyUserKeyState() {
+    const input = document.getElementById('userApiKeyInput');
+    if (input) input.value = '';
+
+    if (linuxdoUserKey) {
+        setUserKeyStatus(`已在本浏览器保存 Key：${maskKey(linuxdoUserKey)}`, 'ok');
+    } else {
+        setUserKeyStatus('未配置 Key，请先填写后再解析/下载（仅保存到本浏览器）。', 'warn');
+    }
+}
+
+async function saveUserKey() {
+    const input = document.getElementById('userApiKeyInput');
+    if (!input) return;
+    const key = input.value.trim();
+    if (!key) {
+        setUserKeyStatus('请输入 TuneHub API Key', 'warn');
+        return;
+    }
+    if (!key.startsWith('th_') || key.length < 12) {
+        setUserKeyStatus('Key 格式不正确（需 th_ 开头）', 'warn');
+        return;
+    }
+
+    linuxdoUserKey = key;
+    saveLinuxdoKeyToLocalStorage(key);
+    applyUserKeyState();
+    showToast('Key 保存成功', 'success');
+}
+
+async function clearUserKey() {
+    linuxdoUserKey = '';
+    clearLinuxdoKeyFromLocalStorage();
+    applyUserKeyState();
+    showToast('Key 已清空', 'info');
+}
+
+async function initLinuxdoKeyPanel() {
+    if (!isLinuxdoLogin()) return;
+
+    const saveBtn = document.getElementById('saveUserKeyBtn');
+    const clearBtn = document.getElementById('clearUserKeyBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            try {
+                await saveUserKey();
+            } catch (error) {
+                setUserKeyStatus(error.message || '保存失败', 'warn');
+                showToast(error.message || '保存失败', 'error');
+            }
+        });
+    }
+    if (clearBtn) {
+        clearBtn.addEventListener('click', async () => {
+            try {
+                await clearUserKey();
+            } catch (error) {
+                setUserKeyStatus(error.message || '清空失败', 'warn');
+                showToast(error.message || '清空失败', 'error');
+            }
+        });
+    }
+
+    linuxdoUserKey = loadLinuxdoKeyFromLocalStorage();
+    applyUserKeyState();
+}
+
+async function ensureLinuxdoKeyReady() {
+    if (!isLinuxdoLogin()) return;
+    if (linuxdoUserKey) return;
+    throw new Error('请先填写你的 TuneHub API Key');
+}
+
 async function parseSongs(platform, ids, quality) {
-    const response = await fetch(`${API_BASE}/parse.php`, {
+    await ensureLinuxdoKeyReady();
+
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (isLinuxdoLogin() && linuxdoUserKey) {
+        headers['X-Tunehub-Key'] = linuxdoUserKey;
+    }
+
+    const response = await apiFetch(API_ROUTES.parse, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
+        headers,
         body: JSON.stringify({
             platform,
             ids,
@@ -82,6 +235,10 @@ function parsedCacheKey(platform, id, quality) {
     return `${platform}:${id}:${quality}`;
 }
 
+function metaCacheKey(platform, id) {
+    return `${platform}:${id}`;
+}
+
 function cacheParsedItem(platform, quality, item) {
     if (!item || !item.id || !item.success) return;
     parseCache.set(parsedCacheKey(platform, item.id, quality), item);
@@ -101,7 +258,7 @@ function toSongFromParsedItem(platform, item) {
         album: item?.info?.album || '',
         source: platform,
         platform,
-        cover: item.cover || ''
+        cover: normalizeMediaUrl(item.cover || item.pic || item?.info?.pic || '')
     };
 }
 
@@ -126,8 +283,29 @@ async function ensureParsedSong(platform, id, quality) {
     return matched;
 }
 
+async function fetchSongMeta(platform, id) {
+    const key = metaCacheKey(platform, id);
+    if (metaCache.has(key)) {
+        return metaCache.get(key);
+    }
+
+    const url = new URL(API_ROUTES.meta, window.location.href);
+    url.searchParams.set('platform', platform);
+    url.searchParams.set('id', String(id));
+
+    const response = await apiFetch(url.toString());
+    const data = await response.json();
+    if (!response.ok || Number(data.code) !== 0) {
+        throw new Error(data.message || '获取元数据失败');
+    }
+
+    const meta = data.data || {};
+    metaCache.set(key, meta);
+    return meta;
+}
+
 async function callPlatformMethod(platform, functionName, vars = {}) {
-    const url = new URL(`${API_BASE}/method.php`, window.location.href);
+    const url = new URL(API_ROUTES.method, window.location.href);
     url.searchParams.set('platform', platform);
     url.searchParams.set('functionName', functionName);
     Object.entries(vars).forEach(([k, v]) => {
@@ -136,7 +314,7 @@ async function callPlatformMethod(platform, functionName, vars = {}) {
         }
     });
 
-    const response = await fetch(url.toString());
+    const response = await apiFetch(url.toString());
     const data = await response.json();
     if (!response.ok || Number(data.code) !== 0) {
         throw new Error(data.message || '请求失败');
@@ -147,7 +325,7 @@ async function callPlatformMethod(platform, functionName, vars = {}) {
 // 检查服务状态并获取平台信息
 async function checkStatus() {
     try {
-        const response = await fetch(`${API_BASE}/methods.php`);
+        const response = await apiFetch(API_ROUTES.methods);
         const methodsData = await response.json();
 
         if (response.ok && Number(methodsData.code) === 0 && methodsData.data) {
@@ -211,7 +389,7 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
             album: item.album || '',
             source: platform,
             platform,
-            cover: ''
+            cover: normalizeMediaUrl(item.cover || '')
         }));
     });
 
@@ -246,7 +424,7 @@ async function fetchPlaylistSongs(platform, playlistId) {
         album: song.album || '',
         source: platform,
         platform,
-        cover: ''
+        cover: normalizeMediaUrl(song.cover || '')
     }));
 }
 
@@ -330,7 +508,7 @@ function renderLocalPage() {
         const platform = song.platform || song.source;
         const safeName = escapeForSingleQuote(song.name);
         const safeArtist = escapeForSingleQuote(song.artist);
-        const coverUrl = song.cover || '';
+        const coverUrl = normalizeMediaUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
 
         return `
@@ -368,6 +546,9 @@ function renderLocalPage() {
             </div>
         `;
     }
+
+    // 某些平台搜索接口不返回封面，当前页按需补全。
+    hydrateMissingCovers(pageSongs, start);
 }
 
 function changeLocalPage(page) {
@@ -376,6 +557,38 @@ function changeLocalPage(page) {
     currentPage = page;
     renderLocalPage();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function hydrateMissingCovers(pageSongs, startIndex) {
+    pageSongs.forEach(async (song, index) => {
+        if (song.cover) return;
+        const platform = song.platform || song.source;
+        if (!platform || !song.id) return;
+
+        const setCover = coverUrl => {
+            if (!coverUrl) return;
+            song.cover = coverUrl;
+            const globalIndex = startIndex + index;
+            const coverImg = document.getElementById(`cover-${globalIndex}`);
+            if (coverImg) {
+                coverImg.src = coverUrl;
+                coverImg.style.display = 'block';
+            }
+        };
+
+        // 不消耗积分的补全方式：网易云优先读取公开 H5 元数据。
+        if (platform === 'netease') {
+            try {
+                const meta = await fetchSongMeta(platform, song.id);
+                const coverUrl = normalizeMediaUrl(meta.cover || '');
+                if (coverUrl) {
+                    setCover(coverUrl);
+                }
+            } catch {
+                // ignore free metadata errors
+            }
+        }
+    });
 }
 
 // 下载单曲
@@ -449,10 +662,11 @@ async function playSong(source, id, name, artist, index) {
             if (oldPlayer) oldPlayer.style.display = 'none';
         }
 
-        if (parsed.cover) {
+        const parsedCoverUrl = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || '');
+        if (parsedCoverUrl) {
             const coverImg = document.getElementById(`cover-${index}`);
             if (coverImg) {
-                coverImg.src = parsed.cover;
+                coverImg.src = parsedCoverUrl;
                 coverImg.style.display = 'block';
             }
         }
@@ -583,4 +797,5 @@ document.getElementById('searchInput').addEventListener('keypress', e => {
 
 // 初始化
 checkStatus();
+initLinuxdoKeyPanel();
 setInterval(checkStatus, 60000);
