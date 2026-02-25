@@ -26,6 +26,16 @@ let allSongs = [];
 let currentPage = 1;
 let currentSearchParams = null;
 const pageSize = 5;
+const searchApiLimit = 20;
+let keywordPagingState = {
+    enabled: false,
+    platform: '',
+    keyword: '',
+    page: 0,
+    limit: searchApiLimit,
+    hasMore: false,
+    loading: false
+};
 
 // 播放相关
 let currentPlayingIndex = null;
@@ -473,6 +483,13 @@ function platformDisplayName(platformKey) {
 }
 
 async function searchSongsByKeyword(keyword, selectedPlatform) {
+    return searchSongsByKeywordPage(keyword, selectedPlatform, {
+        page: 1,
+        limit: searchApiLimit
+    });
+}
+
+async function searchSongsByKeywordPage(keyword, selectedPlatform, options = {}) {
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
     const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
     const targets = platform ? [platform] : [];
@@ -481,11 +498,13 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
     }
 
     const timeoutMs = 15000;
+    const requestPage = Math.max(1, Number(options.page || 1));
+    const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
     const searchOnePlatform = async targetPlatform => {
         const result = await callPlatformMethod(targetPlatform, 'search', {
             keyword,
-            page: 1,
-            limit: 20
+            page: requestPage,
+            limit: requestLimit
         }, {
             timeoutMs,
             retries: 1,
@@ -529,6 +548,84 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
     return songs;
 }
 
+function resetKeywordPagingState() {
+    keywordPagingState = {
+        enabled: false,
+        platform: '',
+        keyword: '',
+        page: 0,
+        limit: searchApiLimit,
+        hasMore: false,
+        loading: false
+    };
+}
+
+function enableKeywordPaging(keyword, platform, firstBatchCount) {
+    keywordPagingState = {
+        enabled: true,
+        platform: String(platform || ''),
+        keyword: String(keyword || ''),
+        page: 1,
+        limit: searchApiLimit,
+        hasMore: Number(firstBatchCount) >= searchApiLimit,
+        loading: false
+    };
+}
+
+function canLoadMoreKeywordPage() {
+    return keywordPagingState.enabled && keywordPagingState.hasMore;
+}
+
+function mergeSongsWithoutDuplicates(baseSongs, incomingSongs) {
+    const dedup = new Set(baseSongs.map(song => `${song.platform || song.source}:${song.id}`));
+    const merged = [...baseSongs];
+    incomingSongs.forEach(song => {
+        const key = `${song.platform || song.source}:${song.id}`;
+        if (dedup.has(key)) return;
+        dedup.add(key);
+        merged.push(song);
+    });
+    return merged;
+}
+
+async function loadNextKeywordPage() {
+    if (!canLoadMoreKeywordPage()) return false;
+    if (keywordPagingState.loading) return false;
+
+    keywordPagingState.loading = true;
+    try {
+        const nextPage = keywordPagingState.page + 1;
+        const songs = await searchSongsByKeywordPage(
+            keywordPagingState.keyword,
+            keywordPagingState.platform,
+            {
+                page: nextPage,
+                limit: keywordPagingState.limit
+            }
+        );
+
+        keywordPagingState.page = nextPage;
+        if (songs.length < keywordPagingState.limit) {
+            keywordPagingState.hasMore = false;
+        }
+        if (songs.length === 0) {
+            return false;
+        }
+
+        const before = allSongs.length;
+        allSongs = mergeSongsWithoutDuplicates(allSongs, songs);
+        if (allSongs.length === before) {
+            return false;
+        }
+        return true;
+    } catch (error) {
+        showToast(error?.message || '加载下一页失败', 'error');
+        return false;
+    } finally {
+        keywordPagingState.loading = false;
+    }
+}
+
 async function fetchPlaylistSongs(platform, playlistId) {
     const result = await callPlatformMethod(platform, 'playlist', {
         id: playlistId
@@ -564,6 +661,7 @@ async function search() {
 
     try {
         currentSearchParams = null;
+        resetKeywordPagingState();
 
         if (searchMode === 'keyword') {
             if (currentSearchType === 'playlist') {
@@ -573,6 +671,7 @@ async function search() {
 
             const songs = await searchSongsByKeyword(input, platform);
             if (songs.length > 0) {
+                enableKeywordPaging(input, platform, songs.length);
                 displaySongsWithPagination(songs);
             } else {
                 resultsDiv.innerHTML = `<div class="empty-state">${platformDisplayName(platform)}没有结果，请切换其他平台检索</div>`;
@@ -657,12 +756,19 @@ function renderLocalPage() {
     `;
     }).join('');
 
-    if (totalPages > 1) {
+    if (totalPages > 1 || canLoadMoreKeywordPage()) {
+        const canLoadMore = canLoadMoreKeywordPage();
+        const nextDisabled = keywordPagingState.loading
+            ? 'disabled'
+            : (currentPage === totalPages && !canLoadMore ? 'disabled' : '');
+        const nextText = keywordPagingState.loading
+            ? '加载中...'
+            : (currentPage === totalPages && canLoadMore ? '下一页(加载)' : '下一页');
         resultsDiv.innerHTML += `
             <div class="pagination">
                 <button onclick="changeLocalPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
                 <span>第 ${currentPage} / ${totalPages} 页</span>
-                <button onclick="changeLocalPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>
+                <button onclick="changeLocalPage(${currentPage + 1})" ${nextDisabled}>${nextText}</button>
             </div>
         `;
     }
@@ -672,9 +778,27 @@ function renderLocalPage() {
     syncInlinePlayButtonState();
 }
 
-function changeLocalPage(page) {
+async function changeLocalPage(page) {
     const totalPages = Math.ceil(allSongs.length / pageSize);
-    if (page < 1 || page > totalPages) return;
+    if (page < 1) return;
+
+    if (page > totalPages) {
+        if (!canLoadMoreKeywordPage()) return;
+        renderLocalPage();
+        const loaded = await loadNextKeywordPage();
+        if (loaded) {
+            currentPage = page;
+            renderLocalPage();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            return;
+        }
+        if (!keywordPagingState.hasMore) {
+            showToast('没有更多结果了', 'info');
+        }
+        renderLocalPage();
+        return;
+    }
+
     currentPage = page;
     renderLocalPage();
     window.scrollTo({ top: 0, behavior: 'smooth' });
