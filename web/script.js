@@ -3,7 +3,8 @@ const API_ROUTES = {
     parse: `${API_BASE}/parse`,
     meta: `${API_BASE}/meta`,
     method: `${API_BASE}/method`,
-    methods: `${API_BASE}/methods`
+    methods: `${API_BASE}/methods`,
+    media: `${API_BASE}/media`
 };
 const APP_CONTEXT = window.APP_CONTEXT || {};
 const AUTH_TYPE = APP_CONTEXT.authType || 'password';
@@ -62,8 +63,31 @@ function normalizeMediaUrl(url) {
     const u = String(url || '').trim();
     if (!u) return '';
     if (u.startsWith('//')) return `https:${u}`;
-    if (u.startsWith('http://')) return `https://${u.slice(7)}`;
     return u;
+}
+
+function buildMediaProxyUrl(rawUrl, options = {}) {
+    const mediaUrl = normalizeMediaUrl(rawUrl);
+    if (!mediaUrl) return '';
+    const endpoint = new URL(API_ROUTES.media, window.location.href);
+    endpoint.searchParams.set('url', mediaUrl);
+    if (options.download) {
+        endpoint.searchParams.set('download', '1');
+    }
+    if (options.filename) {
+        endpoint.searchParams.set('filename', String(options.filename));
+    }
+    return endpoint.toString();
+}
+
+function getProxiedCoverUrl(rawUrl) {
+    return buildMediaProxyUrl(rawUrl);
+}
+
+function buildDownloadFilename(name, artist) {
+    const n = String(name || '').trim();
+    const a = String(artist || '').trim();
+    return (a && n) ? `${a} - ${n}` : (n || a || 'music');
 }
 
 function parseResponseText(text) {
@@ -508,7 +532,7 @@ function renderLocalPage() {
         const platform = song.platform || song.source;
         const safeName = escapeForSingleQuote(song.name);
         const safeArtist = escapeForSingleQuote(song.artist);
-        const coverUrl = normalizeMediaUrl(song.cover || '');
+        const coverUrl = getProxiedCoverUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
 
         return `
@@ -571,7 +595,7 @@ function hydrateMissingCovers(pageSongs, startIndex) {
             const globalIndex = startIndex + index;
             const coverImg = document.getElementById(`cover-${globalIndex}`);
             if (coverImg) {
-                coverImg.src = coverUrl;
+                coverImg.src = getProxiedCoverUrl(coverUrl);
                 coverImg.style.display = 'block';
             }
         };
@@ -599,7 +623,14 @@ async function downloadSong(source, id, name, artist) {
         if (!parsed.url) {
             throw new Error(parsed.error || '未获取到下载链接');
         }
-        window.open(parsed.url, '_blank');
+        const url = buildMediaProxyUrl(parsed.url, {
+            download: true,
+            filename: buildDownloadFilename(name, artist)
+        });
+        if (!url) {
+            throw new Error('下载链接无效');
+        }
+        window.open(url, '_blank');
     } catch (error) {
         showToast(`下载失败: ${error.message || '未知错误'}`, 'error');
     }
@@ -662,7 +693,7 @@ async function playSong(source, id, name, artist, index) {
             if (oldPlayer) oldPlayer.style.display = 'none';
         }
 
-        const parsedCoverUrl = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || '');
+        const parsedCoverUrl = getProxiedCoverUrl(parsed.cover || parsed.pic || parsed?.info?.pic || '');
         if (parsedCoverUrl) {
             const coverImg = document.getElementById(`cover-${index}`);
             if (coverImg) {
@@ -676,7 +707,11 @@ async function playSong(source, id, name, artist, index) {
             inlineLyrics.textContent = currentLyrics.length > 0 ? currentLyrics[0].text : '';
         }
 
-        audio.src = parsed.url;
+        const playUrl = buildMediaProxyUrl(parsed.url);
+        if (!playUrl) {
+            throw new Error('播放链接无效');
+        }
+        audio.src = playUrl;
         currentPlayingIndex = index;
         player.style.display = 'flex';
 

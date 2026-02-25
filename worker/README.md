@@ -4,7 +4,7 @@
 - 密码登录
 - Linux DO OAuth 登录
 - 会话管理（HttpOnly Cookie）
-- 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta`
+- 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
 
 ## 路由
 
@@ -38,6 +38,7 @@ cp worker/wrangler.toml.example worker/wrangler.toml
    - 示例：
      - `ALLOWED_ORIGINS="https://a.com,https://b.com"`
      - `FRONTEND_URLS="https://a.com/,https://b.com/"`
+   - 可选：`MEDIA_PROXY_ALLOWED_HOSTS`（媒体代理域名白名单，逗号分隔）
 
 3. 配置上面的 secrets
 

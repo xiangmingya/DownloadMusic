@@ -49,6 +49,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/proxy/meta" && request.method === "GET") {
       return withCors(request, env, await handleMeta(request, env));
     }
+    if (url.pathname === "/api/proxy/media" && request.method === "GET") {
+      return withCors(request, env, await handleMedia(request, env));
+    }
 
     return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
   } catch (err) {
@@ -602,7 +605,6 @@ function normalizeMediaUrl(url) {
   const value = String(url || "").trim();
   if (!value) return "";
   if (value.startsWith("//")) return `https:${value}`;
-  if (value.startsWith("http://")) return `https://${value.slice(7)}`;
   return value;
 }
 
@@ -920,6 +922,156 @@ function resolveTunehubKey(session, request, env) {
     return String(env.TUNEHUB_API_KEY || "").trim();
   }
   return String(request.headers.get("X-Tunehub-Key") || "").trim();
+}
+
+function getMediaAllowedHosts(env) {
+  return splitCsvValues(env.MEDIA_PROXY_ALLOWED_HOSTS || "")
+    .map((item) => item.toLowerCase())
+    .filter(Boolean);
+}
+
+function hostMatchesRule(hostname, rule) {
+  const host = String(hostname || "").toLowerCase();
+  const normalizedRule = String(rule || "").trim().toLowerCase();
+  if (!host || !normalizedRule) return false;
+
+  if (normalizedRule.startsWith(".")) {
+    const suffix = normalizedRule.slice(1);
+    return host === suffix || host.endsWith(`.${suffix}`);
+  }
+  return host === normalizedRule || host.endsWith(`.${normalizedRule}`);
+}
+
+function isPrivateIpv4(hostname) {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return false;
+  const nums = hostname.split(".").map((n) => Number(n));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+
+  if (nums[0] === 10) return true;
+  if (nums[0] === 127) return true;
+  if (nums[0] === 192 && nums[1] === 168) return true;
+  if (nums[0] === 172 && nums[1] >= 16 && nums[1] <= 31) return true;
+  if (nums[0] === 169 && nums[1] === 254) return true;
+  if (nums[0] === 0) return true;
+  return false;
+}
+
+function isBlockedMediaHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  if (host === "169.254.169.254") return true;
+  if (host.startsWith("fe80:")) return true;
+  if (host.startsWith("fc") || host.startsWith("fd")) return true;
+  if (isPrivateIpv4(host)) return true;
+  return false;
+}
+
+function sanitizeDownloadFilename(value) {
+  const raw = String(value || "").trim();
+  const fallback = "music";
+  const cleaned = raw
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return cleaned || fallback;
+}
+
+async function fetchMediaUpstream(targetUrl, request) {
+  const headers = new Headers();
+  const range = request.headers.get("Range");
+  if (range) headers.set("Range", range);
+  const userAgent = request.headers.get("User-Agent");
+  if (userAgent) headers.set("User-Agent", userAgent);
+
+  try {
+    return await fetch(targetUrl.toString(), {
+      method: "GET",
+      headers,
+      redirect: "follow",
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (err) {
+    if (targetUrl.protocol === "https:") {
+      const fallback = new URL(targetUrl.toString());
+      fallback.protocol = "http:";
+      return fetch(fallback.toString(), {
+        method: "GET",
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(30000),
+      });
+    }
+    throw err;
+  }
+}
+
+async function handleMedia(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const reqUrl = new URL(request.url);
+  const targetRaw = normalizeMediaUrl(reqUrl.searchParams.get("url") || "");
+  if (!targetRaw) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: url" });
+  }
+
+  let target;
+  try {
+    target = new URL(targetRaw);
+  } catch {
+    return jsonResponse(400, { code: -1, message: "url 参数无效" });
+  }
+
+  if (!["http:", "https:"].includes(target.protocol)) {
+    return jsonResponse(400, { code: -1, message: "仅支持 http/https 媒体链接" });
+  }
+
+  if (isBlockedMediaHost(target.hostname)) {
+    return jsonResponse(400, { code: -1, message: "不允许访问该媒体地址" });
+  }
+
+  const allowedHosts = getMediaAllowedHosts(env);
+  if (allowedHosts.length > 0 && !allowedHosts.some((rule) => hostMatchesRule(target.hostname, rule))) {
+    return jsonResponse(400, { code: -1, message: "该域名未在媒体代理白名单中" });
+  }
+
+  let upstream;
+  try {
+    upstream = await fetchMediaUpstream(target, request);
+  } catch (err) {
+    return jsonResponse(502, {
+      code: -1,
+      message: err instanceof Error ? err.message : "媒体请求失败",
+    });
+  }
+
+  const headers = new Headers();
+  const passthrough = [
+    "Content-Type",
+    "Content-Length",
+    "Content-Range",
+    "Accept-Ranges",
+    "Cache-Control",
+    "Last-Modified",
+    "ETag",
+  ];
+  passthrough.forEach((name) => {
+    const value = upstream.headers.get(name);
+    if (value) headers.set(name, value);
+  });
+
+  if (reqUrl.searchParams.get("download") === "1") {
+    const filename = sanitizeDownloadFilename(reqUrl.searchParams.get("filename"));
+    headers.set("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  }
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers,
+  });
 }
 
 async function handleParse(request, env) {

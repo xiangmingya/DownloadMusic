@@ -23,6 +23,9 @@ LINUXDO_SCOPE = "openid profile"
 # 回调后跳转前端白名单（支持逗号分隔多个，建议填首页）
 FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/"
 
+# 媒体代理白名单（可选，逗号分隔；留空表示允许任意公网域名）
+MEDIA_PROXY_ALLOWED_HOSTS = ".kuwo.cn,.kwcdn.kuwo.cn,.qq.com,.music.163.com,.music.126.net"
+
 # Cookie 可选配置
 SESSION_COOKIE_NAME = "dm_session"
 SESSION_COOKIE_SAMESITE = "None"
