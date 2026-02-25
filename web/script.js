@@ -117,6 +117,10 @@ function parseResponseText(text) {
     }
 }
 
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function apiFetch(url, init = {}) {
     const { timeoutMs = 0, ...fetchInit } = init;
     if (!timeoutMs || timeoutMs <= 0) {
@@ -371,21 +375,57 @@ async function callPlatformMethod(platform, functionName, vars = {}, options = {
         }
     });
 
-    const response = await apiFetch(url.toString(), {
-        timeoutMs: Number(options.timeoutMs || 0)
-    });
-    const data = await response.json();
-    if (!response.ok || Number(data.code) !== 0) {
-        throw new Error(data.message || '请求失败');
+    const timeoutMs = Number(options.timeoutMs || 0);
+    const retries = Math.max(0, Number(options.retries || 0));
+    const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 450));
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+            const response = await apiFetch(url.toString(), { timeoutMs });
+            const data = await response.json();
+            if (!response.ok || Number(data.code) !== 0) {
+                throw new Error(data.message || '请求失败');
+            }
+            return data.data;
+        } catch (error) {
+            lastError = error;
+            if (attempt < retries) {
+                await wait(retryDelayMs);
+            }
+        }
     }
-    return data.data;
+
+    throw lastError || new Error('请求失败');
 }
 
 // 检查服务状态并获取平台信息
 async function checkStatus() {
     try {
-        const response = await apiFetch(API_ROUTES.methods);
-        const methodsData = await response.json();
+        let response = null;
+        let methodsData = null;
+        let lastErr = null;
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                response = await apiFetch(API_ROUTES.methods, { timeoutMs: 9000 });
+                methodsData = await response.json();
+                if (!response.ok || Number(methodsData.code) !== 0 || !methodsData.data) {
+                    throw new Error(methodsData.message || '服务状态检测失败');
+                }
+                lastErr = null;
+                break;
+            } catch (error) {
+                lastErr = error;
+                if (attempt < 1) {
+                    await wait(500);
+                }
+            }
+        }
+
+        if (lastErr) {
+            throw lastErr;
+        }
 
         if (response.ok && Number(methodsData.code) === 0 && methodsData.data) {
             supportedPlatforms = Object.keys(methodsData.data);
@@ -410,9 +450,9 @@ async function checkStatus() {
         }
     } catch {
         document.getElementById('serviceStatus').innerHTML =
-            `服务状态: <span class="offline">异常</span>`;
+            `服务状态: <span class="offline">网络波动</span>`;
         document.getElementById('healthStatus').innerHTML =
-            `健康状态: <span class="offline">异常</span>`;
+            `健康状态: <span class="offline">可重试</span>`;
     }
 }
 
@@ -440,14 +480,16 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
         throw new Error('暂无可用平台');
     }
 
-    const timeoutMs = 8000;
+    const timeoutMs = 15000;
     const searchOnePlatform = async targetPlatform => {
         const result = await callPlatformMethod(targetPlatform, 'search', {
             keyword,
             page: 1,
             limit: 20
         }, {
-            timeoutMs
+            timeoutMs,
+            retries: 1,
+            retryDelayMs: 600
         });
         const list = Array.isArray(result) ? result : [];
         return list.map(item => ({
@@ -490,6 +532,10 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
 async function fetchPlaylistSongs(platform, playlistId) {
     const result = await callPlatformMethod(platform, 'playlist', {
         id: playlistId
+    }, {
+        timeoutMs: 15000,
+        retries: 1,
+        retryDelayMs: 600
     });
 
     const list = Array.isArray(result?.list) ? result.list : [];
