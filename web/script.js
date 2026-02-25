@@ -47,6 +47,7 @@ let playlistSongs = [];
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
+let fullPlayerHideTimer = null;
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -1064,9 +1065,51 @@ function setPlaylistSheetOpen(open) {
 function setFullPlayerOpen(open) {
     const overlay = document.getElementById('fullPlayerOverlay');
     if (!overlay) return;
-    isFullPlayerOpen = Boolean(open);
-    overlay.style.display = isFullPlayerOpen ? '' : 'none';
-    overlay.classList.toggle('open', isFullPlayerOpen);
+    const playerFabBtn = document.getElementById('playerFabBtn');
+
+    const updateOrigin = () => {
+        if (!playerFabBtn) return;
+        const rect = playerFabBtn.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        overlay.style.setProperty('--fp-origin-x', `${x}px`);
+        overlay.style.setProperty('--fp-origin-y', `${y}px`);
+    };
+
+    if (fullPlayerHideTimer) {
+        clearTimeout(fullPlayerHideTimer);
+        fullPlayerHideTimer = null;
+    }
+
+    if (open) {
+        isFullPlayerOpen = true;
+        updateOrigin();
+        overlay.style.display = '';
+        overlay.classList.add('visible');
+        void overlay.offsetHeight;
+        requestAnimationFrame(() => {
+            overlay.classList.add('open');
+        });
+        return;
+    }
+
+    isFullPlayerOpen = false;
+    updateOrigin();
+    overlay.classList.remove('open');
+    const shell = overlay.querySelector('.full-player-shell');
+    const finishHide = () => {
+        if (isFullPlayerOpen) return;
+        overlay.classList.remove('visible');
+        overlay.style.display = 'none';
+    };
+    if (shell) {
+        shell.addEventListener('transitionend', function onEnd(e) {
+            if (e.target !== shell) return;
+            shell.removeEventListener('transitionend', onEnd);
+            finishHide();
+        });
+    }
+    fullPlayerHideTimer = setTimeout(finishHide, 420);
 }
 
 function updateFullPlayerMeta() {

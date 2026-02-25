@@ -836,6 +836,22 @@ footer {
     opacity: 1;
 }
 
+.full-player-overlay {
+    --fp-origin-x: calc(100% - 44px);
+    --fp-origin-y: calc(100% - 44px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.34s ease;
+}
+
+.full-player-overlay.visible {
+    pointer-events: auto;
+}
+
+.full-player-overlay.open {
+    opacity: 1;
+}
+
 .playlist-sheet-backdrop,
 .full-player-backdrop {
     position: absolute;
@@ -850,6 +866,15 @@ footer {
 }
 
 .playlist-sheet.open .playlist-sheet-backdrop {
+    opacity: 1;
+}
+
+.full-player-backdrop {
+    opacity: 0;
+    transition: opacity 0.34s ease;
+}
+
+.full-player-overlay.open .full-player-backdrop {
     opacity: 1;
 }
 
@@ -972,14 +997,20 @@ footer {
         radial-gradient(circle at 18% 0%, rgba(170, 48, 48, 0.24), transparent 42%),
         radial-gradient(circle at 100% 100%, rgba(255, 226, 202, 0.1), transparent 45%),
         linear-gradient(120deg, rgba(20, 16, 17, 0.95), rgba(30, 23, 26, 0.96) 42%, rgba(20, 17, 19, 0.96));
-    transform: scale(1.03);
+    transform-origin: var(--fp-origin-x) var(--fp-origin-y);
+    transform: scale(0.06);
     opacity: 0;
-    transition: all 0.24s ease;
+    border-radius: 24px;
+    transition:
+        transform 0.38s cubic-bezier(0.18, 0.75, 0.2, 1),
+        opacity 0.3s ease,
+        border-radius 0.38s ease;
 }
 
 .full-player-overlay.open .full-player-shell {
     transform: scale(1);
     opacity: 1;
+    border-radius: 0;
 }
 
 .full-player-close {
