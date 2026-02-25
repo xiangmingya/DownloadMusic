@@ -104,13 +104,64 @@
                 <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
             </div>
         </footer>
+
+        <div class="floating-dock">
+            <button id="playlistFabBtn" class="fab-btn playlist-fab-btn" type="button" title="播放列表">≡</button>
+            <button id="playerFabBtn" class="fab-btn player-fab-btn" type="button" title="播放器">◉</button>
+        </div>
+
+        <div id="fullPlayerOverlay" class="full-player-overlay" style="display:none;">
+            <div class="full-player-backdrop" id="fullPlayerCloseArea"></div>
+            <div class="full-player-shell">
+                <button id="fullPlayerCloseBtn" class="full-player-close" type="button">×</button>
+                <div class="full-player-main">
+                    <div class="full-player-cover-wrap">
+                        <img id="fullPlayerCover" class="full-player-cover" src="" alt="">
+                        <h3 id="fullPlayerTitle" class="full-player-title">未播放</h3>
+                        <p id="fullPlayerArtist" class="full-player-artist">请选择歌曲</p>
+                    </div>
+                    <div class="full-player-lyric-wrap">
+                        <p class="full-player-kicker">Now Playing</p>
+                        <p id="fullPlayerCurrentLyric" class="full-player-current-lyric">点击歌曲开始播放</p>
+                        <p id="fullPlayerNextLyric" class="full-player-next-lyric"></p>
+                    </div>
+                </div>
+                <div class="full-player-progress-row">
+                    <span id="fullPlayerTimeCurrent">0:00</span>
+                    <div class="full-player-progress-bar" id="fullPlayerProgressBar">
+                        <div id="fullPlayerProgressFill" class="full-player-progress-fill"></div>
+                    </div>
+                    <span id="fullPlayerTimeTotal">0:00</span>
+                </div>
+                <div class="full-player-controls">
+                    <button id="fullPlayerPrevBtn" type="button">◀◀</button>
+                    <button id="fullPlayerToggleBtn" type="button">▶</button>
+                    <button id="fullPlayerNextBtn" type="button">▶▶</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="playlistSheet" class="playlist-sheet" style="display:none;">
+            <div class="playlist-sheet-backdrop" id="playlistSheetBackdrop"></div>
+            <div class="playlist-sheet-panel">
+                <div class="playlist-sheet-header">
+                    <h3>播放列表</h3>
+                    <div class="playlist-sheet-actions">
+                        <button id="playlistSearchBtn" type="button" class="ghost-btn">搜索</button>
+                        <button id="playlistClearBtn" type="button" class="ghost-btn">清空</button>
+                        <button id="playlistCloseBtn" type="button" class="ghost-btn">关闭</button>
+                    </div>
+                </div>
+                <div id="playlistSheetList" class="playlist-sheet-list"></div>
+            </div>
+        </div>
     </div>
 
     <script>
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260225-2';
+        const APP_ASSET_VERSION = '20260225-3';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

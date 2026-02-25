@@ -31,6 +31,8 @@ const pageSize = 5;
 let currentPlayingIndex = null;
 let currentLyrics = [];
 let activePlayRequestId = 0;
+let currentPlayingSong = null;
+let currentPlaylistIndex = -1;
 const audio = document.getElementById('audio');
 
 // 缓存
@@ -40,6 +42,10 @@ const LOCAL_KEY_PREFIX = 'downloadmusic_tunehub_key_';
 const linuxdoUserId = String(APP_CONTEXT?.user?.linuxdo_id || '').trim();
 const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
 let linuxdoUserKey = '';
+const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
+let playlistSongs = [];
+let isFullPlayerOpen = false;
+let isPlaylistSheetOpen = false;
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -561,6 +567,8 @@ function renderLocalPage() {
         const platform = song.platform || song.source;
         const safeName = escapeForSingleQuote(song.name);
         const safeArtist = escapeForSingleQuote(song.artist);
+        const safeAlbum = escapeForSingleQuote(song.album || '');
+        const safeCover = escapeForSingleQuote(song.cover || '');
         const coverUrl = getProxiedCoverUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
 
@@ -576,6 +584,7 @@ function renderLocalPage() {
                 </div>
                 <div>
                     <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">▶</button>
+                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}')">＋</button>
                     <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}')">下载</button>
                 </div>
             </div>
@@ -602,6 +611,7 @@ function renderLocalPage() {
 
     // 某些平台搜索接口不返回封面，当前页按需补全。
     hydrateMissingCovers(pageSongs, start);
+    syncInlinePlayButtonState();
 }
 
 function changeLocalPage(page) {
@@ -690,36 +700,80 @@ async function downloadPlaylist(source, id, name) {
     }
 }
 
-// 播放歌曲
-async function playSong(source, id, name, artist, index) {
+function resetInlinePlaybackUi(keepIndex = null) {
+    if (currentPlayingIndex === null) return;
+    if (keepIndex !== null && currentPlayingIndex === keepIndex) return;
+    const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
+    const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
+    const oldInlineLyrics = document.getElementById(`inline-lyrics-${currentPlayingIndex}`);
+    if (oldBtn) oldBtn.textContent = '▶';
+    if (oldPlayer) oldPlayer.style.display = 'none';
+    if (oldInlineLyrics) oldInlineLyrics.textContent = '';
+}
+
+function syncInlinePlayButtonState() {
+    document.querySelectorAll('.play-btn-item').forEach(btn => {
+        btn.textContent = '▶';
+    });
+    if (currentPlayingIndex !== null && !audio.paused) {
+        const activeBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
+        if (activeBtn) activeBtn.textContent = '⏸';
+    }
+}
+
+function isSameSong(source, id) {
+    return Boolean(
+        currentPlayingSong &&
+        String(currentPlayingSong.platform || '') === String(source || '') &&
+        String(currentPlayingSong.id || '') === String(id || '')
+    );
+}
+
+function bindSongMeta(song) {
+    currentPlayingSong = {
+        id: String(song.id || ''),
+        name: String(song.name || '未知歌曲'),
+        artist: String(song.artist || '未知歌手'),
+        platform: String(song.platform || song.source || ''),
+        cover: String(song.cover || ''),
+        lyricsRaw: String(song.lyricsRaw || ''),
+        lyrics: Array.isArray(song.lyrics) ? song.lyrics : []
+    };
+    currentLyrics = currentPlayingSong.lyrics;
+    updateFullPlayerMeta();
+}
+
+async function playSongCore(source, id, name, artist, options = {}) {
     const quality = document.getElementById('quality').value;
-    const btn = document.querySelector(`button[data-index="${index}"]`);
-    const player = document.getElementById(`player-${index}`);
-    const inlineLyrics = document.getElementById(`inline-lyrics-${index}`);
+    const inlineIndex = Number.isInteger(options.inlineIndex) ? options.inlineIndex : null;
+    const btn = inlineIndex !== null ? document.querySelector(`button[data-index="${inlineIndex}"]`) : null;
+    const player = inlineIndex !== null ? document.getElementById(`player-${inlineIndex}`) : null;
+    const inlineLyrics = inlineIndex !== null ? document.getElementById(`inline-lyrics-${inlineIndex}`) : null;
     let resumeTime = 0;
 
-    if (!btn || !player) return;
-
-    if (currentPlayingIndex === index && !audio.paused) {
+    if (isSameSong(source, id) && !audio.paused) {
         audio.pause();
-        btn.textContent = '▶';
+        syncInlinePlayButtonState();
+        updateFullPlayerControlState();
         return;
     }
 
-    if (currentPlayingIndex === index && audio.paused && audio.src) {
+    if (isSameSong(source, id) && audio.paused && audio.src) {
         resumeTime = Number(audio.currentTime || 0);
         try {
             await audio.play();
-            btn.textContent = '⏸';
-            player.style.display = 'flex';
+            if (inlineIndex !== null && player) player.style.display = 'flex';
+            if (inlineIndex !== null) currentPlayingIndex = inlineIndex;
+            syncInlinePlayButtonState();
+            updateFullPlayerControlState();
             return;
         } catch {
-            // Fallback to re-parse when the old URL expires.
+            // fallback re-parse
         }
     }
 
     const playRequestId = ++activePlayRequestId;
-    btn.disabled = true;
+    if (btn) btn.disabled = true;
 
     try {
         const parsed = await ensureParsedSong(source, id, quality);
@@ -728,27 +782,21 @@ async function playSong(source, id, name, artist, index) {
             throw new Error(parsed.error || '未获取到播放链接');
         }
 
-        if (currentPlayingIndex !== null && currentPlayingIndex !== index) {
-            const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
-            const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
-            const oldInlineLyrics = document.getElementById(`inline-lyrics-${currentPlayingIndex}`);
-            if (oldBtn) oldBtn.textContent = '▶';
-            if (oldPlayer) oldPlayer.style.display = 'none';
-            if (oldInlineLyrics) oldInlineLyrics.textContent = '';
-        }
+        resetInlinePlaybackUi(inlineIndex);
 
-        const parsedCoverUrl = getProxiedCoverUrl(parsed.cover || parsed.pic || parsed?.info?.pic || '');
-        if (parsedCoverUrl) {
-            const coverImg = document.getElementById(`cover-${index}`);
+        const rawCover = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || options.cover || '');
+        const parsedCoverUrl = getProxiedCoverUrl(rawCover);
+        if (parsedCoverUrl && inlineIndex !== null) {
+            const coverImg = document.getElementById(`cover-${inlineIndex}`);
             if (coverImg) {
                 coverImg.src = parsedCoverUrl;
                 coverImg.style.display = 'block';
             }
         }
 
-        currentLyrics = parseLyrics(parsed.lyrics || '');
+        const parsedLyrics = parseLyrics(parsed.lyrics || '');
         if (inlineLyrics) {
-            inlineLyrics.textContent = currentLyrics.length > 0 ? currentLyrics[0].text : '';
+            inlineLyrics.textContent = parsedLyrics.length > 0 ? parsedLyrics[0].text : '';
         }
 
         const playUrl = buildMediaProxyUrl(parsed.url);
@@ -769,20 +817,44 @@ async function playSong(source, id, name, artist, index) {
             }, { once: true });
         }
 
+        bindSongMeta({
+            id,
+            name,
+            artist,
+            platform: source,
+            cover: rawCover,
+            lyricsRaw: parsed.lyrics || '',
+            lyrics: parsedLyrics
+        });
+
         audio.src = playUrl;
-        currentPlayingIndex = index;
-        player.style.display = 'flex';
+        currentPlayingIndex = inlineIndex;
+        if (player) {
+            player.style.display = 'flex';
+        }
 
         await audio.play();
-        btn.textContent = '⏸';
+        syncInlinePlayButtonState();
+        updateFullPlayerControlState();
     } catch (error) {
         if (playRequestId === activePlayRequestId) {
             showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
-            btn.textContent = '▶';
+            syncInlinePlayButtonState();
+            updateFullPlayerControlState();
         }
     } finally {
-        btn.disabled = false;
+        if (btn) btn.disabled = false;
     }
+}
+
+// 播放歌曲
+async function playSong(source, id, name, artist, index) {
+    const queueIndex = findPlaylistIndex(source, id);
+    currentPlaylistIndex = queueIndex;
+    renderPlaylistSheet();
+    await playSongCore(source, id, name, artist, {
+        inlineIndex: index
+    });
 }
 
 // 解析LRC歌词
@@ -809,6 +881,8 @@ function parseLyrics(lrcText) {
 }
 
 audio.addEventListener('timeupdate', () => {
+    updateFullPlayerProgress();
+    updateFullPlayerLyric(audio.currentTime);
     if (currentPlayingIndex === null) return;
 
     const progress = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
@@ -846,10 +920,22 @@ function updateLyrics(currentTime) {
 }
 
 audio.addEventListener('ended', () => {
-    if (currentPlayingIndex !== null) {
-        const btn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
-        if (btn) btn.textContent = '▶';
-    }
+    syncInlinePlayButtonState();
+    updateFullPlayerControlState();
+});
+
+audio.addEventListener('play', () => {
+    syncInlinePlayButtonState();
+    updateFullPlayerControlState();
+});
+
+audio.addEventListener('pause', () => {
+    syncInlinePlayButtonState();
+    updateFullPlayerControlState();
+});
+
+audio.addEventListener('loadedmetadata', () => {
+    updateFullPlayerProgress();
 });
 
 document.addEventListener('click', e => {
@@ -866,6 +952,335 @@ function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function loadPlaylistFromStorage() {
+    try {
+        const raw = localStorage.getItem(playlistStorageKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .filter(item => item && item.id && item.platform)
+            .map(item => ({
+                id: String(item.id),
+                name: String(item.name || '未知歌曲'),
+                artist: String(item.artist || '未知歌手'),
+                album: String(item.album || ''),
+                platform: String(item.platform || ''),
+                source: String(item.platform || ''),
+                cover: normalizeMediaUrl(item.cover || '')
+            }));
+    } catch {
+        return [];
+    }
+}
+
+function savePlaylistToStorage() {
+    try {
+        localStorage.setItem(playlistStorageKey, JSON.stringify(playlistSongs));
+    } catch {
+        // ignore storage errors
+    }
+}
+
+function findPlaylistIndex(source, id) {
+    return playlistSongs.findIndex(item =>
+        String(item.platform || item.source) === String(source) &&
+        String(item.id) === String(id)
+    );
+}
+
+function renderPlaylistSheet() {
+    const listEl = document.getElementById('playlistSheetList');
+    if (!listEl) return;
+
+    if (playlistSongs.length === 0) {
+        listEl.innerHTML = '<div class="playlist-empty">播放列表为空，搜索后点击 ＋ 添加歌曲</div>';
+        return;
+    }
+
+    listEl.innerHTML = playlistSongs.map((song, index) => {
+        const active = currentPlaylistIndex === index ? ' active' : '';
+        const cover = getProxiedCoverUrl(song.cover || '');
+        const platform = platformDisplayName(song.platform || song.source);
+        return `
+            <div class="playlist-item${active}" data-index="${index}">
+                <img class="playlist-item-cover" src="${cover}" alt="" onerror="this.style.visibility='hidden'">
+                <div class="playlist-item-meta">
+                    <h4>${song.name}</h4>
+                    <p>${song.artist} · ${platform}</p>
+                </div>
+                <div class="playlist-item-actions">
+                    <button type="button" data-action="play" data-index="${index}">播放</button>
+                    <button type="button" data-action="remove" data-index="${index}" class="ghost-btn">移除</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function setPlaylistSheetOpen(open) {
+    const sheet = document.getElementById('playlistSheet');
+    if (!sheet) return;
+    isPlaylistSheetOpen = Boolean(open);
+    sheet.style.display = isPlaylistSheetOpen ? '' : 'none';
+    sheet.classList.toggle('open', isPlaylistSheetOpen);
+    if (isPlaylistSheetOpen) {
+        renderPlaylistSheet();
+    }
+}
+
+function setFullPlayerOpen(open) {
+    const overlay = document.getElementById('fullPlayerOverlay');
+    if (!overlay) return;
+    isFullPlayerOpen = Boolean(open);
+    overlay.style.display = isFullPlayerOpen ? '' : 'none';
+    overlay.classList.toggle('open', isFullPlayerOpen);
+}
+
+function updateFullPlayerMeta() {
+    const titleEl = document.getElementById('fullPlayerTitle');
+    const artistEl = document.getElementById('fullPlayerArtist');
+    const coverEl = document.getElementById('fullPlayerCover');
+    if (!titleEl || !artistEl || !coverEl) return;
+
+    if (!currentPlayingSong) {
+        titleEl.textContent = '未播放';
+        artistEl.textContent = '请选择歌曲';
+        coverEl.src = '';
+        document.getElementById('fullPlayerCurrentLyric').textContent = '点击歌曲开始播放';
+        document.getElementById('fullPlayerNextLyric').textContent = '';
+        return;
+    }
+
+    titleEl.textContent = currentPlayingSong.name || '未知歌曲';
+    artistEl.textContent = currentPlayingSong.artist || '未知歌手';
+    coverEl.src = getProxiedCoverUrl(currentPlayingSong.cover || '');
+    updateFullPlayerLyric(audio.currentTime || 0);
+}
+
+function updateFullPlayerControlState() {
+    const toggleBtn = document.getElementById('fullPlayerToggleBtn');
+    const playerFab = document.getElementById('playerFabBtn');
+    if (toggleBtn) {
+        toggleBtn.textContent = audio.paused ? '▶' : '⏸';
+    }
+    if (playerFab) {
+        playerFab.classList.toggle('is-spinning', !audio.paused);
+    }
+}
+
+function updateFullPlayerProgress() {
+    const currentEl = document.getElementById('fullPlayerTimeCurrent');
+    const totalEl = document.getElementById('fullPlayerTimeTotal');
+    const fillEl = document.getElementById('fullPlayerProgressFill');
+    if (!currentEl || !totalEl || !fillEl) return;
+
+    currentEl.textContent = formatTime(audio.currentTime);
+    totalEl.textContent = formatTime(audio.duration);
+    const ratio = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+    fillEl.style.width = `${Math.max(0, Math.min(100, ratio))}%`;
+}
+
+function updateFullPlayerLyric(currentTime) {
+    const currentLyricEl = document.getElementById('fullPlayerCurrentLyric');
+    const nextLyricEl = document.getElementById('fullPlayerNextLyric');
+    if (!currentLyricEl || !nextLyricEl) return;
+
+    if (!currentLyrics.length) {
+        currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '点击歌曲开始播放';
+        nextLyricEl.textContent = '';
+        return;
+    }
+
+    let activeIndex = 0;
+    for (let i = 0; i < currentLyrics.length; i += 1) {
+        if (currentTime >= currentLyrics[i].time) {
+            activeIndex = i;
+        } else {
+            break;
+        }
+    }
+
+    currentLyricEl.textContent = currentLyrics[activeIndex]?.text || '';
+    nextLyricEl.textContent = currentLyrics[activeIndex + 1]?.text || '';
+}
+
+function addSongToPlaylist(source, id, name, artist, album = '', cover = '') {
+    const platform = String(source || '').trim();
+    const songId = String(id || '').trim();
+    if (!platform || !songId) return;
+    const exists = findPlaylistIndex(platform, songId);
+    if (exists >= 0) {
+        showToast('该歌曲已在播放列表中', 'info');
+        currentPlaylistIndex = exists;
+        renderPlaylistSheet();
+        return;
+    }
+
+    playlistSongs.push({
+        id: songId,
+        name: String(name || '未知歌曲'),
+        artist: String(artist || '未知歌手'),
+        album: String(album || ''),
+        platform,
+        source: platform,
+        cover: normalizeMediaUrl(cover || '')
+    });
+    savePlaylistToStorage();
+    renderPlaylistSheet();
+    showToast('已添加到播放列表', 'success');
+}
+
+async function playSongFromPlaylist(index) {
+    const item = playlistSongs[index];
+    if (!item) return;
+    currentPlaylistIndex = index;
+    renderPlaylistSheet();
+    await playSongCore(item.platform || item.source, item.id, item.name, item.artist, {
+        inlineIndex: null,
+        cover: item.cover
+    });
+}
+
+function removeSongFromPlaylist(index) {
+    if (index < 0 || index >= playlistSongs.length) return;
+    playlistSongs.splice(index, 1);
+    if (currentPlaylistIndex === index) {
+        currentPlaylistIndex = -1;
+    } else if (currentPlaylistIndex > index) {
+        currentPlaylistIndex -= 1;
+    }
+    savePlaylistToStorage();
+    renderPlaylistSheet();
+}
+
+async function playNextInPlaylist(step) {
+    if (!playlistSongs.length) {
+        showToast('播放列表为空', 'info');
+        return;
+    }
+    if (currentPlaylistIndex < 0) {
+        showToast('当前歌曲不在播放列表中', 'info');
+        return;
+    }
+    const nextIndex = currentPlaylistIndex + step;
+    if (nextIndex < 0 || nextIndex >= playlistSongs.length) {
+        showToast('已经到边界了', 'info');
+        return;
+    }
+    await playSongFromPlaylist(nextIndex);
+}
+
+function bindPlayerUiEvents() {
+    const playlistFabBtn = document.getElementById('playlistFabBtn');
+    const playerFabBtn = document.getElementById('playerFabBtn');
+    const playlistBackdrop = document.getElementById('playlistSheetBackdrop');
+    const playlistCloseBtn = document.getElementById('playlistCloseBtn');
+    const playlistSearchBtn = document.getElementById('playlistSearchBtn');
+    const playlistClearBtn = document.getElementById('playlistClearBtn');
+    const playlistList = document.getElementById('playlistSheetList');
+    const fullPlayerCloseBtn = document.getElementById('fullPlayerCloseBtn');
+    const fullPlayerCloseArea = document.getElementById('fullPlayerCloseArea');
+    const fullPlayerToggleBtn = document.getElementById('fullPlayerToggleBtn');
+    const fullPlayerPrevBtn = document.getElementById('fullPlayerPrevBtn');
+    const fullPlayerNextBtn = document.getElementById('fullPlayerNextBtn');
+    const fullProgressBar = document.getElementById('fullPlayerProgressBar');
+
+    if (playlistFabBtn) {
+        playlistFabBtn.addEventListener('click', () => {
+            setPlaylistSheetOpen(!isPlaylistSheetOpen);
+        });
+    }
+    if (playerFabBtn) {
+        playerFabBtn.addEventListener('click', () => {
+            if (!currentPlayingSong) {
+                showToast('请先播放一首歌', 'info');
+                return;
+            }
+            setFullPlayerOpen(!isFullPlayerOpen);
+        });
+    }
+    if (playlistBackdrop) {
+        playlistBackdrop.addEventListener('click', () => setPlaylistSheetOpen(false));
+    }
+    if (playlistCloseBtn) {
+        playlistCloseBtn.addEventListener('click', () => setPlaylistSheetOpen(false));
+    }
+    if (playlistSearchBtn) {
+        playlistSearchBtn.addEventListener('click', () => {
+            setPlaylistSheetOpen(false);
+            setFullPlayerOpen(false);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) searchInput.focus();
+        });
+    }
+    if (playlistClearBtn) {
+        playlistClearBtn.addEventListener('click', () => {
+            if (!playlistSongs.length) return;
+            playlistSongs = [];
+            currentPlaylistIndex = -1;
+            savePlaylistToStorage();
+            renderPlaylistSheet();
+            showToast('播放列表已清空', 'info');
+        });
+    }
+    if (playlistList) {
+        playlistList.addEventListener('click', async e => {
+            const target = e.target.closest('button[data-action]');
+            if (!target) return;
+            const action = target.getAttribute('data-action');
+            const index = Number(target.getAttribute('data-index'));
+            if (!Number.isInteger(index)) return;
+            if (action === 'play') {
+                await playSongFromPlaylist(index);
+            } else if (action === 'remove') {
+                removeSongFromPlaylist(index);
+            }
+        });
+    }
+    if (fullPlayerCloseBtn) {
+        fullPlayerCloseBtn.addEventListener('click', () => setFullPlayerOpen(false));
+    }
+    if (fullPlayerCloseArea) {
+        fullPlayerCloseArea.addEventListener('click', () => setFullPlayerOpen(false));
+    }
+    if (fullPlayerToggleBtn) {
+        fullPlayerToggleBtn.addEventListener('click', async () => {
+            if (!currentPlayingSong || !audio.src) return;
+            if (audio.paused) {
+                try {
+                    await audio.play();
+                } catch (err) {
+                    showToast(`播放失败: ${err?.message || '未知错误'}`, 'error');
+                }
+            } else {
+                audio.pause();
+            }
+            syncInlinePlayButtonState();
+            updateFullPlayerControlState();
+        });
+    }
+    if (fullPlayerPrevBtn) {
+        fullPlayerPrevBtn.addEventListener('click', async () => {
+            await playNextInPlaylist(-1);
+        });
+    }
+    if (fullPlayerNextBtn) {
+        fullPlayerNextBtn.addEventListener('click', async () => {
+            await playNextInPlaylist(1);
+        });
+    }
+    if (fullProgressBar) {
+        fullProgressBar.addEventListener('click', e => {
+            if (!audio.duration) return;
+            const rect = fullProgressBar.getBoundingClientRect();
+            const ratio = (e.clientX - rect.left) / rect.width;
+            audio.currentTime = Math.max(0, Math.min(audio.duration, ratio * audio.duration));
+        });
+    }
 }
 
 // 切换搜索类型按钮
@@ -889,6 +1304,12 @@ document.getElementById('searchInput').addEventListener('keypress', e => {
 });
 
 // 初始化
+playlistSongs = loadPlaylistFromStorage();
+renderPlaylistSheet();
+bindPlayerUiEvents();
+updateFullPlayerMeta();
+updateFullPlayerProgress();
+updateFullPlayerControlState();
 checkStatus();
 initLinuxdoKeyPanel();
 setInterval(checkStatus, 60000);
