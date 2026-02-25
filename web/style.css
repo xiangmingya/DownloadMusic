@@ -1021,6 +1021,7 @@ footer {
     align-items: center;
     gap: 10px;
     z-index: 2;
+    transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
 .full-player-top-btn {
@@ -1117,6 +1118,7 @@ footer {
     align-items: center;
     gap: 12px;
     color: #c6b8b7;
+    transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
 .full-player-progress-row span {
@@ -1141,6 +1143,20 @@ footer {
     justify-content: center;
     gap: 10px;
     flex-wrap: wrap;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.full-player-overlay.fs-idle .full-player-top-tools {
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+}
+
+.full-player-overlay.fs-idle .full-player-progress-row,
+.full-player-overlay.fs-idle .full-player-controls {
+    opacity: 0;
+    transform: translateY(12px);
+    pointer-events: none;
 }
 
 .full-player-controls button {

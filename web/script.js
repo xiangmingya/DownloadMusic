@@ -49,6 +49,8 @@ let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
 let fullPlayerHideTimer = null;
+let fullPlayerFullscreenIdleTimer = null;
+const FULL_PLAYER_IDLE_MS = 2200;
 const PLAY_MODES = ['list', 'single', 'random'];
 const PLAY_MODE_TEXT = {
     list: '列表',
@@ -1139,10 +1141,13 @@ function setFullPlayerOpen(open) {
         requestAnimationFrame(() => {
             overlay.classList.add('open');
         });
+        refreshFullscreenIdleState();
         return;
     }
 
     isFullPlayerOpen = false;
+    clearFullscreenIdleTimer();
+    setFullscreenControlsHidden(false);
     if (isBrowserFullscreenActive()) {
         exitBrowserFullscreen().catch(() => {}).finally(() => {
             updateBrowserFullscreenButtonState();
@@ -1164,6 +1169,40 @@ function setFullPlayerOpen(open) {
         });
     }
     fullPlayerHideTimer = setTimeout(finishHide, 420);
+}
+
+function clearFullscreenIdleTimer() {
+    if (!fullPlayerFullscreenIdleTimer) return;
+    clearTimeout(fullPlayerFullscreenIdleTimer);
+    fullPlayerFullscreenIdleTimer = null;
+}
+
+function setFullscreenControlsHidden(hidden) {
+    const overlay = document.getElementById('fullPlayerOverlay');
+    if (!overlay) return;
+    overlay.classList.toggle('fs-idle', Boolean(hidden));
+}
+
+function refreshFullscreenIdleState(options = {}) {
+    const { bumpTimer = true } = options;
+    if (!isFullPlayerOpen || !isBrowserFullscreenActive()) {
+        clearFullscreenIdleTimer();
+        setFullscreenControlsHidden(false);
+        return;
+    }
+
+    setFullscreenControlsHidden(false);
+    if (!bumpTimer) return;
+    clearFullscreenIdleTimer();
+    fullPlayerFullscreenIdleTimer = setTimeout(() => {
+        if (isFullPlayerOpen && isBrowserFullscreenActive()) {
+            setFullscreenControlsHidden(true);
+        }
+    }, FULL_PLAYER_IDLE_MS);
+}
+
+function onFullscreenUserActivity() {
+    refreshFullscreenIdleState({ bumpTimer: true });
 }
 
 function isBrowserFullscreenActive() {
@@ -1217,6 +1256,7 @@ function updateBrowserFullscreenButtonState() {
     const label = active ? '退出真全屏' : '进入真全屏';
     btn.title = label;
     btn.setAttribute('aria-label', label);
+    refreshFullscreenIdleState();
 }
 
 function updateFullPlayerMeta() {
@@ -1444,6 +1484,7 @@ function bindPlayerUiEvents() {
     const fullPlayerNextBtn = document.getElementById('fullPlayerNextBtn');
     const fullPlayerQueueBtn = document.getElementById('fullPlayerQueueBtn');
     const fullProgressBar = document.getElementById('fullPlayerProgressBar');
+    const fullPlayerOverlay = document.getElementById('fullPlayerOverlay');
 
     if (playlistFabBtn) {
         playlistFabBtn.addEventListener('click', () => {
@@ -1553,6 +1594,12 @@ function bindPlayerUiEvents() {
             audio.currentTime = Math.max(0, Math.min(audio.duration, ratio * audio.duration));
         });
     }
+    if (fullPlayerOverlay) {
+        ['mousemove', 'mousedown', 'click', 'touchstart'].forEach(eventName => {
+            fullPlayerOverlay.addEventListener(eventName, onFullscreenUserActivity, { passive: true });
+        });
+    }
+    document.addEventListener('keydown', onFullscreenUserActivity);
 
     ['fullscreenchange', 'webkitfullscreenchange', 'msfullscreenchange'].forEach(eventName => {
         document.addEventListener(eventName, updateBrowserFullscreenButtonState);
