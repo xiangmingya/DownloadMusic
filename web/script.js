@@ -100,10 +100,25 @@ function parseResponseText(text) {
 }
 
 async function apiFetch(url, init = {}) {
-    return fetch(url, {
-        credentials: 'include',
-        ...init
-    });
+    const { timeoutMs = 0, ...fetchInit } = init;
+    if (!timeoutMs || timeoutMs <= 0) {
+        return fetch(url, {
+            credentials: 'include',
+            ...fetchInit
+        });
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, {
+            credentials: 'include',
+            ...fetchInit,
+            signal: controller.signal
+        });
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 function isLinuxdoLogin() {
@@ -328,7 +343,7 @@ async function fetchSongMeta(platform, id) {
     return meta;
 }
 
-async function callPlatformMethod(platform, functionName, vars = {}) {
+async function callPlatformMethod(platform, functionName, vars = {}, options = {}) {
     const url = new URL(API_ROUTES.method, window.location.href);
     url.searchParams.set('platform', platform);
     url.searchParams.set('functionName', functionName);
@@ -338,7 +353,9 @@ async function callPlatformMethod(platform, functionName, vars = {}) {
         }
     });
 
-    const response = await apiFetch(url.toString());
+    const response = await apiFetch(url.toString(), {
+        timeoutMs: Number(options.timeoutMs || 0)
+    });
     const data = await response.json();
     if (!response.ok || Number(data.code) !== 0) {
         throw new Error(data.message || '请求失败');
@@ -384,26 +401,31 @@ async function checkStatus() {
 // 更新平台下拉框
 function updatePlatformSelect() {
     const platformSelect = document.getElementById('platform');
-    const searchMode = document.getElementById('searchMode').value;
+    const current = String(platformSelect.value || '').trim();
+    const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
+    const selected = supportedPlatforms.includes(current) ? current : fallback;
 
-    let options = '';
-    if (searchMode === 'keyword' && currentSearchType === 'song') {
-        options = '<option value="all">全部</option>';
-    }
-    options += supportedPlatforms.map(key =>
-        `<option value="${key}">${platformNames[key] || key}</option>`
+    platformSelect.innerHTML = supportedPlatforms.map(key =>
+        `<option value="${key}"${key === selected ? ' selected' : ''}>${platformNames[key] || key}</option>`
     ).join('');
-
-    platformSelect.innerHTML = options;
 }
 
 async function searchSongsByKeyword(keyword, selectedPlatform) {
-    const targets = selectedPlatform === 'all' ? supportedPlatforms : [selectedPlatform];
+    const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
+    const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
+    const targets = platform ? [platform] : [];
+    if (targets.length === 0) {
+        throw new Error('暂无可用平台');
+    }
+
+    const timeoutMs = 8000;
     const tasks = targets.map(async platform => {
         const result = await callPlatformMethod(platform, 'search', {
             keyword,
             page: 1,
-            limit: 50
+            limit: 20
+        }, {
+            timeoutMs
         });
         const list = Array.isArray(result) ? result : [];
         return list.map(item => ({
@@ -430,6 +452,9 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
 
     if (failed > 0) {
         showToast(`部分平台搜索失败（${failed}/${targets.length}）`, 'error');
+    }
+    if (songs.length === 0 && failed > 0) {
+        throw new Error('平台响应超时或失败，请稍后重试');
     }
 
     return songs;
@@ -479,11 +504,6 @@ async function search() {
             } else {
                 resultsDiv.innerHTML = '<div class="empty-state">未找到结果</div>';
             }
-            return;
-        }
-
-        if (platform === 'all') {
-            resultsDiv.innerHTML = '<div class="empty-state">ID 模式下请选择具体平台</div>';
             return;
         }
 
