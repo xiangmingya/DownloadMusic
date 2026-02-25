@@ -567,7 +567,8 @@ function enableKeywordPaging(keyword, platform, firstBatchCount) {
         keyword: String(keyword || ''),
         page: 1,
         limit: searchApiLimit,
-        hasMore: Number(firstBatchCount) >= searchApiLimit,
+        // Optimistic: allow trying "next" once at list end, then decide by actual response.
+        hasMore: true,
         loading: false
     };
 }
@@ -589,7 +590,8 @@ function mergeSongsWithoutDuplicates(baseSongs, incomingSongs) {
 }
 
 async function loadNextKeywordPage() {
-    if (!canLoadMoreKeywordPage()) return false;
+    if (!keywordPagingState.enabled) return false;
+    if (!keywordPagingState.hasMore) return false;
     if (keywordPagingState.loading) return false;
 
     keywordPagingState.loading = true;
@@ -757,13 +759,14 @@ function renderLocalPage() {
     }).join('');
 
     if (totalPages > 1 || canLoadMoreKeywordPage()) {
-        const canLoadMore = canLoadMoreKeywordPage();
+        const atEnd = currentPage === totalPages;
+        const canTryLoadMore = keywordPagingState.enabled && keywordPagingState.hasMore;
         const nextDisabled = keywordPagingState.loading
             ? 'disabled'
-            : (currentPage === totalPages && !canLoadMore ? 'disabled' : '');
+            : (atEnd ? (canTryLoadMore ? '' : 'disabled') : '');
         const nextText = keywordPagingState.loading
             ? '加载中...'
-            : (currentPage === totalPages && canLoadMore ? '下一页(加载)' : '下一页');
+            : (atEnd && canTryLoadMore ? '下一页(加载)' : '下一页');
         resultsDiv.innerHTML += `
             <div class="pagination">
                 <button onclick="changeLocalPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
@@ -783,7 +786,7 @@ async function changeLocalPage(page) {
     if (page < 1) return;
 
     if (page > totalPages) {
-        if (!canLoadMoreKeywordPage()) return;
+        if (!keywordPagingState.enabled || !keywordPagingState.hasMore) return;
         renderLocalPage();
         const loaded = await loadNextKeywordPage();
         if (loaded) {
@@ -792,9 +795,8 @@ async function changeLocalPage(page) {
             window.scrollTo({ top: 0, behavior: 'smooth' });
             return;
         }
-        if (!keywordPagingState.hasMore) {
-            showToast('没有更多结果了', 'info');
-        }
+        keywordPagingState.hasMore = false;
+        showToast('没有更多结果了', 'info');
         renderLocalPage();
         return;
     }
