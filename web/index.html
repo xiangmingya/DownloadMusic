@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260225-5">
+    <link rel="stylesheet" href="style.css?v=20260225-6">
     <script>
         window.AUTH_API_BASE = 'https://downloadmusic-auth-proxy.xiangmingya.workers.dev/api/auth';
         window.APP_API_BASE = 'https://downloadmusic-auth-proxy.xiangmingya.workers.dev/api/proxy';
@@ -141,6 +141,9 @@
                     <span id="fullPlayerTimeTotal">0:00</span>
                 </div>
                 <div class="full-player-controls">
+                    <button id="fullPlayerModeBtn" type="button" aria-label="播放模式：列表" title="播放模式：列表">
+                        <span id="fullPlayerModeLabel" class="control-icon control-text">列表</span>
+                    </button>
                     <button id="fullPlayerPrevBtn" type="button" aria-label="上一首">
                         <span class="control-icon">⏮</span>
                     </button>
@@ -149,6 +152,9 @@
                     </button>
                     <button id="fullPlayerNextBtn" type="button" aria-label="下一首">
                         <span class="control-icon">⏭</span>
+                    </button>
+                    <button id="fullPlayerQueueBtn" type="button" aria-label="打开播放列表" title="打开播放列表">
+                        <span class="control-icon">≡</span>
                     </button>
                 </div>
             </div>
@@ -174,7 +180,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260225-5';
+        const APP_ASSET_VERSION = '20260225-6';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

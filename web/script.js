@@ -41,6 +41,7 @@ const metaCache = new Map();
 const LOCAL_KEY_PREFIX = 'downloadmusic_tunehub_key_';
 const linuxdoUserId = String(APP_CONTEXT?.user?.linuxdo_id || '').trim();
 const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
+const playModeStorageKey = `${LOCAL_KEY_PREFIX}playmode_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 let linuxdoUserKey = '';
 const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 let playlistSongs = [];
@@ -48,6 +49,13 @@ let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
 let fullPlayerHideTimer = null;
+const PLAY_MODES = ['list', 'single', 'random'];
+const PLAY_MODE_TEXT = {
+    list: '列表',
+    single: '单曲',
+    random: '随机'
+};
+let currentPlayMode = 'list';
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -924,6 +932,7 @@ function updateLyrics(currentTime) {
 audio.addEventListener('ended', () => {
     syncInlinePlayButtonState();
     updateFullPlayerControlState();
+    playByMode(1, { fromEnded: true }).catch(() => {});
 });
 
 audio.addEventListener('play', () => {
@@ -954,6 +963,45 @@ function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function loadPlayModeFromStorage() {
+    try {
+        const mode = String(localStorage.getItem(playModeStorageKey) || '').trim();
+        if (PLAY_MODES.includes(mode)) return mode;
+    } catch {
+        // ignore storage failures
+    }
+    return 'list';
+}
+
+function savePlayModeToStorage() {
+    try {
+        localStorage.setItem(playModeStorageKey, currentPlayMode);
+    } catch {
+        // ignore storage failures
+    }
+}
+
+function updatePlayModeButtonState() {
+    const labelEl = document.getElementById('fullPlayerModeLabel');
+    const btnEl = document.getElementById('fullPlayerModeBtn');
+    const text = PLAY_MODE_TEXT[currentPlayMode] || PLAY_MODE_TEXT.list;
+    if (labelEl) labelEl.textContent = text;
+    if (btnEl) {
+        const label = `播放模式：${text}`;
+        btnEl.title = label;
+        btnEl.setAttribute('aria-label', label);
+    }
+}
+
+function cyclePlayMode() {
+    const index = PLAY_MODES.indexOf(currentPlayMode);
+    const next = PLAY_MODES[(index + 1) % PLAY_MODES.length];
+    currentPlayMode = next;
+    savePlayModeToStorage();
+    updatePlayModeButtonState();
+    showToast(`播放模式：${PLAY_MODE_TEXT[next]}`, 'info');
 }
 
 function loadPlaylistFromStorage() {
@@ -1310,6 +1358,75 @@ async function playNextInPlaylist(step) {
     await playSongFromPlaylist(nextIndex);
 }
 
+function resolveCurrentPlaylistIndex() {
+    if (currentPlaylistIndex >= 0 && currentPlaylistIndex < playlistSongs.length) {
+        return currentPlaylistIndex;
+    }
+    if (!currentPlayingSong) return -1;
+    return findPlaylistIndex(currentPlayingSong.platform || currentPlayingSong.source, currentPlayingSong.id);
+}
+
+function pickRandomPlaylistIndex(currentIndex) {
+    if (!playlistSongs.length) return -1;
+    if (playlistSongs.length === 1) return 0;
+
+    let nextIndex = currentIndex;
+    for (let i = 0; i < 8 && nextIndex === currentIndex; i += 1) {
+        nextIndex = Math.floor(Math.random() * playlistSongs.length);
+    }
+    if (nextIndex === currentIndex) {
+        nextIndex = (currentIndex + 1) % playlistSongs.length;
+    }
+    return nextIndex;
+}
+
+async function replayCurrentTrack() {
+    if (!audio.src) return;
+    audio.currentTime = 0;
+    try {
+        await audio.play();
+    } catch (error) {
+        showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
+    }
+}
+
+async function playByMode(step = 1, options = {}) {
+    const { fromEnded = false } = options;
+    if (!currentPlayingSong || !audio.src) return;
+
+    if (currentPlayMode === 'single') {
+        if (fromEnded) {
+            await replayCurrentTrack();
+            return;
+        }
+    }
+
+    const currentIndex = resolveCurrentPlaylistIndex();
+    if (currentIndex < 0) {
+        if (fromEnded) return;
+        showToast('当前歌曲不在播放列表中', 'info');
+        return;
+    }
+
+    if (currentPlayMode === 'random') {
+        const randomIndex = pickRandomPlaylistIndex(currentIndex);
+        if (randomIndex >= 0) {
+            await playSongFromPlaylist(randomIndex);
+        }
+        return;
+    }
+
+    const nextIndex = currentIndex + step;
+    if (fromEnded && nextIndex >= playlistSongs.length) {
+        return;
+    }
+    if (nextIndex < 0 || nextIndex >= playlistSongs.length) {
+        showToast('已经到边界了', 'info');
+        return;
+    }
+    await playSongFromPlaylist(nextIndex);
+}
+
 function bindPlayerUiEvents() {
     const playlistFabBtn = document.getElementById('playlistFabBtn');
     const playerFabBtn = document.getElementById('playerFabBtn');
@@ -1321,9 +1438,11 @@ function bindPlayerUiEvents() {
     const fullPlayerCloseBtn = document.getElementById('fullPlayerCloseBtn');
     const fullPlayerCloseArea = document.getElementById('fullPlayerCloseArea');
     const fullPlayerBrowserFullscreenBtn = document.getElementById('fullPlayerBrowserFullscreenBtn');
+    const fullPlayerModeBtn = document.getElementById('fullPlayerModeBtn');
     const fullPlayerToggleBtn = document.getElementById('fullPlayerToggleBtn');
     const fullPlayerPrevBtn = document.getElementById('fullPlayerPrevBtn');
     const fullPlayerNextBtn = document.getElementById('fullPlayerNextBtn');
+    const fullPlayerQueueBtn = document.getElementById('fullPlayerQueueBtn');
     const fullProgressBar = document.getElementById('fullPlayerProgressBar');
 
     if (playlistFabBtn) {
@@ -1390,6 +1509,11 @@ function bindPlayerUiEvents() {
             await toggleBrowserFullscreen();
         });
     }
+    if (fullPlayerModeBtn) {
+        fullPlayerModeBtn.addEventListener('click', () => {
+            cyclePlayMode();
+        });
+    }
     if (fullPlayerToggleBtn) {
         fullPlayerToggleBtn.addEventListener('click', async () => {
             if (!currentPlayingSong || !audio.src) return;
@@ -1408,12 +1532,17 @@ function bindPlayerUiEvents() {
     }
     if (fullPlayerPrevBtn) {
         fullPlayerPrevBtn.addEventListener('click', async () => {
-            await playNextInPlaylist(-1);
+            await playByMode(-1);
         });
     }
     if (fullPlayerNextBtn) {
         fullPlayerNextBtn.addEventListener('click', async () => {
-            await playNextInPlaylist(1);
+            await playByMode(1);
+        });
+    }
+    if (fullPlayerQueueBtn) {
+        fullPlayerQueueBtn.addEventListener('click', () => {
+            setPlaylistSheetOpen(true);
         });
     }
     if (fullProgressBar) {
@@ -1451,12 +1580,14 @@ document.getElementById('searchInput').addEventListener('keypress', e => {
 });
 
 // 初始化
+currentPlayMode = loadPlayModeFromStorage();
 playlistSongs = loadPlaylistFromStorage();
 renderPlaylistSheet();
 bindPlayerUiEvents();
 updateFullPlayerMeta();
 updateFullPlayerProgress();
 updateFullPlayerControlState();
+updatePlayModeButtonState();
 updateBrowserFullscreenButtonState();
 checkStatus();
 initLinuxdoKeyPanel();
