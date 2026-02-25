@@ -18,20 +18,19 @@
             <h1 class="login-title">音楽</h1>
             <p class="login-subtitle">Private Access</p>
 
-            <form id="passwordLoginForm" class="login-form">
+            <button id="showPasswordLoginBtn" type="button" class="password-login-entry-btn">密码登录</button>
+
+            <form id="passwordLoginForm" class="login-form" style="display:none;">
                 <label for="passwordInput">访问密码</label>
                 <input id="passwordInput" name="password" type="password" placeholder="输入密码" autocomplete="current-password" required>
-                <button type="submit">入る</button>
+                <button type="submit">登录</button>
             </form>
 
             <div class="login-divider" id="linuxdoDivider">OR</div>
             <a class="linuxdo-btn" id="linuxdoLoginBtn" href="#">使用 Linux DO 登录</a>
             <p class="login-tip login-tip-subtle" id="linuxdoLoginHint">正在检测 Linux DO 连通性...</p>
 
-            <a class="apply-key-link" href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">去申请 TuneHub Key</a>
             <p class="login-tip" id="loginErrorTip"></p>
-            <p class="login-tip">密码登录使用站点Key，Linux DO登录需填写个人Key。</p>
-            <p class="login-tip">Linux DO 模式下：我们不会在服务器保存你的 Key，只保存在你的浏览器。</p>
         </div>
     </div>
 
@@ -237,6 +236,13 @@
             window.location.href = window.location.origin + window.location.pathname;
         }
 
+        document.getElementById('showPasswordLoginBtn').addEventListener('click', function () {
+            document.getElementById('showPasswordLoginBtn').style.display = 'none';
+            const form = document.getElementById('passwordLoginForm');
+            form.style.display = 'flex';
+            document.getElementById('passwordInput').focus();
+        });
+
         document.getElementById('passwordLoginForm').addEventListener('submit', async function (e) {
             e.preventDefault();
             const input = document.getElementById('passwordInput');
@@ -262,10 +268,7 @@
 
         (async function init() {
             await checkLinuxdoStatus();
-            const ok = await checkLoginAndStart();
-            if (!ok) {
-                document.getElementById('passwordInput').focus();
-            }
+            await checkLoginAndStart();
         })();
     })();
     </script>
