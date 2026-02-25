@@ -11,8 +11,8 @@ compatibility_date = "2026-02-25"
 # - LINUXDO_REDIRECT_URI
 
 [vars]
-# 静态前端域名（用于 CORS）
-ALLOWED_ORIGIN = "https://your-frontend-domain.com"
+# 静态前端域名白名单（用于 CORS，支持逗号分隔多个）
+ALLOWED_ORIGINS = "https://music-t9apk03g.maozi.io,https://zodyr0w32-music-t9apk03g.maozi.io"
 
 # Linux DO 端点（可不改）
 LINUXDO_AUTHORIZATION_ENDPOINT = "https://connect.linux.do/oauth2/authorize"
@@ -20,8 +20,8 @@ LINUXDO_TOKEN_ENDPOINT = "https://connect.linux.do/oauth2/token"
 LINUXDO_USER_ENDPOINT = "https://connect.linux.do/api/user"
 LINUXDO_SCOPE = "openid profile"
 
-# 回调后跳回前端（建议填首页）
-FRONTEND_URL = "https://your-frontend-domain.com/"
+# 回调后跳转前端白名单（支持逗号分隔多个，建议填首页）
+FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/"
 
 # Cookie 可选配置
 SESSION_COOKIE_NAME = "dm_session"

@@ -33,7 +33,11 @@ wrangler secret put LINUXDO_REDIRECT_URI
 cp worker/wrangler.toml.example worker/wrangler.toml
 ```
 
-2. 修改 `worker/wrangler.toml` 的 `ALLOWED_ORIGIN`、`FRONTEND_URL`
+2. 修改 `worker/wrangler.toml` 的 `ALLOWED_ORIGINS`、`FRONTEND_URLS`
+   - 支持逗号分隔多个域名
+   - 示例：
+     - `ALLOWED_ORIGINS="https://a.com,https://b.com"`
+     - `FRONTEND_URLS="https://a.com/,https://b.com/"`
 
 3. 配置上面的 secrets
 
@@ -56,4 +60,4 @@ wrangler deploy
 
 - 若前端和 Worker 是跨站点域名，浏览器可能拦截第三方 Cookie
 - 最稳方案：前端与 Worker 使用同一主域的子域名（例如 `app.example.com` + `api.example.com`）
-- `ALLOWED_ORIGIN` 必须精确填写前端地址（含 `https://`）
+- `ALLOWED_ORIGINS` 必须填写前端地址（含 `https://`），多个用逗号分隔

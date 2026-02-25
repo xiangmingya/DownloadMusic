@@ -65,15 +65,15 @@ async function handleRequest(request, env) {
 
 function getAllowedOrigin(request, env) {
   const requestOrigin = request.headers.get("Origin");
-  const configured = String(env.ALLOWED_ORIGIN || "").trim();
+  const configuredOrigins = getAllowedOrigins(env);
 
   if (!requestOrigin) {
-    return configured || "*";
+    return configuredOrigins.length === 1 ? configuredOrigins[0] : "";
   }
-  if (!configured) {
+  if (configuredOrigins.length === 0) {
     return requestOrigin;
   }
-  if (configured === requestOrigin) {
+  if (configuredOrigins.includes(requestOrigin)) {
     return requestOrigin;
   }
   return "";
@@ -114,6 +114,48 @@ async function parseJsonBody(request) {
   } catch {
     return {};
   }
+}
+
+function splitCsvValues(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeOrigin(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
+function getAllowedOrigins(env) {
+  const values = [
+    ...splitCsvValues(env.ALLOWED_ORIGINS || ""),
+    ...splitCsvValues(env.ALLOWED_ORIGIN || ""),
+  ];
+  const origins = values.map(normalizeOrigin).filter(Boolean);
+  return Array.from(new Set(origins));
+}
+
+function getFrontendUrls(env) {
+  const values = [
+    ...splitCsvValues(env.FRONTEND_URLS || ""),
+    ...splitCsvValues(env.FRONTEND_URL || ""),
+  ];
+  const urls = values.filter((value) => {
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return Array.from(new Set(urls));
 }
 
 function getOAuthConfig(env) {
@@ -366,17 +408,19 @@ async function verifyOAuthStateToken(state, env) {
 }
 
 function safeRedirectUrl(url, env, requestUrl) {
-  const fallback = String(env.FRONTEND_URL || "").trim();
-  if (!url) return fallback || new URL(requestUrl).origin;
+  const frontendUrls = getFrontendUrls(env);
+  const allowedOrigins = frontendUrls.map((item) => new URL(item).origin);
+  const fallback = frontendUrls[0] || new URL(requestUrl).origin;
+  if (!url) return fallback;
   try {
     const parsed = new URL(url);
-    if (fallback) {
-      const allowed = new URL(fallback);
-      if (parsed.origin !== allowed.origin) return allowed.toString();
+    if (allowedOrigins.length > 0) {
+      if (!allowedOrigins.includes(parsed.origin)) return fallback;
+      return parsed.toString();
     }
-    return parsed.toString();
+    return fallback;
   } catch {
-    return fallback || new URL(requestUrl).origin;
+    return fallback;
   }
 }
 

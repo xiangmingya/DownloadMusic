@@ -43,7 +43,8 @@ window.APP_API_BASE = 'https://你的worker域名/api/proxy';
 - `LINUXDO_CLIENT_ID`
 - `LINUXDO_CLIENT_SECRET`
 - `LINUXDO_REDIRECT_URI`
-- `ALLOWED_ORIGIN`（必须填你的前端域名）
+- `ALLOWED_ORIGINS`（支持多个前端域名，逗号分隔）
+- `FRONTEND_URLS`（支持多个回跳地址，逗号分隔）
 
 ## Linux DO 回调地址
 
