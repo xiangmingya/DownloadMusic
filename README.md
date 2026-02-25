@@ -1,57 +1,67 @@
-# 音楽 - Music Downloader
+# 音楽 - Music Downloader（PHP + 密码登录）
 
-一个简洁的多平台音乐搜索、播放和下载工具。
+这是一个纯 PHP 版本：
+- 单密码登录（无注册）
+- 登录后才能调用代理接口
+- 不需要 Node，不需要 `npm install`
 
-## 功能特性
+## 上线前只改 2 处
 
-- **多平台支持**：网易云音乐、QQ音乐、酷我音乐
-- **聚合搜索**：同时搜索所有平台并混合展示结果
-- **在线播放**：支持在线试听，实时显示歌词
-- **音质选择**：128k / 320k / FLAC / FLAC 24bit
-- **歌单下载**：支持批量下载整个歌单
-- **双模式搜索**：关键词搜索或 ID 直接查询
+1. 编辑 `auth/config.php`，设置登录密码：
 
-## 使用方法
-
-1. 在浏览器中打开 `index.html`
-2. 选择搜索模式（关键词/ID）和类型（单曲/歌单）
-3. 输入搜索内容，点击"検索"按钮
-4. 在结果列表中可以：
-   - 点击"▶"按钮在线播放
-   - 点击"下载"按钮下载歌曲
-
-## 文件结构
-
-```
-music/
-├── index.html          # 主页面
-├── style.css           # 样式文件
-├── script.js           # 核心逻辑
-├── favicon.ico         # 网站图标
-└── 音乐下载api文档.txt  # API 接口文档
+```php
+$APP_LOGIN_PASSWORD = 'your-password';
 ```
 
-## API 接口
+2. 编辑 `proxy/config.php`，设置 TuneHub Key：
 
-本项目使用 TuneHub 音乐解析服务：`https://music-dl.sayqz.com`
+```php
+$LOCAL_TUNEHUB_API_KEY = 'th_xxx_replace_with_your_real_key';
+```
 
-主要接口类型：
-- `info` - 获取歌曲信息
-- `url` - 获取播放/下载链接
-- `pic` - 获取封面图片
-- `lrc` - 获取歌词
-- `search` - 平台搜索
-- `aggregateSearch` - 聚合搜索
-- `playlist` - 获取歌单
+## 宝塔部署（最简单）
 
-## 技术栈
+1. 把整个项目上传到宝塔站点目录（PHP 网站）。
+2. 确认站点开启 PHP。
+3. 按上面两处配置好密码和 Key。
+4. 访问站点首页 `index.php`，输入密码后使用。
 
-- 纯前端实现（HTML + CSS + JavaScript）
-- 无需后端服务器
-- 使用 Fetch API 进行数据请求
+不需要：
+- `npm install`
+- `npm start`
+- PM2
 
-## 注意事项
+## 认证与代理
 
-- 需要网络连接访问音乐 API 服务
-- 下载功能会在新标签页中打开音频文件
-- 服务状态会每分钟自动检查一次
+- 登录页：`index.php`
+- 应用页：`app.php`
+- 退出：`auth/logout.php`
+- 代理接口（登录态可访问）：
+  - `proxy/methods.php`
+  - `proxy/method.php`
+  - `proxy/parse.php`
+
+## 项目结构（关键）
+
+```text
+DownloadMusic/
+├── index.php
+├── app.php
+├── index.html
+├── style.css
+├── script.js
+├── auth/
+│   ├── config.php
+│   ├── session.php
+│   └── logout.php
+└── proxy/
+    ├── config.php
+    ├── methods.php
+    ├── method.php
+    └── parse.php
+```
+
+## 注意
+
+- 请不要把真实 Key 和登录密码提交到公开仓库。
+- 如果接口报 `Unauthorized`，说明未登录或会话失效，请重新登录。

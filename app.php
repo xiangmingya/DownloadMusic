@@ -1,0 +1,71 @@
+<?php
+require_once __DIR__ . '/auth/session.php';
+auth_require_login_page();
+?>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音楽 - Music Downloader</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-actions">
+                <a class="logout-link" href="/auth/logout.php">退出</a>
+            </div>
+            <h1>音楽</h1>
+            <p class="subtitle">Music Downloader</p>
+        </header>
+
+        <main>
+            <div class="search-section">
+                <div class="search-box">
+                    <select id="searchMode">
+                        <option value="keyword">关键词</option>
+                        <option value="id">ID</option>
+                    </select>
+                    <input type="text" id="searchInput" placeholder="搜索歌曲或歌单...">
+                    <button id="searchBtn">検索</button>
+                </div>
+                <div class="options-row">
+                    <div class="search-type">
+                        <button class="type-btn active" data-type="song">单曲</button>
+                        <button class="type-btn" data-type="playlist">歌单</button>
+                    </div>
+                    <div class="platform-selector" id="platformSelector">
+                        <label>平台:</label>
+                        <select id="platform"></select>
+                    </div>
+                    <div class="quality-selector">
+                        <label>音质:</label>
+                        <select id="quality">
+                            <option value="128k">128k</option>
+                            <option value="320k" selected>320k</option>
+                            <option value="flac">FLAC</option>
+                            <option value="flac24bit">FLAC 24bit</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div id="results" class="results"></div>
+            <audio id="audio"></audio>
+            <div id="toast" class="toast"></div>
+        </main>
+
+        <footer>
+            <div class="status">
+                <span id="serviceStatus">服务状态: <span class="loading">检查中...</span></span>
+                <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+

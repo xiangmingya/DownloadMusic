@@ -1,7 +1,31 @@
-const API_BASE = 'https://music-dl.sayqz.com';
+const API_BASE = 'proxy';
 
-let platformNames = {};
-let supportedPlatforms = [];
+const defaultPlatformNameMap = {
+    netease: '网易云音乐',
+    kuwo: '酷我音乐',
+    qq: 'QQ音乐',
+    kugou: '酷狗音乐',
+    migu: '咪咕音乐'
+};
+
+let platformNames = { ...defaultPlatformNameMap };
+let supportedPlatforms = ['netease', 'qq', 'kuwo'];
+let currentSearchType = 'song';
+
+// 分页相关
+let allSongs = [];
+let currentPage = 1;
+let currentSearchParams = null;
+const pageSize = 5;
+
+// 播放相关
+let currentPlayingIndex = null;
+let currentLyrics = [];
+let activePlayRequestId = 0;
+const audio = document.getElementById('audio');
+
+// 缓存
+const parseCache = new Map();
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -10,103 +34,144 @@ function showToast(message, type = 'info') {
     toast.className = `toast ${type}`;
 
     setTimeout(() => toast.classList.add('show'), 10);
-
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
 }
 
+function escapeForSingleQuote(text) {
+    return String(text || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'");
+}
+
+function parseResponseText(text) {
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { message: text };
+    }
+}
+
+async function parseSongs(platform, ids, quality) {
+    const response = await fetch(`${API_BASE}/parse.php`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            platform,
+            ids,
+            quality
+        })
+    });
+
+    const text = await response.text();
+    const data = parseResponseText(text);
+
+    const code = Number(data.code);
+    if (!response.ok || code !== 0) {
+        throw new Error(data.message || `解析失败 (${response.status})`);
+    }
+
+    return data;
+}
+
+function parsedCacheKey(platform, id, quality) {
+    return `${platform}:${id}:${quality}`;
+}
+
+function cacheParsedItem(platform, quality, item) {
+    if (!item || !item.id || !item.success) return;
+    parseCache.set(parsedCacheKey(platform, item.id, quality), item);
+}
+
+function normalizeParsedItems(platform, quality, parseResp) {
+    const items = Array.isArray(parseResp?.data?.data) ? parseResp.data.data : [];
+    items.forEach(item => cacheParsedItem(platform, quality, item));
+    return items;
+}
+
+function toSongFromParsedItem(platform, item) {
+    return {
+        id: String(item.id || ''),
+        name: item?.info?.name || String(item.id || '未知歌曲'),
+        artist: item?.info?.artist || '未知歌手',
+        album: item?.info?.album || '',
+        source: platform,
+        platform,
+        cover: item.cover || ''
+    };
+}
+
+async function ensureParsedSong(platform, id, quality) {
+    const cacheKey = parsedCacheKey(platform, id, quality);
+    if (parseCache.has(cacheKey)) {
+        return parseCache.get(cacheKey);
+    }
+
+    const parseResp = await parseSongs(platform, String(id), quality);
+    const items = normalizeParsedItems(platform, quality, parseResp);
+    const matched = items.find(item => String(item.id) === String(id)) || items[0];
+
+    if (!matched) {
+        throw new Error('未返回解析结果');
+    }
+    if (!matched.success) {
+        throw new Error(matched.error || `解析失败: ${id}`);
+    }
+
+    cacheParsedItem(platform, quality, matched);
+    return matched;
+}
+
+async function callPlatformMethod(platform, functionName, vars = {}) {
+    const url = new URL(`${API_BASE}/method.php`, window.location.href);
+    url.searchParams.set('platform', platform);
+    url.searchParams.set('functionName', functionName);
+    Object.entries(vars).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v) !== '') {
+            url.searchParams.set(k, String(v));
+        }
+    });
+
+    const response = await fetch(url.toString());
+    const data = await response.json();
+    if (!response.ok || Number(data.code) !== 0) {
+        throw new Error(data.message || '请求失败');
+    }
+    return data.data;
+}
+
 // 检查服务状态并获取平台信息
 async function checkStatus() {
     try {
-        const [status, health] = await Promise.all([
-            fetch(`${API_BASE}/status`).then(r => r.json()),
-            fetch(`${API_BASE}/health`).then(r => r.json())
-        ]);
+        const response = await fetch(`${API_BASE}/methods.php`);
+        const methodsData = await response.json();
 
-        // 兼容不同 /status 平台结构：
-        // - { data: { platforms: { platforms: ["netease", ...] } } }
-        // - { data: { platforms: ["netease", ...] } }
-        // - { data: { platforms: [{ name: "netease", enabled: true }, ...] } }
-        // - { data: { platforms: { netease: { enabled: true }, ... } } }
-        function extractEnabledPlatformKeys(statusJson) {
-            const raw = statusJson?.data?.platforms;
-            if (!raw) return [];
-
-            // data.platforms = ["netease", ...]
-            if (Array.isArray(raw) && raw.every(p => typeof p === 'string')) return raw;
-
-            // data.platforms = [{name, enabled}, ...]
-            if (Array.isArray(raw)) {
-                return raw
-                    .filter(p => p && (p.enabled === undefined || p.enabled))
-                    .map(p => p.name)
-                    .filter(Boolean);
+        if (response.ok && Number(methodsData.code) === 0 && methodsData.data) {
+            supportedPlatforms = Object.keys(methodsData.data);
+            if (supportedPlatforms.length === 0) {
+                supportedPlatforms = ['netease', 'qq', 'kuwo'];
             }
 
-            // data.platforms.platforms = [...]
-            if (Array.isArray(raw.platforms)) {
-                return raw.platforms
-                    .filter(p => (typeof p === 'string') || (p && (p.enabled === undefined || p.enabled)))
-                    .map(p => (typeof p === 'string' ? p : p.name))
-                    .filter(Boolean);
-            }
-
-            // data.platforms = { netease: {enabled:true}, ... }
-            if (typeof raw === 'object') {
-                return Object.entries(raw)
-                    .filter(([, v]) => v && (v.enabled === undefined || v.enabled))
-                    .map(([k]) => k);
-            }
-
-            return [];
-        }
-
-        // 平台名称映射
-        const platformNameMap = {
-            netease: '网易云音乐',
-            kuwo: '酷我音乐',
-            qq: 'QQ音乐',
-            kugou: '酷狗音乐',
-            migu: '咪咕音乐'
-        };
-
-        const enabledPlatformKeys = extractEnabledPlatformKeys(status);
-
-        if (status.code === 200 && enabledPlatformKeys.length > 0) {
-            supportedPlatforms = enabledPlatformKeys;
+            const names = [];
             platformNames = {};
-            const enabledPlatformNames = [];
-
             supportedPlatforms.forEach(key => {
-                platformNames[key] = platformNameMap[key] || key;
-                enabledPlatformNames.push(platformNames[key]);
+                platformNames[key] = defaultPlatformNameMap[key] || key;
+                names.push(platformNames[key]);
             });
 
             updatePlatformSelect();
-
             document.getElementById('serviceStatus').innerHTML =
-                `服务状态: <span class="online">${enabledPlatformNames.join('、')}</span>`;
-        } else {
-            document.getElementById('serviceStatus').innerHTML =
-                `服务状态: <span class="offline">异常</span>`;
-        }
-
-        const healthOk =
-            health?.code === 200 ||
-            health?.status === 'ok' ||
-            health?.status === 'healthy' ||
-            health?.data?.status === 'ok' ||
-            health?.data?.status === 'healthy';
-
-        if (healthOk) {
+                `服务状态: <span class="online">${names.join('、')}</span>`;
             document.getElementById('healthStatus').innerHTML =
                 `健康状态: <span class="online">正常</span>`;
         } else {
-            document.getElementById('healthStatus').innerHTML =
-                `健康状态: <span class="offline">异常</span>`;
+            throw new Error(methodsData.message || '服务异常');
         }
-    } catch (error) {
+    } catch {
         document.getElementById('serviceStatus').innerHTML =
             `服务状态: <span class="offline">异常</span>`;
         document.getElementById('healthStatus').innerHTML =
@@ -124,10 +189,65 @@ function updatePlatformSelect() {
         options = '<option value="all">全部</option>';
     }
     options += supportedPlatforms.map(key =>
-        `<option value="${key}">${platformNames[key]}</option>`
+        `<option value="${key}">${platformNames[key] || key}</option>`
     ).join('');
 
     platformSelect.innerHTML = options;
+}
+
+async function searchSongsByKeyword(keyword, selectedPlatform) {
+    const targets = selectedPlatform === 'all' ? supportedPlatforms : [selectedPlatform];
+    const tasks = targets.map(async platform => {
+        const result = await callPlatformMethod(platform, 'search', {
+            keyword,
+            page: 1,
+            limit: 50
+        });
+        const list = Array.isArray(result) ? result : [];
+        return list.map(item => ({
+            id: String(item.id || ''),
+            name: item.name || '未知歌曲',
+            artist: item.artist || '未知歌手',
+            album: item.album || '',
+            source: platform,
+            platform,
+            cover: ''
+        }));
+    });
+
+    const settled = await Promise.allSettled(tasks);
+    const songs = [];
+    let failed = 0;
+    settled.forEach(item => {
+        if (item.status === 'fulfilled') {
+            songs.push(...item.value);
+        } else {
+            failed += 1;
+        }
+    });
+
+    if (failed > 0) {
+        showToast(`部分平台搜索失败（${failed}/${targets.length}）`, 'error');
+    }
+
+    return songs;
+}
+
+async function fetchPlaylistSongs(platform, playlistId) {
+    const result = await callPlatformMethod(platform, 'playlist', {
+        id: playlistId
+    });
+
+    const list = Array.isArray(result?.list) ? result.list : [];
+    return list.map(song => ({
+        id: String(song.id || ''),
+        name: song.name || '未知歌曲',
+        artist: song.artist || '未知歌手',
+        album: song.album || '',
+        source: platform,
+        platform,
+        cover: ''
+    }));
 }
 
 // 搜索
@@ -136,69 +256,60 @@ async function search() {
     if (!input) return;
 
     const searchMode = document.getElementById('searchMode').value;
+    const platform = document.getElementById('platform').value;
+    const quality = document.getElementById('quality').value;
     const resultsDiv = document.getElementById('results');
 
     resultsDiv.innerHTML = '<div class="empty-state">検索中...</div>';
 
     try {
-        let url;
+        currentSearchParams = null;
 
-        if (searchMode === 'id') {
-            const platform = document.getElementById('platform').value;
-            if (currentSearchType === 'song') {
-                url = `${API_BASE}/api/?source=${platform}&id=${input}&type=info`;
-            } else {
-                url = `${API_BASE}/api/?source=${platform}&id=${input}&type=playlist`;
+        if (searchMode === 'keyword') {
+            if (currentSearchType === 'playlist') {
+                resultsDiv.innerHTML = '<div class="empty-state">TuneHub V3 暂不支持关键词歌单搜索，请切换 ID 模式</div>';
+                return;
             }
-        } else {
-            const platform = document.getElementById('platform').value;
-            if (currentSearchType === 'song') {
-                if (platform === 'all') {
-                    url = `${API_BASE}/api/?type=aggregateSearch&keyword=${encodeURIComponent(input)}`;
-                    currentSearchParams = { type: 'aggregateSearch', keyword: input };
-                } else {
-                    url = `${API_BASE}/api/?source=${platform}&type=search&keyword=${encodeURIComponent(input)}`;
-                    currentSearchParams = { type: 'search', platform, keyword: input };
-                }
+
+            const songs = await searchSongsByKeyword(input, platform);
+            if (songs.length > 0) {
+                displaySongsWithPagination(songs);
             } else {
-                url = `${API_BASE}/api/?source=${platform}&type=search&keyword=${encodeURIComponent(input)}`;
-                currentSearchParams = { type: 'search', platform, keyword: input };
+                resultsDiv.innerHTML = '<div class="empty-state">未找到结果</div>';
             }
+            return;
         }
 
-        const response = await fetch(url);
-        const data = await response.json();
+        if (platform === 'all') {
+            resultsDiv.innerHTML = '<div class="empty-state">ID 模式下请选择具体平台</div>';
+            return;
+        }
 
-        if (data.code === 200) {
-            if (searchMode === 'id') {
-                currentSearchParams = null;
-                if (currentSearchType === 'song') {
-                    displaySongsWithPagination([data.data]);
-                } else {
-                    const platform = document.getElementById('platform').value;
-                    const songs = (data.data.list || data.data.songs || []).map(s => ({...s, source: platform}));
-                    displaySongsWithPagination(songs);
-                }
+        if (currentSearchType === 'song') {
+            const parseResp = await parseSongs(platform, input, quality);
+            const parsedItems = normalizeParsedItems(platform, quality, parseResp);
+            const successSongs = parsedItems
+                .filter(item => item.success)
+                .map(item => toSongFromParsedItem(platform, item));
+
+            if (successSongs.length > 0) {
+                displaySongsWithPagination(successSongs);
             } else {
-                const results = currentSearchType === 'song' ? data.data.results : (data.data.list || data.data);
-                if (results && results.length > 0) {
-                    if (currentSearchType === 'song') {
-                        displaySongs(results, true);
-                    } else {
-                        displayPlaylists(results.filter(item => item.isPlaylist));
-                    }
-                } else {
-                    resultsDiv.innerHTML = '<div class="empty-state">未找到结果</div>';
-                }
+                const firstError = parsedItems.find(item => !item.success);
+                resultsDiv.innerHTML = `<div class="empty-state">${firstError?.error || '解析失败'}</div>`;
             }
         } else {
-            resultsDiv.innerHTML = '<div class="empty-state">未找到结果</div>';
+            const songs = await fetchPlaylistSongs(platform, input);
+            if (songs.length > 0) {
+                displaySongsWithPagination(songs);
+            } else {
+                resultsDiv.innerHTML = '<div class="empty-state">未找到歌单歌曲</div>';
+            }
         }
     } catch (error) {
-        resultsDiv.innerHTML = '<div class="empty-state">搜索失败</div>';
+        resultsDiv.innerHTML = `<div class="empty-state">${error.message || '搜索失败'}</div>`;
     }
 }
-
 
 // 显示歌曲列表（带前端分页）
 function displaySongsWithPagination(songs) {
@@ -217,20 +328,24 @@ function renderLocalPage() {
     resultsDiv.innerHTML = pageSongs.map((song, index) => {
         const globalIndex = start + index;
         const platform = song.platform || song.source;
-        const coverUrl = `${API_BASE}/api/?source=${platform}&id=${song.id}&type=pic`;
+        const safeName = escapeForSingleQuote(song.name);
+        const safeArtist = escapeForSingleQuote(song.artist);
+        const coverUrl = song.cover || '';
+        const coverStyle = coverUrl ? 'display:block' : 'display:none';
+
         return `
         <div class="result-item" id="song-${globalIndex}">
             <div class="song-header">
                 <div>
-                    <img class="song-cover" id="cover-${globalIndex}" src="${coverUrl}" alt="" onerror="this.style.display='none'" onload="this.style.display='block'">
+                    <img class="song-cover" id="cover-${globalIndex}" src="${coverUrl}" style="${coverStyle}" alt="" onerror="this.style.display='none'" onload="if(this.src){this.style.display='block'}">
                     <div class="song-info">
                         <h3>${song.name}<span class="platform-badge">${platformNames[platform] || platform}</span></h3>
                         <p>${song.artist}</p>
                     </div>
                 </div>
                 <div>
-                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${song.name.replace(/'/g, "\\'")}', '${song.artist.replace(/'/g, "\\'")}', ${globalIndex})">▶</button>
-                    <button onclick="downloadSong('${platform}', '${song.id}', '${song.name.replace(/'/g, "\\'")}', '${song.artist.replace(/'/g, "\\'")}')">下载</button>
+                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">▶</button>
+                    <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}')">下载</button>
                 </div>
             </div>
             <div class="inline-lyrics" id="inline-lyrics-${globalIndex}"></div>
@@ -263,89 +378,53 @@ function changeLocalPage(page) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// 分页相关
-let allSongs = [];
-let currentPage = 1;
-let totalPages = 1;
-let currentSearchParams = null;
-const pageSize = 5;
-const apiPageSize = 100;
-
-// 显示歌曲列表（API搜索结果，使用前端分页）
-function displaySongs(songs, enableApiPaging = false) {
-    if (enableApiPaging) {
-        // API搜索结果也使用前端分页
-        displaySongsWithPagination(songs);
-    } else {
-        // 单曲显示（不分页）
-        displaySongsWithPagination(songs);
-    }
-}
-
-
-// 显示歌单列表
-function displayPlaylists(playlists) {
-    const resultsDiv = document.getElementById('results');
-    resultsDiv.innerHTML = playlists.map(playlist => {
-        const platform = playlist.platform || playlist.source;
-        return `
-        <div class="result-item">
-            <div class="song-info">
-                <h3>${playlist.name}<span class="platform-badge">${platformNames[platform] || platform}</span></h3>
-                <p>${playlist.artist}</p>
-            </div>
-            <button onclick="downloadPlaylist('${platform}', '${playlist.id}', '${playlist.name.replace(/'/g, "\\'")}')">下载</button>
-        </div>
-    `;
-    }).join('');
-}
-
 // 下载单曲
-function downloadSong(source, id, name, artist) {
-    const quality = document.getElementById('quality').value;
-    const url = `${API_BASE}/api/?source=${source}&id=${id}&type=url&br=${quality}`;
-
-    window.open(url, '_blank');
+async function downloadSong(source, id, name, artist) {
+    try {
+        const quality = document.getElementById('quality').value;
+        const parsed = await ensureParsedSong(source, id, quality);
+        if (!parsed.url) {
+            throw new Error(parsed.error || '未获取到下载链接');
+        }
+        window.open(parsed.url, '_blank');
+    } catch (error) {
+        showToast(`下载失败: ${error.message || '未知错误'}`, 'error');
+    }
 }
 
 // 下载歌单
 async function downloadPlaylist(source, id, name) {
     try {
-        const url = `${API_BASE}/api/?source=${source}&id=${id}&type=playlist`;
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.code === 200 && data.data.songs) {
-            const total = data.data.songs.length;
-            showToast(`开始下载歌单，共${total}首`, 'info');
-
-            for (let i = 0; i < data.data.songs.length; i++) {
-                const song = data.data.songs[i];
-                showToast(`正在下载 ${i + 1}/${total}: ${song.name}`, 'info');
-                await downloadSong(source, song.id, song.name, song.artist);
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-
-            showToast('歌单下载完成', 'success');
-        } else {
-            showToast('获取歌单失败', 'error');
+        const songs = await fetchPlaylistSongs(source, id);
+        if (songs.length === 0) {
+            showToast('获取歌单失败或为空', 'error');
+            return;
         }
+
+        const total = songs.length;
+        showToast(`开始下载歌单，共${total}首`, 'info');
+
+        for (let i = 0; i < songs.length; i++) {
+            const song = songs[i];
+            showToast(`正在下载 ${i + 1}/${total}: ${song.name}`, 'info');
+            await downloadSong(source, song.id, song.name, song.artist);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+
+        showToast('歌单下载完成', 'success');
     } catch (error) {
-        showToast('下载歌单失败', 'error');
+        showToast(`下载歌单失败: ${error.message || '未知错误'}`, 'error');
     }
 }
 
 // 播放歌曲
-let currentPlayingIndex = null;
-let currentLyrics = [];
-const audio = document.getElementById('audio');
-
-function playSong(source, id, name, artist, index) {
+async function playSong(source, id, name, artist, index) {
     const quality = document.getElementById('quality').value;
-    const url = `${API_BASE}/api/?source=${source}&id=${id}&type=url&br=${quality}`;
     const btn = document.querySelector(`button[data-index="${index}"]`);
     const player = document.getElementById(`player-${index}`);
-    const lyricsContainer = document.getElementById(`lyrics-${index}`);
+    const inlineLyrics = document.getElementById(`inline-lyrics-${index}`);
+
+    if (!btn || !player) return;
 
     if (currentPlayingIndex === index && !audio.paused) {
         audio.pause();
@@ -353,79 +432,69 @@ function playSong(source, id, name, artist, index) {
         return;
     }
 
-    if (currentPlayingIndex !== null && currentPlayingIndex !== index) {
-        const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
-        const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
-        const oldLyrics = document.getElementById(`lyrics-${currentPlayingIndex}`);
-        if (oldBtn) oldBtn.textContent = '▶';
-        if (oldPlayer) oldPlayer.style.display = 'none';
-        if (oldLyrics) oldLyrics.style.display = 'none';
-    }
-
-    audio.src = url;
-    currentPlayingIndex = index;
-    player.style.display = 'flex';
-
-    loadCover(source, id, index);
-    loadLyrics(source, id, index);
-
-    audio.play().then(() => {
-        btn.textContent = '⏸';
-    }).catch(() => {
-        showToast('播放失败', 'error');
-    });
-}
-
-// 加载封面
-function loadCover(source, id, index) {
-    const coverImg = document.getElementById(`cover-${index}`);
-    const coverUrl = `${API_BASE}/api/?source=${source}&id=${id}&type=pic`;
-
-    coverImg.onload = () => {
-        coverImg.style.display = 'block';
-    };
-    coverImg.onerror = () => {
-        coverImg.style.display = 'none';
-    };
-    coverImg.src = coverUrl;
-}
-
-// 加载歌词
-async function loadLyrics(source, id, index) {
-    const inlineLyrics = document.getElementById(`inline-lyrics-${index}`);
+    const playRequestId = ++activePlayRequestId;
+    btn.disabled = true;
 
     try {
-        const response = await fetch(`${API_BASE}/api/?source=${source}&id=${id}&type=lrc`);
-        const text = await response.text();
-
-        currentLyrics = parseLyrics(text);
-
-        if (currentLyrics.length > 0) {
-            // 显示第一句歌词
-            inlineLyrics.textContent = currentLyrics[0].text;
+        const parsed = await ensureParsedSong(source, id, quality);
+        if (playRequestId !== activePlayRequestId) return;
+        if (!parsed.url) {
+            throw new Error(parsed.error || '未获取到播放链接');
         }
+
+        if (currentPlayingIndex !== null && currentPlayingIndex !== index) {
+            const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
+            const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
+            if (oldBtn) oldBtn.textContent = '▶';
+            if (oldPlayer) oldPlayer.style.display = 'none';
+        }
+
+        if (parsed.cover) {
+            const coverImg = document.getElementById(`cover-${index}`);
+            if (coverImg) {
+                coverImg.src = parsed.cover;
+                coverImg.style.display = 'block';
+            }
+        }
+
+        currentLyrics = parseLyrics(parsed.lyrics || '');
+        if (inlineLyrics) {
+            inlineLyrics.textContent = currentLyrics.length > 0 ? currentLyrics[0].text : '';
+        }
+
+        audio.src = parsed.url;
+        currentPlayingIndex = index;
+        player.style.display = 'flex';
+
+        await audio.play();
+        btn.textContent = '⏸';
     } catch (error) {
-        console.error('歌词加载失败:', error);
+        if (playRequestId === activePlayRequestId) {
+            showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
+            btn.textContent = '▶';
+        }
+    } finally {
+        btn.disabled = false;
     }
 }
 
 // 解析LRC歌词
 function parseLyrics(lrcText) {
-    const lines = lrcText.split('\n');
+    const lines = String(lrcText || '').split('\n');
     const lyrics = [];
 
     lines.forEach(line => {
         const match = line.match(/\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/);
-        if (match) {
-            const minutes = parseInt(match[1]);
-            const seconds = parseInt(match[2]);
-            const milliseconds = parseInt(match[3].padEnd(3, '0'));
-            const time = minutes * 60 + seconds + milliseconds / 1000;
-            const text = match[4].trim();
+        if (!match) return;
 
-            if (text) {
-                lyrics.push({ time, text });
-            }
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
+        const time = minutes * 60 + seconds + milliseconds / 1000;
+        const text = match[4].trim();
+
+        if (text) {
+            lyrics.push({ time, text });
         }
     });
 
@@ -434,22 +503,21 @@ function parseLyrics(lrcText) {
 
 audio.addEventListener('timeupdate', () => {
     if (currentPlayingIndex === null) return;
-    const progress = (audio.currentTime / audio.duration) * 100;
+
+    const progress = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
     const progressFill = document.getElementById(`progress-${currentPlayingIndex}`);
     const timeDisplay = document.getElementById(`time-${currentPlayingIndex}`);
 
-    if (progressFill) progressFill.style.width = progress + '%';
+    if (progressFill) progressFill.style.width = `${progress}%`;
     if (timeDisplay) {
         const current = formatTime(audio.currentTime);
         const total = formatTime(audio.duration);
         timeDisplay.textContent = `${current} / ${total}`;
     }
 
-    // 歌词同步
     updateLyrics(audio.currentTime);
 });
 
-// 更新歌词高亮
 function updateLyrics(currentTime) {
     if (currentLyrics.length === 0 || currentPlayingIndex === null) return;
 
@@ -477,7 +545,7 @@ audio.addEventListener('ended', () => {
     }
 });
 
-document.addEventListener('click', (e) => {
+document.addEventListener('click', e => {
     if (e.target.closest('.progress-bar') && currentPlayingIndex !== null) {
         const progressBar = e.target.closest('.progress-bar');
         const rect = progressBar.getBoundingClientRect();
@@ -494,8 +562,6 @@ function formatTime(seconds) {
 }
 
 // 切换搜索类型按钮
-let currentSearchType = 'song';
-
 document.querySelectorAll('.type-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
@@ -505,16 +571,13 @@ document.querySelectorAll('.type-btn').forEach(btn => {
     });
 });
 
-// 切换搜索模式时更新平台选择器
 function updatePlatformSelector() {
     updatePlatformSelect();
 }
 
 document.getElementById('searchMode').addEventListener('change', updatePlatformSelector);
-
-// 事件监听
 document.getElementById('searchBtn').addEventListener('click', search);
-document.getElementById('searchInput').addEventListener('keypress', (e) => {
+document.getElementById('searchInput').addEventListener('keypress', e => {
     if (e.key === 'Enter') search();
 });
 
