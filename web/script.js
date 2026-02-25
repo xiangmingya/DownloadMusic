@@ -1084,6 +1084,7 @@ function setFullPlayerOpen(open) {
     if (open) {
         isFullPlayerOpen = true;
         updateOrigin();
+        updateBrowserFullscreenButtonState();
         overlay.style.display = '';
         overlay.classList.add('visible');
         void overlay.offsetHeight;
@@ -1094,6 +1095,11 @@ function setFullPlayerOpen(open) {
     }
 
     isFullPlayerOpen = false;
+    if (isBrowserFullscreenActive()) {
+        exitBrowserFullscreen().catch(() => {}).finally(() => {
+            updateBrowserFullscreenButtonState();
+        });
+    }
     updateOrigin();
     overlay.classList.remove('open');
     const shell = overlay.querySelector('.full-player-shell');
@@ -1110,6 +1116,59 @@ function setFullPlayerOpen(open) {
         });
     }
     fullPlayerHideTimer = setTimeout(finishHide, 420);
+}
+
+function isBrowserFullscreenActive() {
+    return Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.msFullscreenElement
+    );
+}
+
+async function requestBrowserFullscreen() {
+    const target = document.documentElement;
+    if (!target) throw new Error('当前页面不支持真全屏');
+    const fn = target.requestFullscreen || target.webkitRequestFullscreen || target.msRequestFullscreen;
+    if (!fn) throw new Error('当前浏览器不支持真全屏');
+    const result = fn.call(target);
+    if (result && typeof result.then === 'function') {
+        await result;
+    }
+}
+
+async function exitBrowserFullscreen() {
+    const fn = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+    if (!fn) return;
+    const result = fn.call(document);
+    if (result && typeof result.then === 'function') {
+        await result;
+    }
+}
+
+async function toggleBrowserFullscreen() {
+    try {
+        if (isBrowserFullscreenActive()) {
+            await exitBrowserFullscreen();
+        } else {
+            await requestBrowserFullscreen();
+        }
+    } catch (error) {
+        showToast(error?.message || '切换真全屏失败', 'error');
+    } finally {
+        updateBrowserFullscreenButtonState();
+    }
+}
+
+function updateBrowserFullscreenButtonState() {
+    const btn = document.getElementById('fullPlayerBrowserFullscreenBtn');
+    const icon = document.getElementById('fullPlayerBrowserFullscreenIcon');
+    if (!btn || !icon) return;
+    const active = isBrowserFullscreenActive();
+    icon.textContent = active ? '⤡' : '⤢';
+    const label = active ? '退出真全屏' : '进入真全屏';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
 }
 
 function updateFullPlayerMeta() {
@@ -1135,12 +1194,17 @@ function updateFullPlayerMeta() {
 
 function updateFullPlayerControlState() {
     const toggleBtn = document.getElementById('fullPlayerToggleBtn');
+    const toggleIcon = document.getElementById('fullPlayerToggleIcon');
     const playerFab = document.getElementById('playerFabBtn');
+    const paused = audio.paused;
+    if (toggleIcon) {
+        toggleIcon.textContent = paused ? '▶' : '⏸';
+    }
     if (toggleBtn) {
-        toggleBtn.textContent = audio.paused ? '▶' : '⏸';
+        toggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
     }
     if (playerFab) {
-        playerFab.classList.toggle('is-spinning', !audio.paused);
+        playerFab.classList.toggle('is-spinning', !paused);
     }
 }
 
@@ -1256,6 +1320,7 @@ function bindPlayerUiEvents() {
     const playlistList = document.getElementById('playlistSheetList');
     const fullPlayerCloseBtn = document.getElementById('fullPlayerCloseBtn');
     const fullPlayerCloseArea = document.getElementById('fullPlayerCloseArea');
+    const fullPlayerBrowserFullscreenBtn = document.getElementById('fullPlayerBrowserFullscreenBtn');
     const fullPlayerToggleBtn = document.getElementById('fullPlayerToggleBtn');
     const fullPlayerPrevBtn = document.getElementById('fullPlayerPrevBtn');
     const fullPlayerNextBtn = document.getElementById('fullPlayerNextBtn');
@@ -1320,6 +1385,11 @@ function bindPlayerUiEvents() {
     if (fullPlayerCloseArea) {
         fullPlayerCloseArea.addEventListener('click', () => setFullPlayerOpen(false));
     }
+    if (fullPlayerBrowserFullscreenBtn) {
+        fullPlayerBrowserFullscreenBtn.addEventListener('click', async () => {
+            await toggleBrowserFullscreen();
+        });
+    }
     if (fullPlayerToggleBtn) {
         fullPlayerToggleBtn.addEventListener('click', async () => {
             if (!currentPlayingSong || !audio.src) return;
@@ -1354,6 +1424,10 @@ function bindPlayerUiEvents() {
             audio.currentTime = Math.max(0, Math.min(audio.duration, ratio * audio.duration));
         });
     }
+
+    ['fullscreenchange', 'webkitfullscreenchange', 'msfullscreenchange'].forEach(eventName => {
+        document.addEventListener(eventName, updateBrowserFullscreenButtonState);
+    });
 }
 
 // 切换搜索类型按钮
@@ -1383,6 +1457,7 @@ bindPlayerUiEvents();
 updateFullPlayerMeta();
 updateFullPlayerProgress();
 updateFullPlayerControlState();
+updateBrowserFullscreenButtonState();
 checkStatus();
 initLinuxdoKeyPanel();
 setInterval(checkStatus, 60000);

@@ -1013,18 +1013,43 @@ footer {
     border-radius: 0;
 }
 
-.full-player-close {
+.full-player-top-tools {
     position: absolute;
     top: 16px;
     right: 16px;
-    width: 38px;
-    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 2;
+}
+
+.full-player-top-btn {
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     border: 1px solid rgba(242, 220, 210, 0.28);
     background: rgba(78, 47, 51, 0.35);
     color: #f4e8df;
-    font-size: 21px;
     padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.full-player-top-btn:hover {
+    background: rgba(112, 62, 62, 0.5);
+    border-color: rgba(242, 220, 210, 0.45);
+}
+
+.top-btn-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.full-player-close-btn .top-btn-icon {
+    font-size: 24px;
+    margin-top: -1px;
 }
 
 .full-player-main {
@@ -1118,13 +1143,24 @@ footer {
 }
 
 .full-player-controls button {
+    width: 58px;
+    height: 58px;
     min-width: 58px;
-    padding: 10px 14px;
-    border-radius: 30px;
+    padding: 0;
+    border-radius: 50%;
     border: 1px solid rgba(226, 198, 185, 0.32);
     background: rgba(78, 48, 52, 0.42);
     color: #f5e8df;
-    letter-spacing: 1px;
+    letter-spacing: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.full-player-controls .control-icon {
+    display: inline-block;
+    font-size: 24px;
+    line-height: 1;
 }
 
 .full-player-controls button:hover {
