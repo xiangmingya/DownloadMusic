@@ -410,6 +410,10 @@ function updatePlatformSelect() {
     ).join('');
 }
 
+function platformDisplayName(platformKey) {
+    return platformNames[platformKey] || defaultPlatformNameMap[platformKey] || platformKey || '当前平台';
+}
+
 async function searchSongsByKeyword(keyword, selectedPlatform) {
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
     const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
@@ -456,19 +460,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
 
     if (failed > 0) {
         showToast(`部分平台搜索失败（${failed}/${targets.length}）`, 'error');
-    }
-
-    // 某些地区/节点下网易会返回空数组，自动回退酷我提高可用性。
-    if (songs.length === 0 && platform === 'netease' && supportedPlatforms.includes('kuwo')) {
-        try {
-            const kuwoSongs = await searchOnePlatform('kuwo');
-            if (kuwoSongs.length > 0) {
-                showToast('网易暂无结果，已自动切换酷我结果', 'info');
-                return kuwoSongs;
-            }
-        } catch {
-            // ignore fallback errors
-        }
     }
 
     if (songs.length === 0 && failed > 0) {
@@ -520,7 +511,7 @@ async function search() {
             if (songs.length > 0) {
                 displaySongsWithPagination(songs);
             } else {
-                resultsDiv.innerHTML = '<div class="empty-state">未找到结果</div>';
+                resultsDiv.innerHTML = `<div class="empty-state">${platformDisplayName(platform)}没有结果，请切换其他平台检索</div>`;
             }
             return;
         }
