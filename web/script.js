@@ -705,6 +705,17 @@ async function playSong(source, id, name, artist, index) {
         return;
     }
 
+    if (currentPlayingIndex === index && audio.paused && audio.src) {
+        try {
+            await audio.play();
+            btn.textContent = '⏸';
+            player.style.display = 'flex';
+            return;
+        } catch {
+            // Fallback to re-parse when the old URL expires.
+        }
+    }
+
     const playRequestId = ++activePlayRequestId;
     btn.disabled = true;
 
