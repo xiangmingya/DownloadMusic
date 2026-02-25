@@ -419,8 +419,8 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
     }
 
     const timeoutMs = 8000;
-    const tasks = targets.map(async platform => {
-        const result = await callPlatformMethod(platform, 'search', {
+    const searchOnePlatform = async targetPlatform => {
+        const result = await callPlatformMethod(targetPlatform, 'search', {
             keyword,
             page: 1,
             limit: 20
@@ -433,10 +433,14 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
             name: item.name || '未知歌曲',
             artist: item.artist || '未知歌手',
             album: item.album || '',
-            source: platform,
-            platform,
+            source: targetPlatform,
+            platform: targetPlatform,
             cover: normalizeMediaUrl(item.cover || '')
         }));
+    };
+
+    const tasks = targets.map(async platform => {
+        return searchOnePlatform(platform);
     });
 
     const settled = await Promise.allSettled(tasks);
@@ -453,6 +457,20 @@ async function searchSongsByKeyword(keyword, selectedPlatform) {
     if (failed > 0) {
         showToast(`部分平台搜索失败（${failed}/${targets.length}）`, 'error');
     }
+
+    // 某些地区/节点下网易会返回空数组，自动回退酷我提高可用性。
+    if (songs.length === 0 && platform === 'netease' && supportedPlatforms.includes('kuwo')) {
+        try {
+            const kuwoSongs = await searchOnePlatform('kuwo');
+            if (kuwoSongs.length > 0) {
+                showToast('网易暂无结果，已自动切换酷我结果', 'info');
+                return kuwoSongs;
+            }
+        } catch {
+            // ignore fallback errors
+        }
+    }
+
     if (songs.length === 0 && failed > 0) {
         throw new Error('平台响应超时或失败，请稍后重试');
     }
