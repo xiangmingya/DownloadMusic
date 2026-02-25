@@ -696,6 +696,7 @@ async function playSong(source, id, name, artist, index) {
     const btn = document.querySelector(`button[data-index="${index}"]`);
     const player = document.getElementById(`player-${index}`);
     const inlineLyrics = document.getElementById(`inline-lyrics-${index}`);
+    let resumeTime = 0;
 
     if (!btn || !player) return;
 
@@ -706,6 +707,7 @@ async function playSong(source, id, name, artist, index) {
     }
 
     if (currentPlayingIndex === index && audio.paused && audio.src) {
+        resumeTime = Number(audio.currentTime || 0);
         try {
             await audio.play();
             btn.textContent = '⏸';
@@ -729,8 +731,10 @@ async function playSong(source, id, name, artist, index) {
         if (currentPlayingIndex !== null && currentPlayingIndex !== index) {
             const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
             const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
+            const oldInlineLyrics = document.getElementById(`inline-lyrics-${currentPlayingIndex}`);
             if (oldBtn) oldBtn.textContent = '▶';
             if (oldPlayer) oldPlayer.style.display = 'none';
+            if (oldInlineLyrics) oldInlineLyrics.textContent = '';
         }
 
         const parsedCoverUrl = getProxiedCoverUrl(parsed.cover || parsed.pic || parsed?.info?.pic || '');
@@ -751,6 +755,20 @@ async function playSong(source, id, name, artist, index) {
         if (!playUrl) {
             throw new Error('播放链接无效');
         }
+
+        if (resumeTime > 0) {
+            audio.addEventListener('loadedmetadata', function seekToResumePosition() {
+                try {
+                    const maxSeek = Number.isFinite(audio.duration) && audio.duration > 0
+                        ? Math.max(audio.duration - 0.3, 0)
+                        : resumeTime;
+                    audio.currentTime = Math.min(resumeTime, maxSeek);
+                } catch {
+                    // ignore seek errors
+                }
+            }, { once: true });
+        }
+
         audio.src = playUrl;
         currentPlayingIndex = index;
         player.style.display = 'flex';
