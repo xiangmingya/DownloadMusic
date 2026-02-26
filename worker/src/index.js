@@ -8,9 +8,9 @@ const BACKUP_ALLOWED_TYPES = new Set(["search", "url", "lyric", "pic"]);
 const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count", "pages", "br", "size"]);
 const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
 const BACKUP_TIMEOUT_MS = 18000;
-const MUSICJX_API_URL = "https://musicjx.com/";
-const MUSICJX_ALLOWED_TYPES = new Set(["netease", "qq", "kuwo"]);
-const MUSICJX_ALLOWED_FILTERS = new Set(["name", "id"]);
+const QQ_BACKUP3_API_URL = "https://zj.v.api.aa1.cn/api/qqmusic/demo.php";
+const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
+const QQ_BACKUP3_TIMEOUT_MS = 18000;
 
 export default {
   async fetch(request, env) {
@@ -1050,29 +1050,71 @@ async function handleBackup(request, env) {
   });
 }
 
-async function callMusicjx({ input, filter, type, page }) {
-  const body = new URLSearchParams({
-    input: String(input || ""),
-    filter: String(filter || "name"),
-    type: String(type || ""),
-    page: String(page || 1),
-  });
+function buildAa1Type3Url(mid, fid, t) {
+  const endpoint = new URL(QQ_BACKUP3_API_URL);
+  endpoint.searchParams.set("type", "3");
+  endpoint.searchParams.set("mid", String(mid || ""));
+  endpoint.searchParams.set("fid", String(fid || ""));
+  endpoint.searchParams.set("t", String(t || "3"));
+  return endpoint.toString();
+}
 
-  const response = await fetch(MUSICJX_API_URL, {
-    method: "POST",
+function parseAa1Type3Meta(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ""));
+    return {
+      mid: String(u.searchParams.get("mid") || "").trim(),
+      fid: String(u.searchParams.get("fid") || "").trim(),
+      t: String(u.searchParams.get("t") || "3").trim(),
+    };
+  } catch {
+    return { mid: "", fid: "", t: "3" };
+  }
+}
+
+async function callAa1QqSearch({ keyword, page, limit }) {
+  const endpoint = new URL(QQ_BACKUP3_API_URL);
+  endpoint.searchParams.set("type", "1");
+  endpoint.searchParams.set("q", String(keyword || ""));
+  endpoint.searchParams.set("p", String(page || 1));
+  endpoint.searchParams.set("n", String(limit || 20));
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(QQ_BACKUP3_TIMEOUT_MS),
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Accept: "application/json, text/javascript, */*; q=0.01",
-      "X-Requested-With": "XMLHttpRequest",
-      Origin: "https://musicjx.com",
-      Referer: "https://musicjx.com/",
+      Accept: "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0",
+      Referer: "https://api.aa1.cn/doc/qq-music.html",
     },
-    body,
   });
   const text = await response.text();
   return { response, text, parsed: parseJsonText(text) };
+}
+
+function normalizeAa1QqList(list) {
+  const arr = Array.isArray(list) ? list : [];
+  return arr
+    .map((item, index) => {
+      const trackName = String(item?.name || "").trim();
+      const singer = String(item?.singer || "").trim();
+      const cover = String(item?.cover || "").trim();
+      const rawUrl = String(item?.url || "").trim();
+      const { mid, fid, t } = parseAa1Type3Meta(rawUrl);
+      const songid = mid || `aa1_${index + 1}`;
+      const streamUrl = (mid && fid) ? buildAa1Type3Url(mid, fid, t) : rawUrl;
+      return {
+        songid,
+        title: trackName || "未知歌曲",
+        author: singer || "未知歌手",
+        url: streamUrl,
+        pic: cover,
+        lrc: "",
+        link: rawUrl || streamUrl,
+      };
+    })
+    .filter((item) => String(item.url || "").trim());
 }
 
 async function handleBackup3(request, env) {
@@ -1088,11 +1130,11 @@ async function handleBackup3(request, env) {
   if (!input || !type) {
     return jsonResponse(400, { code: -1, message: "缺少参数: input / type" });
   }
-  if (!MUSICJX_ALLOWED_FILTERS.has(filter)) {
+  if (!QQ_BACKUP3_ALLOWED_FILTERS.has(filter)) {
     return jsonResponse(400, { code: -1, message: "备用源3参数无效: filter" });
   }
-  if (!MUSICJX_ALLOWED_TYPES.has(type)) {
-    return jsonResponse(400, { code: -1, message: "备用源3参数无效: type" });
+  if (type !== "qq") {
+    return jsonResponse(400, { code: -1, message: "备用源3仅支持 QQ 平台" });
   }
 
   const maxAttempts = 2;
@@ -1101,14 +1143,27 @@ async function handleBackup3(request, env) {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const { response, text, parsed } = await callMusicjx({ input, filter, type, page });
+      const requestLimit = filter === "id" ? 30 : 20;
+      const requestPage = filter === "id" ? 1 : page;
+      const { response, text, parsed } = await callAa1QqSearch({
+        keyword: input,
+        page: requestPage,
+        limit: requestLimit,
+      });
+
       if (response.ok && parsed && typeof parsed === "object") {
-        return new Response(JSON.stringify(parsed), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "Cache-Control": "no-store",
-          },
+        const rawList = Array.isArray(parsed?.list) ? parsed.list : [];
+        let data = normalizeAa1QqList(rawList);
+        if (filter === "id") {
+          const expectedId = String(input).trim();
+          data = data.filter((item) => String(item.songid || "").trim() === expectedId);
+        }
+        return jsonResponse(200, {
+          code: 200,
+          message: String(parsed?.msg || "Success"),
+          data,
+        }, {
+          "Cache-Control": "no-store",
         });
       }
 
@@ -1136,7 +1191,7 @@ async function handleBackup3(request, env) {
   return jsonResponse(lastStatus, {
     code: Number(lastPayload?.code ?? -1),
     message: String(lastPayload?.error || lastPayload?.message || "备用源3请求失败"),
-    data: Array.isArray(lastPayload?.data) ? lastPayload.data : [],
+    data: [],
   });
 }
 

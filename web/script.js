@@ -15,9 +15,7 @@ const BACKUP_SOURCE_MAP = {
     kuwo: 'kuwo'
 };
 const BACKUP3_SOURCE_MAP = {
-    netease: 'netease',
-    qq: 'qq',
-    kuwo: 'kuwo'
+    qq: 'qq'
 };
 const APP_CONTEXT = window.APP_CONTEXT || {};
 const AUTH_TYPE = APP_CONTEXT.authType || 'password';
@@ -257,7 +255,7 @@ function toBackupSource(platform) {
 function toBackup3Source(platform) {
     const primary = toPrimaryPlatform(platform);
     if (!primary) return '';
-    return BACKUP3_SOURCE_MAP[primary] || primary;
+    return BACKUP3_SOURCE_MAP[primary] || '';
 }
 
 function backupBrFromQuality(quality) {
@@ -698,7 +696,7 @@ async function checkStatus() {
             const backup3Probe = await callBackup3Api({
                 input: '周杰伦',
                 filter: 'name',
-                type: 'netease',
+                type: 'qq',
                 page: 1
             }, {
                 timeoutMs: 10000,
@@ -1824,7 +1822,7 @@ function hydrateMissingCovers(pageSongs, startIndex) {
             }
         }
 
-        // 第二备用（musicjx）补封面。
+        // 第二备用（QQ 专用）补封面。
         try {
             const backup3Cover = await fetchBackup3CoverForPrimarySong(song);
             if (backup3Cover) {

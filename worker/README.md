@@ -6,7 +6,7 @@
 - 会话管理（HttpOnly Cookie）
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - 备用源代理：`/api/proxy/backup`（GDStudio）
-  - 第三层备用代理：`/api/proxy/backup3`（musicjx）
+  - 第三层备用代理：`/api/proxy/backup3`（AA1 QQ 接口）
 
 ## 路由
 
