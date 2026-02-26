@@ -506,9 +506,17 @@ footer {
     border-top: 1px solid var(--jp-border);
 }
 
+.footer-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+}
+
 .status {
     display: flex;
-    justify-content: space-around;
+    justify-content: flex-start;
+    gap: 16px;
     font-size: 12px;
     color: #948787;
 }
@@ -518,9 +526,8 @@ footer {
 }
 
 .source-links {
-    margin-top: 10px;
     display: flex;
-    justify-content: center;
+    justify-content: flex-end;
     gap: 14px;
     font-size: 12px;
     color: #948787;
@@ -1380,6 +1387,12 @@ footer {
         font-size: 12px;
     }
 
+    .footer-meta {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
     .status {
         flex-direction: column;
         gap: 8px;
@@ -1387,11 +1400,11 @@ footer {
     }
 
     .source-links {
-        margin-top: 8px;
         flex-direction: column;
         gap: 6px;
         font-size: 11px;
-        text-align: center;
+        text-align: left;
+        justify-content: flex-start;
     }
 
     .login-paper {

@@ -108,13 +108,15 @@
         </main>
 
         <footer>
-            <div class="status">
-                <span id="serviceStatus">服务状态: <span class="loading">检查中...</span></span>
-                <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
-            </div>
-            <div class="source-links">
-                <span>主源: <a href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">TuneHub API</a></span>
-                <span>备用: <a href="https://music-api.gdstudio.xyz/api.php" target="_blank" rel="noopener noreferrer">GDStudio API</a></span>
+            <div class="footer-meta">
+                <div class="status">
+                    <span id="serviceStatus">服务状态: <span class="loading">检查中...</span></span>
+                    <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
+                </div>
+                <div class="source-links">
+                    <span>主源: <a href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">TuneHub API</a></span>
+                    <span>备用: <a href="https://music-api.gdstudio.xyz/api.php" target="_blank" rel="noopener noreferrer">GDStudio API</a></span>
+                </div>
             </div>
         </footer>
 
@@ -193,7 +195,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260226-4';
+        const APP_ASSET_VERSION = '20260226-5';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
