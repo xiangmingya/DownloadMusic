@@ -8,7 +8,8 @@ const BACKUP_ALLOWED_TYPES = new Set(["search", "url", "lyric", "pic"]);
 const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count", "pages", "br", "size"]);
 const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
 const BACKUP_TIMEOUT_MS = 18000;
-const QQ_BACKUP3_API_URL = "https://zj.v.api.aa1.cn/api/qqmusic/demo.php";
+const QQ_BACKUP3_SEARCH_URL = "https://yutangxiaowu.cn:3015/api/qmusic/search";
+const QQ_BACKUP3_PARSE_URL = "https://yutangxiaowu.cn:3015/api/parseqmusic";
 const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
 
@@ -1050,34 +1051,32 @@ async function handleBackup(request, env) {
   });
 }
 
-function buildAa1Type3Url(mid, fid, t) {
-  const endpoint = new URL(QQ_BACKUP3_API_URL);
-  endpoint.searchParams.set("type", "3");
-  endpoint.searchParams.set("mid", String(mid || ""));
-  endpoint.searchParams.set("fid", String(fid || ""));
-  endpoint.searchParams.set("t", String(t || "3"));
-  return endpoint.toString();
+function getSingerNames(singerList) {
+  const list = Array.isArray(singerList) ? singerList : [];
+  const names = list
+    .map((item) => String(item?.name || "").trim())
+    .filter(Boolean);
+  return names.join(", ");
 }
 
-function parseAa1Type3Meta(rawUrl) {
-  try {
-    const u = new URL(String(rawUrl || ""));
-    return {
-      mid: String(u.searchParams.get("mid") || "").trim(),
-      fid: String(u.searchParams.get("fid") || "").trim(),
-      t: String(u.searchParams.get("t") || "3").trim(),
-    };
-  } catch {
-    return { mid: "", fid: "", t: "3" };
-  }
+function buildQqAlbumCover(albummid) {
+  const mid = String(albummid || "").trim();
+  if (!mid) return "";
+  return `https://y.gtimg.cn/music/photo_new/T002R500x500M000${mid}.jpg`;
 }
 
-async function callAa1QqSearch({ keyword, page, limit }) {
-  const endpoint = new URL(QQ_BACKUP3_API_URL);
-  endpoint.searchParams.set("type", "1");
-  endpoint.searchParams.set("q", String(keyword || ""));
-  endpoint.searchParams.set("p", String(page || 1));
-  endpoint.searchParams.set("n", String(limit || 20));
+function buildQqSongLink(songmid) {
+  const mid = String(songmid || "").trim();
+  if (!mid) return "";
+  return `https://y.qq.com/n/ryqq/songDetail/${mid}`;
+}
+
+async function callQqBackup3Search({ keyword, page, limit }) {
+  const endpoint = new URL(QQ_BACKUP3_SEARCH_URL);
+  endpoint.searchParams.set("key", String(keyword || ""));
+  endpoint.searchParams.set("t", "0");
+  endpoint.searchParams.set("pageNo", String(page || 1));
+  endpoint.searchParams.set("pageSize", String(limit || 20));
 
   const response = await fetch(endpoint.toString(), {
     method: "GET",
@@ -1086,35 +1085,71 @@ async function callAa1QqSearch({ keyword, page, limit }) {
     headers: {
       Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0",
-      Referer: "https://api.aa1.cn/doc/qq-music.html",
+      Referer: "https://yutangxiaowu.cn/step/api/qmusic.html",
     },
   });
   const text = await response.text();
   return { response, text, parsed: parseJsonText(text) };
 }
 
-function normalizeAa1QqList(list) {
+async function callQqBackup3ParseBySongmid(songmid) {
+  const endpoint = new URL(QQ_BACKUP3_PARSE_URL);
+  endpoint.searchParams.set("songmid", String(songmid || ""));
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    redirect: "follow",
+    signal: AbortSignal.timeout(QQ_BACKUP3_TIMEOUT_MS),
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0",
+      Referer: "https://yutangxiaowu.cn/step/api/qqmusic.html",
+    },
+  });
+  const text = await response.text();
+  return { response, text, parsed: parseJsonText(text) };
+}
+
+function normalizeQqBackup3SearchList(list) {
   const arr = Array.isArray(list) ? list : [];
   return arr
-    .map((item, index) => {
-      const trackName = String(item?.name || "").trim();
-      const singer = String(item?.singer || "").trim();
-      const cover = String(item?.cover || "").trim();
-      const rawUrl = String(item?.url || "").trim();
-      const { mid, fid, t } = parseAa1Type3Meta(rawUrl);
-      const songid = mid || `aa1_${index + 1}`;
-      const streamUrl = (mid && fid) ? buildAa1Type3Url(mid, fid, t) : rawUrl;
+    .map((item) => {
+      const songmid = String(item?.songmid || "").trim();
+      const songid = songmid || String(item?.songid || "").trim();
+      const cover = buildQqAlbumCover(item?.albummid);
       return {
         songid,
-        title: trackName || "未知歌曲",
-        author: singer || "未知歌手",
-        url: streamUrl,
+        title: String(item?.songname || "未知歌曲"),
+        author: getSingerNames(item?.singer) || "未知歌手",
+        url: "",
         pic: cover,
         lrc: "",
-        link: rawUrl || streamUrl,
+        link: buildQqSongLink(songmid),
       };
     })
-    .filter((item) => String(item.url || "").trim());
+    .filter((item) => String(item.songid || "").trim());
+}
+
+function normalizeQqBackup3ParseToList(parsed) {
+  const success = Boolean(parsed?.success);
+  if (!success) return [];
+
+  const songmid = String(parsed?.songmid || "").trim();
+  const detail = parsed?.detail && typeof parsed.detail === "object" ? parsed.detail : {};
+  const streamUrl = String(parsed?.url || "").trim();
+
+  if (!songmid || !streamUrl) {
+    return [];
+  }
+
+  return [{
+    songid: songmid,
+    title: String(detail?.songName || songmid),
+    author: String(detail?.singer || "未知歌手"),
+    url: streamUrl,
+    pic: "",
+    lrc: String(parsed?.lyric || ""),
+    link: buildQqSongLink(songmid),
+  }];
 }
 
 async function handleBackup3(request, env) {
@@ -1143,24 +1178,36 @@ async function handleBackup3(request, env) {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const requestLimit = filter === "id" ? 30 : 20;
-      const requestPage = filter === "id" ? 1 : page;
-      const { response, text, parsed } = await callAa1QqSearch({
-        keyword: input,
-        page: requestPage,
-        limit: requestLimit,
-      });
+      let response = null;
+      let text = "";
+      let parsed = null;
+      let data = [];
+
+      if (filter === "name") {
+        const requestLimit = 20;
+        const requestPage = page;
+        const result = await callQqBackup3Search({
+          keyword: input,
+          page: requestPage,
+          limit: requestLimit,
+        });
+        response = result.response;
+        text = result.text;
+        parsed = result.parsed;
+        const rawList = Array.isArray(parsed?.data?.list) ? parsed.data.list : [];
+        data = normalizeQqBackup3SearchList(rawList);
+      } else {
+        const result = await callQqBackup3ParseBySongmid(input);
+        response = result.response;
+        text = result.text;
+        parsed = result.parsed;
+        data = normalizeQqBackup3ParseToList(parsed);
+      }
 
       if (response.ok && parsed && typeof parsed === "object") {
-        const rawList = Array.isArray(parsed?.list) ? parsed.list : [];
-        let data = normalizeAa1QqList(rawList);
-        if (filter === "id") {
-          const expectedId = String(input).trim();
-          data = data.filter((item) => String(item.songid || "").trim() === expectedId);
-        }
         return jsonResponse(200, {
           code: 200,
-          message: String(parsed?.msg || "Success"),
+          message: String(parsed?.errMsg || parsed?.message || "Success"),
           data,
         }, {
           "Cache-Control": "no-store",
