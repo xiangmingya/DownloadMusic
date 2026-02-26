@@ -7,6 +7,7 @@ const BACKUP_API_URL = "https://music-api.gdstudio.xyz/api.php";
 const BACKUP_ALLOWED_TYPES = new Set(["search", "url", "lyric", "pic"]);
 const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count", "pages", "br", "size"]);
 const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
+const BACKUP_TIMEOUT_MS = 18000;
 
 export default {
   async fetch(request, env) {
@@ -124,6 +125,10 @@ async function parseJsonBody(request) {
   } catch {
     return {};
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function splitCsvValues(value) {
@@ -945,28 +950,86 @@ async function handleBackup(request, env) {
     return jsonResponse(400, { code: -1, message: "备用源参数无效: source" });
   }
 
-  let upstream;
-  try {
-    upstream = await fetch(backupUrl.toString(), {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-      headers: {
-        Accept: "application/json, text/plain, */*",
-      },
-    });
-  } catch (err) {
-    return jsonResponse(502, {
-      code: -1,
-      message: err instanceof Error ? err.message : "备用源请求失败",
+  const isPic = types === "pic";
+  const maxAttempts = isPic ? 3 : 2;
+  const cache = caches.default;
+  const cacheKey = isPic ? new Request(backupUrl.toString(), { method: "GET" }) : null;
+  const cached = cacheKey ? await cache.match(cacheKey) : null;
+
+  let lastStatus = 502;
+  let lastText = JSON.stringify({ code: -1, message: "备用源请求失败" });
+  let lastContentType = "application/json; charset=utf-8";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const upstream = await fetch(backupUrl.toString(), {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(BACKUP_TIMEOUT_MS),
+        headers: {
+          Accept: "application/json, text/plain, */*",
+        },
+      });
+
+      const text = await upstream.text();
+      const contentType = upstream.headers.get("Content-Type") || "application/json; charset=utf-8";
+
+      if (upstream.ok) {
+        const response = new Response(text, {
+          status: upstream.status,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": isPic ? "public, max-age=43200" : "no-store",
+          },
+        });
+        if (isPic && cacheKey) {
+          try {
+            await cache.put(cacheKey, response.clone());
+          } catch {
+            // ignore cache put failures
+          }
+        }
+        return response;
+      }
+
+      lastStatus = upstream.status;
+      lastText = text || JSON.stringify({ code: -1, message: `备用源请求失败 (${upstream.status})` });
+      lastContentType = contentType;
+
+      const canRetry = upstream.status >= 500 || upstream.status === 429;
+      if (canRetry && attempt < maxAttempts - 1) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+      break;
+    } catch (err) {
+      lastStatus = 502;
+      lastText = JSON.stringify({
+        code: -1,
+        message: err instanceof Error ? err.message : "备用源请求失败",
+      });
+      lastContentType = "application/json; charset=utf-8";
+      if (attempt < maxAttempts - 1) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+    }
+  }
+
+  if (isPic && cached) {
+    const headers = new Headers(cached.headers);
+    headers.set("X-Backup-Stale", "1");
+    headers.set("Cache-Control", "public, max-age=43200");
+    return new Response(cached.body, {
+      status: 200,
+      headers,
     });
   }
 
-  const text = await upstream.text();
-  return new Response(text, {
-    status: upstream.status,
+  return new Response(lastText, {
+    status: lastStatus,
     headers: {
-      "Content-Type": upstream.headers.get("Content-Type") || "application/json; charset=utf-8",
+      "Content-Type": lastContentType,
       "Cache-Control": "no-store",
     },
   });
