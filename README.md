@@ -1,5 +1,7 @@
 # 音楽 - Music Downloader
 
+详细部署文档：`DEPLOYMENT_GUIDE.md`
+
 当前推荐架构：
 
 1. 前端静态页（可放帽子云）  
