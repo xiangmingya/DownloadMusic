@@ -78,6 +78,13 @@ const PLAY_MODE_TEXT = {
     random: '随机'
 };
 let currentPlayMode = 'list';
+const BACKUP_COOLDOWN_MS = 45000;
+const BACKUP_TOAST_INTERVAL_MS = 6000;
+let backupCircuitState = {
+    blockedUntil: 0,
+    lastError: '',
+    lastToastAt: 0
+};
 
 // Toast通知
 function showToast(message, type = 'info') {
@@ -184,6 +191,49 @@ function getApiErrorMessage(payload, statusCode, fallback = '请求失败') {
     if (message) return message;
 
     return fallback;
+}
+
+function isBackupTemporarilyBlocked() {
+    return Number(backupCircuitState.blockedUntil || 0) > Date.now();
+}
+
+function getBackupUnavailableMessage() {
+    if (!isBackupTemporarilyBlocked()) return '备用源暂时不可用，请稍后重试';
+    const remainMs = Math.max(0, Number(backupCircuitState.blockedUntil || 0) - Date.now());
+    const remainSec = Math.max(1, Math.ceil(remainMs / 1000));
+    return `备用源暂时不可用（约 ${remainSec} 秒后重试）`;
+}
+
+function shouldOpenBackupCircuit(message, statusCode = 0) {
+    const text = String(message || '').toLowerCase();
+    const code = Number(statusCode || 0);
+    if (code === 503 || code === 502 || code === 504 || code === 429) return true;
+    if (text.includes('503') || text.includes('service unavailable')) return true;
+    if (text.includes('timed out') || text.includes('timeout')) return true;
+    if (text.includes('failed to fetch') || text.includes('networkerror')) return true;
+    return false;
+}
+
+function markBackupFailure(error, statusCode = 0) {
+    const message = localizeErrorMessage(error?.message, '备用源请求失败');
+    backupCircuitState.lastError = message;
+    if (shouldOpenBackupCircuit(message, statusCode)) {
+        backupCircuitState.blockedUntil = Date.now() + BACKUP_COOLDOWN_MS;
+    }
+}
+
+function markBackupSuccess() {
+    backupCircuitState.blockedUntil = 0;
+    backupCircuitState.lastError = '';
+}
+
+function toastBackupUnavailableOnce() {
+    const now = Date.now();
+    if (now - Number(backupCircuitState.lastToastAt || 0) < BACKUP_TOAST_INTERVAL_MS) {
+        return;
+    }
+    backupCircuitState.lastToastAt = now;
+    showToast(getBackupUnavailableMessage(), 'info');
 }
 
 function toPrimaryPlatform(platform) {
@@ -630,6 +680,10 @@ function platformDisplayName(platformKey) {
 }
 
 async function callBackupApi(params, options = {}) {
+    if (isBackupTemporarilyBlocked()) {
+        throw new Error(getBackupUnavailableMessage());
+    }
+
     const timeoutMs = Number(options.timeoutMs || 15000);
     const retries = Math.max(0, Number(options.retries || 1));
     const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
@@ -648,14 +702,18 @@ async function callBackupApi(params, options = {}) {
             const text = await response.text();
             const data = parseResponseText(text);
             if (!response.ok) {
-                throw new Error(getApiErrorMessage(data, response.status, `备用源请求失败 (${response.status})`));
+                const err = new Error(getApiErrorMessage(data, response.status, `备用源请求失败 (${response.status})`));
+                err._statusCode = Number(response.status || 0);
+                throw err;
             }
             if (data && typeof data === 'object' && !Array.isArray(data) && data.detail) {
                 throw new Error(localizeErrorMessage(data.detail, '备用源请求失败'));
             }
+            markBackupSuccess();
             return data;
         } catch (error) {
             lastError = error;
+            markBackupFailure(error, Number(error?._statusCode || 0));
             if (attempt < retries) {
                 await wait(retryDelayMs);
             }
@@ -773,6 +831,9 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             return { songs: backupSongs, provider: 'backup' };
         }
     } catch (backupError) {
+        if (!silentFallback) {
+            toastBackupUnavailableOnce();
+        }
         if (primaryError) {
             throw primaryError;
         }
@@ -1424,6 +1485,7 @@ function hydrateMissingCovers(pageSongs, startIndex) {
         };
 
         if (song.dataSource === 'backup') {
+            if (isBackupTemporarilyBlocked()) return;
             try {
                 const coverUrl = await fetchBackupPicUrl(song);
                 if (coverUrl) {
@@ -1450,6 +1512,7 @@ function hydrateMissingCovers(pageSongs, startIndex) {
         }
 
         // 主源无封面时，尝试备用源补封面。
+        if (isBackupTemporarilyBlocked()) return;
         try {
             const backupCover = await fetchBackupCoverForPrimarySong(song);
             if (backupCover) {
