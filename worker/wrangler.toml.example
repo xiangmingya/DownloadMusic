@@ -2,6 +2,12 @@ name = "downloadmusic-auth-proxy"
 main = "src/index.js"
 compatibility_date = "2026-02-25"
 
+# 自定义域名（可按你的实际域名修改）
+[[routes]]
+pattern = "musicapi.621888.xyz"
+zone_name = "621888.xyz"
+custom_domain = true
+
 # 部署后请在 Cloudflare Dashboard 或 wrangler secret 配置 secrets：
 # - SESSION_SECRET
 # - ADMIN_PASSWORD
@@ -12,7 +18,7 @@ compatibility_date = "2026-02-25"
 
 [vars]
 # 静态前端域名白名单（用于 CORS，支持逗号分隔多个）
-ALLOWED_ORIGINS = "https://music-t9apk03g.maozi.io,https://zodyr0w32-music-t9apk03g.maozi.io"
+ALLOWED_ORIGINS = "https://music-t9apk03g.maozi.io,https://zodyr0w32-music-t9apk03g.maozi.io,https://music.xiangming.site"
 
 # Linux DO 端点（可不改）
 LINUXDO_AUTHORIZATION_ENDPOINT = "https://connect.linux.do/oauth2/authorize"
@@ -21,7 +27,7 @@ LINUXDO_USER_ENDPOINT = "https://connect.linux.do/api/user"
 LINUXDO_SCOPE = "openid profile"
 
 # 回调后跳转前端白名单（支持逗号分隔多个，建议填首页）
-FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/"
+FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/,https://music.xiangming.site/"
 
 # 媒体代理白名单（可选，逗号分隔；留空表示允许任意公网域名）
 MEDIA_PROXY_ALLOWED_HOSTS = ".kuwo.cn,.kwcdn.kuwo.cn,.qq.com,.music.163.com,.music.126.net"
