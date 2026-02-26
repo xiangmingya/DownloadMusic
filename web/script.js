@@ -593,6 +593,35 @@ async function checkStatus() {
             throw new Error(getApiErrorMessage(methodsData, response.status, '服务异常'));
         }
     } catch {
+        try {
+            const backupProbe = await callBackupApi({
+                types: 'search',
+                source: 'netease',
+                name: '周杰伦',
+                count: 1,
+                pages: 1
+            }, {
+                timeoutMs: 9000,
+                retries: 0
+            });
+            const backupAlive = Array.isArray(backupProbe);
+            if (backupAlive) {
+                supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
+                platformNames = {
+                    netease: defaultPlatformNameMap.netease,
+                    qq: defaultPlatformNameMap.qq,
+                    kuwo: defaultPlatformNameMap.kuwo
+                };
+                updatePlatformSelect();
+                document.getElementById('serviceStatus').innerHTML =
+                    `服务状态: <span class="online">主源波动，备用可用</span>`;
+                document.getElementById('healthStatus').innerHTML =
+                    `健康状态: <span class="online">降级运行</span>`;
+                return;
+            }
+        } catch {
+            // ignore
+        }
         document.getElementById('serviceStatus').innerHTML =
             `服务状态: <span class="offline">网络波动</span>`;
         document.getElementById('healthStatus').innerHTML =
@@ -948,7 +977,171 @@ async function ensureBackupPlayableData(song, quality) {
     return result;
 }
 
-async function fetchPlaylistSongs(platform, playlistId) {
+async function fetchSongByIdBackup(platform, songId, quality) {
+    const primaryPlatform = toPrimaryPlatform(platform);
+    const backupSource = toBackupSource(primaryPlatform);
+    const id = String(songId || '').trim();
+    if (!primaryPlatform || !backupSource || !id) return null;
+
+    const br = backupBrFromQuality(quality);
+    const urlData = await callBackupApi({
+        types: 'url',
+        source: backupSource,
+        id,
+        br
+    }, {
+        timeoutMs: 15000,
+        retries: 1,
+        retryDelayMs: 600
+    });
+    const mediaUrl = normalizeMediaUrl(urlData?.url || '');
+    if (!mediaUrl) return null;
+
+    let song = {
+        id,
+        name: `ID ${id}`,
+        artist: '未知歌手',
+        album: '',
+        source: primaryPlatform,
+        platform: primaryPlatform,
+        cover: '',
+        dataSource: 'backup',
+        backup: {
+            source: backupSource,
+            trackId: id,
+            urlId: id,
+            lyricId: id,
+            picId: ''
+        }
+    };
+
+    try {
+        const metadataList = await callBackupApi({
+            types: 'search',
+            source: backupSource,
+            name: id,
+            count: 8,
+            pages: 1
+        }, {
+            timeoutMs: 12000,
+            retries: 1,
+            retryDelayMs: 500
+        });
+        const list = Array.isArray(metadataList) ? metadataList : [];
+        const matched = list.find(item => String(item?.id || '') === id) || list[0];
+        if (matched) {
+            const normalized = normalizeBackupSong(matched, primaryPlatform, backupSource);
+            song = {
+                ...normalized,
+                backup: {
+                    ...normalized.backup,
+                    trackId: String(normalized?.backup?.trackId || id) || id
+                }
+            };
+        }
+    } catch {
+        // ignore metadata lookup failures
+    }
+
+    const [lyricsData, coverUrl] = await Promise.all([
+        callBackupApi({
+            types: 'lyric',
+            source: backupSource,
+            id: String(song?.backup?.lyricId || id)
+        }, {
+            timeoutMs: 10000,
+            retries: 1,
+            retryDelayMs: 500
+        }).catch(() => ({})),
+        fetchBackupPicUrl(song).catch(() => '')
+    ]);
+
+    if (coverUrl) {
+        song.cover = coverUrl;
+    }
+    backupDataCache.set(backupSongDataCacheKey(song, quality), {
+        url: mediaUrl,
+        lyrics: String(lyricsData?.lyric || ''),
+        cover: normalizeMediaUrl(coverUrl || ''),
+        br: Number(urlData?.br || br)
+    });
+
+    return song;
+}
+
+async function fetchBackupCoverForPrimarySong(song) {
+    const platform = toPrimaryPlatform(song?.platform || song?.source);
+    const backupSource = toBackupSource(platform);
+    const id = String(song?.id || '').trim();
+    if (!platform || !backupSource || !id) return '';
+
+    const coverCacheKey = `primary-cover:${platform}:${id}`;
+    if (backupPicCache.has(coverCacheKey)) {
+        return backupPicCache.get(coverCacheKey);
+    }
+
+    const pickCandidate = list => {
+        const arr = Array.isArray(list) ? list : [];
+        if (!arr.length) return null;
+        const exactId = arr.find(item => String(item?.id || '') === id);
+        if (exactId) return exactId;
+        const songName = String(song?.name || '').trim();
+        if (songName) {
+            const byName = arr.find(item => String(item?.name || '').trim() === songName);
+            if (byName) return byName;
+        }
+        return arr[0];
+    };
+
+    let candidate = null;
+    try {
+        const byId = await callBackupApi({
+            types: 'search',
+            source: backupSource,
+            name: id,
+            count: 8,
+            pages: 1
+        }, {
+            timeoutMs: 9000,
+            retries: 1,
+            retryDelayMs: 450
+        });
+        candidate = pickCandidate(byId);
+    } catch {
+        // ignore
+    }
+
+    if (!candidate && song?.name) {
+        try {
+            const byName = await callBackupApi({
+                types: 'search',
+                source: backupSource,
+                name: String(song.name),
+                count: 8,
+                pages: 1
+            }, {
+                timeoutMs: 9000,
+                retries: 1,
+                retryDelayMs: 450
+            });
+            candidate = pickCandidate(byName);
+        } catch {
+            // ignore
+        }
+    }
+
+    if (!candidate) {
+        backupPicCache.set(coverCacheKey, '');
+        return '';
+    }
+
+    const backupSong = normalizeBackupSong(candidate, platform, backupSource);
+    const coverUrl = await fetchBackupPicUrl(backupSong).catch(() => '');
+    backupPicCache.set(coverCacheKey, normalizeMediaUrl(coverUrl || ''));
+    return normalizeMediaUrl(coverUrl || '');
+}
+
+async function fetchPlaylistSongsPrimary(platform, playlistId) {
     const result = await callPlatformMethod(platform, 'playlist', {
         id: playlistId
     }, {
@@ -969,6 +1162,94 @@ async function fetchPlaylistSongs(platform, playlistId) {
         dataSource: 'primary',
         backup: null
     }));
+}
+
+async function fetchPlaylistSongsBackup(platform, playlistId) {
+    const primaryPlatform = toPrimaryPlatform(platform);
+    const backupSource = toBackupSource(primaryPlatform);
+    if (!primaryPlatform || !backupSource) return [];
+
+    const queryAlbum = async () => {
+        const data = await callBackupApi({
+            types: 'search',
+            source: `${backupSource}_album`,
+            name: playlistId,
+            count: 200,
+            pages: 1
+        }, {
+            timeoutMs: 15000,
+            retries: 1,
+            retryDelayMs: 600
+        });
+        return Array.isArray(data) ? data : [];
+    };
+
+    const querySearch = async () => {
+        const data = await callBackupApi({
+            types: 'search',
+            source: backupSource,
+            name: playlistId,
+            count: 100,
+            pages: 1
+        }, {
+            timeoutMs: 15000,
+            retries: 1,
+            retryDelayMs: 600
+        });
+        return Array.isArray(data) ? data : [];
+    };
+
+    let items = [];
+    try {
+        items = await queryAlbum();
+    } catch {
+        items = [];
+    }
+    if (!items.length) {
+        try {
+            items = await querySearch();
+        } catch {
+            items = [];
+        }
+    }
+    return items
+        .filter(item => item && item.id)
+        .map(item => normalizeBackupSong(item, primaryPlatform, backupSource));
+}
+
+async function fetchPlaylistSongs(platform, playlistId, options = {}) {
+    const silentFallback = Boolean(options.silentFallback);
+    let primarySongs = [];
+    let primaryError = null;
+    try {
+        primarySongs = await fetchPlaylistSongsPrimary(platform, playlistId);
+    } catch (error) {
+        primaryError = error;
+    }
+
+    if (!primaryError && primarySongs.length > 0) {
+        return primarySongs;
+    }
+
+    try {
+        const backupSongs = await fetchPlaylistSongsBackup(platform, playlistId);
+        if (backupSongs.length > 0) {
+            if (!silentFallback) {
+                showToast(primaryError ? '主歌单接口异常，已自动切换备用源' : '主歌单无结果，已自动切换备用源', 'info');
+            }
+            return backupSongs;
+        }
+    } catch (backupError) {
+        if (primaryError) {
+            throw primaryError;
+        }
+        throw backupError;
+    }
+
+    if (primaryError) {
+        throw primaryError;
+    }
+    return [];
 }
 
 // 搜索
@@ -1007,18 +1288,32 @@ async function search() {
         }
 
         if (currentSearchType === 'song') {
-            const parseResp = await parseSongs(platform, input, quality);
-            const parsedItems = normalizeParsedItems(platform, quality, parseResp);
+            let parseResp = null;
+            try {
+                parseResp = await parseSongs(platform, input, quality);
+            } catch (parseError) {
+                parseResp = null;
+            }
+
+            const parsedItems = parseResp ? normalizeParsedItems(platform, quality, parseResp) : [];
             const successSongs = parsedItems
                 .filter(item => item.success)
                 .map(item => toSongFromParsedItem(platform, item));
 
             if (successSongs.length > 0) {
                 displaySongsWithPagination(successSongs);
-            } else {
-                const firstError = parsedItems.find(item => !item.success);
-                resultsDiv.innerHTML = `<div class="empty-state">${localizeErrorMessage(firstError?.error, '解析失败')}</div>`;
+                return;
             }
+
+            const backupSong = await fetchSongByIdBackup(platform, input, quality).catch(() => null);
+            if (backupSong) {
+                showToast('主解析无结果，已自动切换备用源', 'info');
+                displaySongsWithPagination([backupSong]);
+                return;
+            }
+
+            const firstError = parsedItems.find(item => !item.success);
+            resultsDiv.innerHTML = `<div class="empty-state">${localizeErrorMessage(firstError?.error, '解析失败')}</div>`;
         } else {
             const songs = await fetchPlaylistSongs(platform, input);
             if (songs.length > 0) {
@@ -1167,19 +1462,30 @@ function hydrateMissingCovers(pageSongs, startIndex) {
                 const coverUrl = normalizeMediaUrl(meta.cover || '');
                 if (coverUrl) {
                     setCover(coverUrl);
+                    return;
                 }
             } catch {
                 // ignore free metadata errors
             }
         }
+
+        // 主源无封面时，尝试备用源补封面。
+        try {
+            const backupCover = await fetchBackupCoverForPrimarySong(song);
+            if (backupCover) {
+                setCover(backupCover);
+            }
+        } catch {
+            // ignore backup cover errors
+        }
     });
 }
 
 // 下载单曲
-async function downloadSong(source, id, name, artist, index = null) {
+async function downloadSong(source, id, name, artist, index = null, songObj = null) {
     try {
         const quality = document.getElementById('quality').value;
-        const runtimeSong = getSongByIndex(Number(index));
+        const runtimeSong = songObj || getSongByIndex(Number(index));
         let mediaUrl = '';
         if (runtimeSong?.dataSource === 'backup') {
             const backupData = await ensureBackupPlayableData(runtimeSong, quality);
@@ -1210,7 +1516,7 @@ async function downloadSong(source, id, name, artist, index = null) {
 // 下载歌单
 async function downloadPlaylist(source, id, name) {
     try {
-        const songs = await fetchPlaylistSongs(source, id);
+        const songs = await fetchPlaylistSongs(source, id, { silentFallback: true });
         if (songs.length === 0) {
             showToast('获取歌单失败或为空', 'error');
             return;
@@ -1222,7 +1528,7 @@ async function downloadPlaylist(source, id, name) {
         for (let i = 0; i < songs.length; i++) {
             const song = songs[i];
             showToast(`正在下载 ${i + 1}/${total}: ${song.name}`, 'info');
-            await downloadSong(source, song.id, song.name, song.artist);
+            await downloadSong(source, song.id, song.name, song.artist, null, song);
             await new Promise(resolve => setTimeout(resolve, 1500));
         }
 
