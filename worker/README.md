@@ -5,7 +5,8 @@
 - Linux DO OAuth 登录
 - 会话管理（HttpOnly Cookie）
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
-  - 备用源代理：`/api/proxy/backup`（前端备用搜索/封面/歌词/链接通过 Worker 中转，避免 CORS）
+  - 备用源代理：`/api/proxy/backup`（GDStudio）
+  - 第三层备用代理：`/api/proxy/backup3`（musicjx）
 
 ## 路由
 

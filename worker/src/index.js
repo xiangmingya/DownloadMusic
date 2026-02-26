@@ -8,6 +8,9 @@ const BACKUP_ALLOWED_TYPES = new Set(["search", "url", "lyric", "pic"]);
 const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count", "pages", "br", "size"]);
 const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
 const BACKUP_TIMEOUT_MS = 18000;
+const MUSICJX_API_URL = "https://musicjx.com/";
+const MUSICJX_ALLOWED_TYPES = new Set(["netease", "qq", "kuwo"]);
+const MUSICJX_ALLOWED_FILTERS = new Set(["name", "id"]);
 
 export default {
   async fetch(request, env) {
@@ -59,6 +62,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/backup" && request.method === "GET") {
       return withCors(request, env, await handleBackup(request, env));
+    }
+    if (url.pathname === "/api/proxy/backup3" && request.method === "GET") {
+      return withCors(request, env, await handleBackup3(request, env));
     }
 
     return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
@@ -129,6 +135,15 @@ async function parseJsonBody(request) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseJsonText(text) {
+  try {
+    const parsed = JSON.parse(String(text || ""));
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function splitCsvValues(value) {
@@ -1032,6 +1047,96 @@ async function handleBackup(request, env) {
       "Content-Type": lastContentType,
       "Cache-Control": "no-store",
     },
+  });
+}
+
+async function callMusicjx({ input, filter, type, page }) {
+  const body = new URLSearchParams({
+    input: String(input || ""),
+    filter: String(filter || "name"),
+    type: String(type || ""),
+    page: String(page || 1),
+  });
+
+  const response = await fetch(MUSICJX_API_URL, {
+    method: "POST",
+    redirect: "follow",
+    signal: AbortSignal.timeout(20000),
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      "X-Requested-With": "XMLHttpRequest",
+      Origin: "https://musicjx.com",
+      Referer: "https://musicjx.com/",
+    },
+    body,
+  });
+  const text = await response.text();
+  return { response, text, parsed: parseJsonText(text) };
+}
+
+async function handleBackup3(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const reqUrl = new URL(request.url);
+  const input = String(reqUrl.searchParams.get("input") || "").trim();
+  const filter = String(reqUrl.searchParams.get("filter") || "name").trim();
+  const type = String(reqUrl.searchParams.get("type") || "").trim();
+  const page = toPositiveInt(reqUrl.searchParams.get("page"), 1);
+
+  if (!input || !type) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: input / type" });
+  }
+  if (!MUSICJX_ALLOWED_FILTERS.has(filter)) {
+    return jsonResponse(400, { code: -1, message: "备用源3参数无效: filter" });
+  }
+  if (!MUSICJX_ALLOWED_TYPES.has(type)) {
+    return jsonResponse(400, { code: -1, message: "备用源3参数无效: type" });
+  }
+
+  const maxAttempts = 2;
+  let lastStatus = 502;
+  let lastPayload = { code: -1, message: "备用源3请求失败" };
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const { response, text, parsed } = await callMusicjx({ input, filter, type, page });
+      if (response.ok && parsed && typeof parsed === "object") {
+        return new Response(JSON.stringify(parsed), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+
+      lastStatus = response.status || 502;
+      lastPayload = parsed && typeof parsed === "object"
+        ? parsed
+        : { code: -1, message: text || `备用源3请求失败 (${lastStatus})` };
+
+      const canRetry = response.status >= 500 || response.status === 429;
+      if (canRetry && attempt < maxAttempts - 1) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+      break;
+    } catch (err) {
+      lastStatus = 502;
+      lastPayload = { code: -1, message: err instanceof Error ? err.message : "备用源3请求失败" };
+      if (attempt < maxAttempts - 1) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+    }
+  }
+
+  return jsonResponse(lastStatus, {
+    code: Number(lastPayload?.code ?? -1),
+    message: String(lastPayload?.error || lastPayload?.message || "备用源3请求失败"),
+    data: Array.isArray(lastPayload?.data) ? lastPayload.data : [],
   });
 }
 
