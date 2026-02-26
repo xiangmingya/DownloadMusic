@@ -127,6 +127,49 @@ function parseResponseText(text) {
     }
 }
 
+const API_ERROR_CODE_CN = {
+    [-2]: '账户积分不足',
+    [-1]: '通用错误',
+    401: 'API Key 无效或未提供',
+    403: '账户被封禁或 Key 已禁用',
+    404: '请求的资源不存在',
+    500: '服务器内部错误'
+};
+
+const API_ERROR_MESSAGE_CN = {
+    'success': '请求成功',
+    'error': '通用错误',
+    'insufficient credits': '账户积分不足',
+    'unauthorized': 'API Key 无效或未提供',
+    'forbidden': '账户被封禁或 Key 已禁用',
+    'not found': '请求的资源不存在',
+    'server error': '服务器内部错误'
+};
+
+function localizeErrorMessage(rawMessage, fallback = '') {
+    const text = String(rawMessage || '').trim();
+    if (!text) return fallback;
+    const mapped = API_ERROR_MESSAGE_CN[text.toLowerCase()];
+    return mapped || text;
+}
+
+function getApiErrorMessage(payload, statusCode, fallback = '请求失败') {
+    const code = Number(payload?.code);
+    if (Number.isFinite(code) && code !== 0 && API_ERROR_CODE_CN[code]) {
+        return API_ERROR_CODE_CN[code];
+    }
+
+    const status = Number(statusCode);
+    if (Number.isFinite(status) && API_ERROR_CODE_CN[status]) {
+        return API_ERROR_CODE_CN[status];
+    }
+
+    const message = localizeErrorMessage(payload?.message, '');
+    if (message) return message;
+
+    return fallback;
+}
+
 function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -296,7 +339,7 @@ async function parseSongs(platform, ids, quality) {
 
     const code = Number(data.code);
     if (!response.ok || code !== 0) {
-        throw new Error(data.message || `解析失败 (${response.status})`);
+        throw new Error(getApiErrorMessage(data, response.status, `解析失败 (${response.status})`));
     }
 
     return data;
@@ -347,7 +390,7 @@ async function ensureParsedSong(platform, id, quality) {
         throw new Error('未返回解析结果');
     }
     if (!matched.success) {
-        throw new Error(matched.error || `解析失败: ${id}`);
+        throw new Error(localizeErrorMessage(matched.error, `解析失败: ${id}`));
     }
 
     cacheParsedItem(platform, quality, matched);
@@ -367,7 +410,7 @@ async function fetchSongMeta(platform, id) {
     const response = await apiFetch(url.toString());
     const data = await response.json();
     if (!response.ok || Number(data.code) !== 0) {
-        throw new Error(data.message || '获取元数据失败');
+        throw new Error(getApiErrorMessage(data, response.status, '获取元数据失败'));
     }
 
     const meta = data.data || {};
@@ -395,7 +438,7 @@ async function callPlatformMethod(platform, functionName, vars = {}, options = {
             const response = await apiFetch(url.toString(), { timeoutMs });
             const data = await response.json();
             if (!response.ok || Number(data.code) !== 0) {
-                throw new Error(data.message || '请求失败');
+                throw new Error(getApiErrorMessage(data, response.status, '请求失败'));
             }
             return data.data;
         } catch (error) {
@@ -421,7 +464,7 @@ async function checkStatus() {
                 response = await apiFetch(API_ROUTES.methods, { timeoutMs: 9000 });
                 methodsData = await response.json();
                 if (!response.ok || Number(methodsData.code) !== 0 || !methodsData.data) {
-                    throw new Error(methodsData.message || '服务状态检测失败');
+                    throw new Error(getApiErrorMessage(methodsData, response.status, '服务状态检测失败'));
                 }
                 lastErr = null;
                 break;
@@ -456,7 +499,7 @@ async function checkStatus() {
             document.getElementById('healthStatus').innerHTML =
                 `健康状态: <span class="online">正常</span>`;
         } else {
-            throw new Error(methodsData.message || '服务异常');
+            throw new Error(getApiErrorMessage(methodsData, response.status, '服务异常'));
         }
     } catch {
         document.getElementById('serviceStatus').innerHTML =
@@ -692,7 +735,7 @@ async function search() {
                 displaySongsWithPagination(successSongs);
             } else {
                 const firstError = parsedItems.find(item => !item.success);
-                resultsDiv.innerHTML = `<div class="empty-state">${firstError?.error || '解析失败'}</div>`;
+                resultsDiv.innerHTML = `<div class="empty-state">${localizeErrorMessage(firstError?.error, '解析失败')}</div>`;
             }
         } else {
             const songs = await fetchPlaylistSongs(platform, input);
@@ -703,7 +746,7 @@ async function search() {
             }
         }
     } catch (error) {
-        resultsDiv.innerHTML = `<div class="empty-state">${error.message || '搜索失败'}</div>`;
+        resultsDiv.innerHTML = `<div class="empty-state">${localizeErrorMessage(error?.message, '搜索失败')}</div>`;
     }
 }
 
@@ -844,7 +887,7 @@ async function downloadSong(source, id, name, artist) {
         const quality = document.getElementById('quality').value;
         const parsed = await ensureParsedSong(source, id, quality);
         if (!parsed.url) {
-            throw new Error(parsed.error || '未获取到下载链接');
+            throw new Error(localizeErrorMessage(parsed.error, '未获取到下载链接'));
         }
         const url = buildMediaProxyUrl(parsed.url, {
             download: true,
@@ -963,7 +1006,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
         const parsed = await ensureParsedSong(source, id, quality);
         if (playRequestId !== activePlayRequestId) return;
         if (!parsed.url) {
-            throw new Error(parsed.error || '未获取到播放链接');
+            throw new Error(localizeErrorMessage(parsed.error, '未获取到播放链接'));
         }
 
         resetInlinePlaybackUi(inlineIndex);
