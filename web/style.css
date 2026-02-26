@@ -517,6 +517,27 @@ footer {
     letter-spacing: 1px;
 }
 
+.source-links {
+    margin-top: 10px;
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    font-size: 12px;
+    color: #948787;
+}
+
+.source-links a {
+    color: #7b5a5a;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(123, 90, 90, 0.35);
+    transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.source-links a:hover {
+    color: #5f4343;
+    border-bottom-color: rgba(95, 67, 67, 0.65);
+}
+
 .loading {
     color: var(--jp-muted);
 }
@@ -1363,6 +1384,14 @@ footer {
         flex-direction: column;
         gap: 8px;
         font-size: 11px;
+    }
+
+    .source-links {
+        margin-top: 8px;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 11px;
+        text-align: center;
     }
 
     .login-paper {
