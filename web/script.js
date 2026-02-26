@@ -4,9 +4,9 @@ const API_ROUTES = {
     meta: `${API_BASE}/meta`,
     method: `${API_BASE}/method`,
     methods: `${API_BASE}/methods`,
-    media: `${API_BASE}/media`
+    media: `${API_BASE}/media`,
+    backup: `${API_BASE}/backup`
 };
-const BACKUP_API_BASE = 'https://music-api.gdstudio.xyz/api.php';
 const PRIMARY_ALLOWED_PLATFORMS = ['netease', 'qq', 'kuwo'];
 const BACKUP_SOURCE_MAP = {
     netease: 'netease',
@@ -203,26 +203,6 @@ function backupBrFromQuality(quality) {
     if (q.startsWith('320')) return 320;
     if (q.startsWith('flac')) return 999;
     return 320;
-}
-
-function externalFetch(url, init = {}) {
-    const { timeoutMs = 0, ...fetchInit } = init;
-    if (!timeoutMs || timeoutMs <= 0) {
-        return fetch(url, {
-            credentials: 'omit',
-            ...fetchInit
-        });
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, {
-        credentials: 'omit',
-        ...fetchInit,
-        signal: controller.signal
-    }).finally(() => {
-        clearTimeout(timer);
-    });
 }
 
 function normalizeBackupSong(item, selectedPlatform, backupSource) {
@@ -657,14 +637,14 @@ async function callBackupApi(params, options = {}) {
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
         try {
-            const url = new URL(BACKUP_API_BASE);
+            const url = new URL(API_ROUTES.backup, window.location.href);
             Object.entries(params || {}).forEach(([k, v]) => {
                 if (v !== undefined && v !== null && String(v) !== '') {
                     url.searchParams.set(k, String(v));
                 }
             });
 
-            const response = await externalFetch(url.toString(), { timeoutMs });
+            const response = await apiFetch(url.toString(), { timeoutMs });
             const text = await response.text();
             const data = parseResponseText(text);
             if (!response.ok) {

@@ -3,6 +3,10 @@ const METHODS_MAP = {
   qq: ["search", "playlist"],
   kuwo: ["search", "playlist"],
 };
+const BACKUP_API_URL = "https://music-api.gdstudio.xyz/api.php";
+const BACKUP_ALLOWED_TYPES = new Set(["search", "url", "lyric", "pic"]);
+const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count", "pages", "br", "size"]);
+const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
 
 export default {
   async fetch(request, env) {
@@ -51,6 +55,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/media" && request.method === "GET") {
       return withCors(request, env, await handleMedia(request, env));
+    }
+    if (url.pathname === "/api/proxy/backup" && request.method === "GET") {
+      return withCors(request, env, await handleBackup(request, env));
     }
 
     return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
@@ -912,6 +919,57 @@ async function handleMethod(request, env) {
       message: err instanceof Error ? err.message : "请求失败",
     });
   }
+}
+
+async function handleBackup(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const reqUrl = new URL(request.url);
+  const backupUrl = new URL(BACKUP_API_URL);
+
+  for (const [key, value] of reqUrl.searchParams.entries()) {
+    if (!BACKUP_ALLOWED_PARAMS.has(key)) continue;
+    const text = String(value || "").trim();
+    if (!text) continue;
+    backupUrl.searchParams.set(key, text);
+  }
+
+  const types = String(backupUrl.searchParams.get("types") || "").trim();
+  if (!BACKUP_ALLOWED_TYPES.has(types)) {
+    return jsonResponse(400, { code: -1, message: "备用源参数无效: types" });
+  }
+
+  const source = String(backupUrl.searchParams.get("source") || "").trim();
+  if (!BACKUP_ALLOWED_SOURCES.has(source)) {
+    return jsonResponse(400, { code: -1, message: "备用源参数无效: source" });
+  }
+
+  let upstream;
+  try {
+    upstream = await fetch(backupUrl.toString(), {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        Accept: "application/json, text/plain, */*",
+      },
+    });
+  } catch (err) {
+    return jsonResponse(502, {
+      code: -1,
+      message: err instanceof Error ? err.message : "备用源请求失败",
+    });
+  }
+
+  const text = await upstream.text();
+  return new Response(text, {
+    status: upstream.status,
+    headers: {
+      "Content-Type": upstream.headers.get("Content-Type") || "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 function keyLooksInvalid(key) {
