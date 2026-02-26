@@ -6,6 +6,13 @@ const API_ROUTES = {
     methods: `${API_BASE}/methods`,
     media: `${API_BASE}/media`
 };
+const BACKUP_API_BASE = 'https://music-api.gdstudio.xyz/api.php';
+const PRIMARY_ALLOWED_PLATFORMS = ['netease', 'qq', 'kuwo'];
+const BACKUP_SOURCE_MAP = {
+    netease: 'netease',
+    qq: 'tencent',
+    kuwo: 'kuwo'
+};
 const APP_CONTEXT = window.APP_CONTEXT || {};
 const AUTH_TYPE = APP_CONTEXT.authType || 'password';
 
@@ -33,6 +40,7 @@ let keywordPagingState = {
     keyword: '',
     page: 0,
     limit: searchApiLimit,
+    provider: 'primary',
     hasMore: false,
     loading: false
 };
@@ -48,6 +56,8 @@ const audio = document.getElementById('audio');
 // 缓存
 const parseCache = new Map();
 const metaCache = new Map();
+const backupDataCache = new Map();
+const backupPicCache = new Map();
 const LOCAL_KEY_PREFIX = 'downloadmusic_tunehub_key_';
 const linuxdoUserId = String(APP_CONTEXT?.user?.linuxdo_id || '').trim();
 const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
@@ -149,7 +159,13 @@ const API_ERROR_MESSAGE_CN = {
 function localizeErrorMessage(rawMessage, fallback = '') {
     const text = String(rawMessage || '').trim();
     if (!text) return fallback;
+    const lower = text.toLowerCase();
     const mapped = API_ERROR_MESSAGE_CN[text.toLowerCase()];
+    if (mapped) return mapped;
+    if (lower.includes('value of `source` is not supported')) return '备用源不支持该平台';
+    if (lower.includes('rate') && lower.includes('limit')) return '备用源请求过于频繁，请稍后重试';
+    if (lower.includes('failed to fetch')) return '网络请求失败，请稍后重试';
+    if (lower.includes('networkerror')) return '网络请求失败，请稍后重试';
     return mapped || text;
 }
 
@@ -168,6 +184,78 @@ function getApiErrorMessage(payload, statusCode, fallback = '请求失败') {
     if (message) return message;
 
     return fallback;
+}
+
+function toPrimaryPlatform(platform) {
+    const p = String(platform || '').trim().toLowerCase();
+    return PRIMARY_ALLOWED_PLATFORMS.includes(p) ? p : '';
+}
+
+function toBackupSource(platform) {
+    const primary = toPrimaryPlatform(platform);
+    if (!primary) return '';
+    return BACKUP_SOURCE_MAP[primary] || primary;
+}
+
+function backupBrFromQuality(quality) {
+    const q = String(quality || '').trim().toLowerCase();
+    if (q.startsWith('128')) return 128;
+    if (q.startsWith('320')) return 320;
+    if (q.startsWith('flac')) return 999;
+    return 320;
+}
+
+function externalFetch(url, init = {}) {
+    const { timeoutMs = 0, ...fetchInit } = init;
+    if (!timeoutMs || timeoutMs <= 0) {
+        return fetch(url, {
+            credentials: 'omit',
+            ...fetchInit
+        });
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, {
+        credentials: 'omit',
+        ...fetchInit,
+        signal: controller.signal
+    }).finally(() => {
+        clearTimeout(timer);
+    });
+}
+
+function normalizeBackupSong(item, selectedPlatform, backupSource) {
+    const artists = Array.isArray(item?.artist) ? item.artist : [item?.artist];
+    return {
+        id: String(item?.id || ''),
+        name: String(item?.name || '未知歌曲'),
+        artist: artists.filter(Boolean).join(', ') || '未知歌手',
+        album: String(item?.album || ''),
+        source: selectedPlatform,
+        platform: selectedPlatform,
+        cover: '',
+        dataSource: 'backup',
+        backup: {
+            source: String(backupSource || ''),
+            trackId: String(item?.id || ''),
+            urlId: String(item?.url_id || item?.id || ''),
+            lyricId: String(item?.lyric_id || item?.id || ''),
+            picId: String(item?.pic_id || '')
+        }
+    };
+}
+
+function backupSongDataCacheKey(song, quality) {
+    const platform = toPrimaryPlatform(song?.platform || song?.source);
+    const trackId = String(song?.backup?.trackId || song?.id || '').trim();
+    return `backup:${platform}:${trackId}:${String(quality || '')}`;
+}
+
+function backupPicCacheKey(song) {
+    const src = String(song?.backup?.source || '');
+    const picId = String(song?.backup?.picId || '');
+    return `pic:${src}:${picId}`;
 }
 
 function wait(ms) {
@@ -372,7 +460,9 @@ function toSongFromParsedItem(platform, item) {
         album: item?.info?.album || '',
         source: platform,
         platform,
-        cover: normalizeMediaUrl(item.cover || item.pic || item?.info?.pic || '')
+        cover: normalizeMediaUrl(item.cover || item.pic || item?.info?.pic || ''),
+        dataSource: 'primary',
+        backup: null
     };
 }
 
@@ -481,7 +571,8 @@ async function checkStatus() {
         }
 
         if (response.ok && Number(methodsData.code) === 0 && methodsData.data) {
-            supportedPlatforms = Object.keys(methodsData.data);
+            supportedPlatforms = Object.keys(methodsData.data)
+                .filter(key => PRIMARY_ALLOWED_PLATFORMS.includes(String(key)));
             if (supportedPlatforms.length === 0) {
                 supportedPlatforms = ['netease', 'qq', 'kuwo'];
             }
@@ -512,6 +603,10 @@ async function checkStatus() {
 // 更新平台下拉框
 function updatePlatformSelect() {
     const platformSelect = document.getElementById('platform');
+    supportedPlatforms = supportedPlatforms.filter(key => PRIMARY_ALLOWED_PLATFORMS.includes(String(key)));
+    if (supportedPlatforms.length === 0) {
+        supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
+    }
     const current = String(platformSelect.value || '').trim();
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
     const selected = supportedPlatforms.includes(current) ? current : fallback;
@@ -525,70 +620,160 @@ function platformDisplayName(platformKey) {
     return platformNames[platformKey] || defaultPlatformNameMap[platformKey] || platformKey || '当前平台';
 }
 
-async function searchSongsByKeyword(keyword, selectedPlatform) {
-    return searchSongsByKeywordPage(keyword, selectedPlatform, {
-        page: 1,
-        limit: searchApiLimit
-    });
+async function callBackupApi(params, options = {}) {
+    const timeoutMs = Number(options.timeoutMs || 15000);
+    const retries = Math.max(0, Number(options.retries || 1));
+    const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+            const url = new URL(BACKUP_API_BASE);
+            Object.entries(params || {}).forEach(([k, v]) => {
+                if (v !== undefined && v !== null && String(v) !== '') {
+                    url.searchParams.set(k, String(v));
+                }
+            });
+
+            const response = await externalFetch(url.toString(), { timeoutMs });
+            const text = await response.text();
+            const data = parseResponseText(text);
+            if (!response.ok) {
+                throw new Error(getApiErrorMessage(data, response.status, `备用源请求失败 (${response.status})`));
+            }
+            if (data && typeof data === 'object' && !Array.isArray(data) && data.detail) {
+                throw new Error(localizeErrorMessage(data.detail, '备用源请求失败'));
+            }
+            return data;
+        } catch (error) {
+            lastError = error;
+            if (attempt < retries) {
+                await wait(retryDelayMs);
+            }
+        }
+    }
+
+    throw lastError || new Error('备用源请求失败');
 }
 
-async function searchSongsByKeywordPage(keyword, selectedPlatform, options = {}) {
+async function searchSongsByKeywordPagePrimary(keyword, selectedPlatform, options = {}) {
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
     const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
-    const targets = platform ? [platform] : [];
-    if (targets.length === 0) {
+    if (!platform) {
         throw new Error('暂无可用平台');
     }
 
     const timeoutMs = 15000;
     const requestPage = Math.max(1, Number(options.page || 1));
     const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
-    const searchOnePlatform = async targetPlatform => {
-        const result = await callPlatformMethod(targetPlatform, 'search', {
-            keyword,
+    const result = await callPlatformMethod(platform, 'search', {
+        keyword,
+        page: requestPage,
+        limit: requestLimit
+    }, {
+        timeoutMs,
+        retries: 1,
+        retryDelayMs: 600
+    });
+    const list = Array.isArray(result) ? result : [];
+    return list.map(item => ({
+        id: String(item.id || ''),
+        name: item.name || '未知歌曲',
+        artist: item.artist || '未知歌手',
+        album: item.album || '',
+        source: platform,
+        platform,
+        cover: normalizeMediaUrl(item.cover || ''),
+        dataSource: 'primary',
+        backup: null
+    }));
+}
+
+async function searchSongsByKeywordPageBackup(keyword, selectedPlatform, options = {}) {
+    const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
+    const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
+    const backupSource = toBackupSource(platform);
+    if (!platform || !backupSource) {
+        return [];
+    }
+
+    const requestPage = Math.max(1, Number(options.page || 1));
+    const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
+    const data = await callBackupApi({
+        types: 'search',
+        source: backupSource,
+        name: keyword,
+        count: requestLimit,
+        pages: requestPage
+    }, {
+        timeoutMs: 15000,
+        retries: 1,
+        retryDelayMs: 600
+    });
+    const list = Array.isArray(data) ? data : [];
+    return list
+        .filter(item => item && item.id)
+        .map(item => normalizeBackupSong(item, platform, backupSource));
+}
+
+async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
+    const requestPage = Math.max(1, Number(options.page || 1));
+    const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
+    const forceProvider = String(options.provider || 'auto');
+    const silentFallback = Boolean(options.silentFallback);
+
+    if (forceProvider === 'primary') {
+        const songs = await searchSongsByKeywordPagePrimary(keyword, selectedPlatform, {
             page: requestPage,
             limit: requestLimit
-        }, {
-            timeoutMs,
-            retries: 1,
-            retryDelayMs: 600
         });
-        const list = Array.isArray(result) ? result : [];
-        return list.map(item => ({
-            id: String(item.id || ''),
-            name: item.name || '未知歌曲',
-            artist: item.artist || '未知歌手',
-            album: item.album || '',
-            source: targetPlatform,
-            platform: targetPlatform,
-            cover: normalizeMediaUrl(item.cover || '')
-        }));
-    };
+        return { songs, provider: 'primary' };
+    }
+    if (forceProvider === 'backup') {
+        const songs = await searchSongsByKeywordPageBackup(keyword, selectedPlatform, {
+            page: requestPage,
+            limit: requestLimit
+        });
+        return { songs, provider: 'backup' };
+    }
 
-    const tasks = targets.map(async platform => {
-        return searchOnePlatform(platform);
-    });
+    let primarySongs = [];
+    let primaryError = null;
+    try {
+        primarySongs = await searchSongsByKeywordPagePrimary(keyword, selectedPlatform, {
+            page: requestPage,
+            limit: requestLimit
+        });
+    } catch (error) {
+        primaryError = error;
+    }
 
-    const settled = await Promise.allSettled(tasks);
-    const songs = [];
-    let failed = 0;
-    settled.forEach(item => {
-        if (item.status === 'fulfilled') {
-            songs.push(...item.value);
-        } else {
-            failed += 1;
+    if (!primaryError && primarySongs.length > 0) {
+        return { songs: primarySongs, provider: 'primary' };
+    }
+
+    try {
+        const backupSongs = await searchSongsByKeywordPageBackup(keyword, selectedPlatform, {
+            page: requestPage,
+            limit: requestLimit
+        });
+        if (backupSongs.length > 0) {
+            if (!silentFallback) {
+                showToast(primaryError ? '主搜索异常，已自动切换备用源' : '主搜索无结果，已自动切换备用源', 'info');
+            }
+            return { songs: backupSongs, provider: 'backup' };
         }
-    });
-
-    if (failed > 0) {
-        showToast(`部分平台搜索失败（${failed}/${targets.length}）`, 'error');
+    } catch (backupError) {
+        if (primaryError) {
+            throw primaryError;
+        }
+        return { songs: [], provider: 'primary' };
     }
 
-    if (songs.length === 0 && failed > 0) {
-        throw new Error('平台响应超时或失败，请稍后重试');
+    if (primaryError) {
+        throw primaryError;
     }
-
-    return songs;
+    return { songs: [], provider: 'primary' };
 }
 
 function resetKeywordPagingState() {
@@ -598,18 +783,20 @@ function resetKeywordPagingState() {
         keyword: '',
         page: 0,
         limit: searchApiLimit,
+        provider: 'primary',
         hasMore: false,
         loading: false
     };
 }
 
-function enableKeywordPaging(keyword, platform, firstBatchCount) {
+function enableKeywordPaging(keyword, platform, firstBatchCount, provider = 'primary') {
     keywordPagingState = {
         enabled: true,
         platform: String(platform || ''),
         keyword: String(keyword || ''),
         page: 1,
         limit: searchApiLimit,
+        provider: String(provider || 'primary'),
         // Optimistic: allow trying "next" once at list end, then decide by actual response.
         hasMore: true,
         loading: false
@@ -640,14 +827,16 @@ async function loadNextKeywordPage() {
     keywordPagingState.loading = true;
     try {
         const nextPage = keywordPagingState.page + 1;
-        const songs = await searchSongsByKeywordPage(
+        const result = await searchSongsByKeyword(
             keywordPagingState.keyword,
             keywordPagingState.platform,
             {
                 page: nextPage,
-                limit: keywordPagingState.limit
+                limit: keywordPagingState.limit,
+                provider: keywordPagingState.provider
             }
         );
+        const songs = Array.isArray(result?.songs) ? result.songs : [];
 
         keywordPagingState.page = nextPage;
         if (songs.length < keywordPagingState.limit) {
@@ -671,6 +860,94 @@ async function loadNextKeywordPage() {
     }
 }
 
+function getSongByIndex(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= allSongs.length) return null;
+    return allSongs[index] || null;
+}
+
+async function fetchBackupPicUrl(song) {
+    if (!song || song.dataSource !== 'backup') return '';
+    const picId = String(song?.backup?.picId || '').trim();
+    if (!picId) return '';
+    const cacheKey = backupPicCacheKey(song);
+    if (backupPicCache.has(cacheKey)) {
+        return backupPicCache.get(cacheKey);
+    }
+
+    const backupSource = String(song?.backup?.source || '').trim();
+    if (!backupSource) return '';
+    const data = await callBackupApi({
+        types: 'pic',
+        source: backupSource,
+        id: picId,
+        size: 500
+    }, {
+        timeoutMs: 12000,
+        retries: 1,
+        retryDelayMs: 500
+    });
+    const url = normalizeMediaUrl(data?.url || '');
+    if (url) {
+        backupPicCache.set(cacheKey, url);
+    }
+    return url;
+}
+
+async function ensureBackupPlayableData(song, quality) {
+    if (!song || song.dataSource !== 'backup') {
+        throw new Error('备用歌曲数据无效');
+    }
+    const cacheKey = backupSongDataCacheKey(song, quality);
+    if (backupDataCache.has(cacheKey)) {
+        return backupDataCache.get(cacheKey);
+    }
+
+    const backupSource = String(song?.backup?.source || '').trim();
+    const trackId = String(song?.backup?.trackId || song?.id || '').trim();
+    const lyricId = String(song?.backup?.lyricId || trackId).trim();
+    if (!backupSource || !trackId) {
+        throw new Error('备用歌曲参数缺失');
+    }
+
+    const br = backupBrFromQuality(quality);
+    const [urlData, lyricData, coverUrl] = await Promise.all([
+        callBackupApi({
+            types: 'url',
+            source: backupSource,
+            id: trackId,
+            br
+        }, {
+            timeoutMs: 15000,
+            retries: 1,
+            retryDelayMs: 600
+        }),
+        callBackupApi({
+            types: 'lyric',
+            source: backupSource,
+            id: lyricId
+        }, {
+            timeoutMs: 12000,
+            retries: 1,
+            retryDelayMs: 500
+        }).catch(() => ({})),
+        fetchBackupPicUrl(song).catch(() => '')
+    ]);
+
+    const mediaUrl = normalizeMediaUrl(urlData?.url || '');
+    if (!mediaUrl) {
+        throw new Error('备用源未返回可播放链接');
+    }
+
+    const result = {
+        url: mediaUrl,
+        lyrics: String(lyricData?.lyric || ''),
+        cover: normalizeMediaUrl(coverUrl || song.cover || ''),
+        br: Number(urlData?.br || br)
+    };
+    backupDataCache.set(cacheKey, result);
+    return result;
+}
+
 async function fetchPlaylistSongs(platform, playlistId) {
     const result = await callPlatformMethod(platform, 'playlist', {
         id: playlistId
@@ -688,7 +965,9 @@ async function fetchPlaylistSongs(platform, playlistId) {
         album: song.album || '',
         source: platform,
         platform,
-        cover: normalizeMediaUrl(song.cover || '')
+        cover: normalizeMediaUrl(song.cover || ''),
+        dataSource: 'primary',
+        backup: null
     }));
 }
 
@@ -714,9 +993,12 @@ async function search() {
                 return;
             }
 
-            const songs = await searchSongsByKeyword(input, platform);
+            const { songs, provider } = await searchSongsByKeyword(input, platform, {
+                page: 1,
+                limit: searchApiLimit
+            });
             if (songs.length > 0) {
-                enableKeywordPaging(input, platform, songs.length);
+                enableKeywordPaging(input, platform, songs.length, provider);
                 displaySongsWithPagination(songs);
             } else {
                 resultsDiv.innerHTML = `<div class="empty-state">${platformDisplayName(platform)}没有结果，请切换其他平台检索</div>`;
@@ -786,8 +1068,8 @@ function renderLocalPage() {
                 </div>
                 <div>
                     <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">▶</button>
-                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}')">＋</button>
-                    <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}')">下载</button>
+                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">＋</button>
+                    <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
                 </div>
             </div>
             <div class="inline-lyrics" id="inline-lyrics-${globalIndex}"></div>
@@ -866,6 +1148,18 @@ function hydrateMissingCovers(pageSongs, startIndex) {
             }
         };
 
+        if (song.dataSource === 'backup') {
+            try {
+                const coverUrl = await fetchBackupPicUrl(song);
+                if (coverUrl) {
+                    setCover(coverUrl);
+                }
+            } catch {
+                // ignore backup cover errors
+            }
+            return;
+        }
+
         // 不消耗积分的补全方式：网易云优先读取公开 H5 元数据。
         if (platform === 'netease') {
             try {
@@ -882,14 +1176,25 @@ function hydrateMissingCovers(pageSongs, startIndex) {
 }
 
 // 下载单曲
-async function downloadSong(source, id, name, artist) {
+async function downloadSong(source, id, name, artist, index = null) {
     try {
         const quality = document.getElementById('quality').value;
-        const parsed = await ensureParsedSong(source, id, quality);
-        if (!parsed.url) {
-            throw new Error(localizeErrorMessage(parsed.error, '未获取到下载链接'));
+        const runtimeSong = getSongByIndex(Number(index));
+        let mediaUrl = '';
+        if (runtimeSong?.dataSource === 'backup') {
+            const backupData = await ensureBackupPlayableData(runtimeSong, quality);
+            mediaUrl = normalizeMediaUrl(backupData.url || '');
+            if (!mediaUrl) {
+                throw new Error('备用源未获取到下载链接');
+            }
+        } else {
+            const parsed = await ensureParsedSong(source, id, quality);
+            mediaUrl = normalizeMediaUrl(parsed?.url || '');
+            if (!mediaUrl) {
+                throw new Error(localizeErrorMessage(parsed?.error, '未获取到下载链接'));
+            }
         }
-        const url = buildMediaProxyUrl(parsed.url, {
+        const url = buildMediaProxyUrl(mediaUrl, {
             download: true,
             filename: buildDownloadFilename(name, artist)
         });
@@ -964,7 +1269,17 @@ function bindSongMeta(song) {
         platform: String(song.platform || song.source || ''),
         cover: String(song.cover || ''),
         lyricsRaw: String(song.lyricsRaw || ''),
-        lyrics: Array.isArray(song.lyrics) ? song.lyrics : []
+        lyrics: Array.isArray(song.lyrics) ? song.lyrics : [],
+        dataSource: song.dataSource === 'backup' ? 'backup' : 'primary',
+        backup: song?.backup && typeof song.backup === 'object'
+            ? {
+                source: String(song.backup.source || ''),
+                trackId: String(song.backup.trackId || ''),
+                urlId: String(song.backup.urlId || ''),
+                lyricId: String(song.backup.lyricId || ''),
+                picId: String(song.backup.picId || '')
+            }
+            : null
     };
     currentLyrics = currentPlayingSong.lyrics;
     updateFullPlayerMeta();
@@ -973,6 +1288,7 @@ function bindSongMeta(song) {
 async function playSongCore(source, id, name, artist, options = {}) {
     const quality = document.getElementById('quality').value;
     const inlineIndex = Number.isInteger(options.inlineIndex) ? options.inlineIndex : null;
+    const runtimeSong = options.song || (inlineIndex !== null ? getSongByIndex(inlineIndex) : null);
     const btn = inlineIndex !== null ? document.querySelector(`button[data-index="${inlineIndex}"]`) : null;
     const player = inlineIndex !== null ? document.getElementById(`player-${inlineIndex}`) : null;
     const inlineLyrics = inlineIndex !== null ? document.getElementById(`inline-lyrics-${inlineIndex}`) : null;
@@ -1003,15 +1319,37 @@ async function playSongCore(source, id, name, artist, options = {}) {
     if (btn) btn.disabled = true;
 
     try {
-        const parsed = await ensureParsedSong(source, id, quality);
-        if (playRequestId !== activePlayRequestId) return;
-        if (!parsed.url) {
-            throw new Error(localizeErrorMessage(parsed.error, '未获取到播放链接'));
+        const isBackupSong = runtimeSong?.dataSource === 'backup';
+        let mediaUrl = '';
+        let rawCover = '';
+        let lyricsRaw = '';
+        let backupMeta = null;
+        let songPlatform = source;
+
+        if (isBackupSong) {
+            const backupData = await ensureBackupPlayableData(runtimeSong, quality);
+            if (playRequestId !== activePlayRequestId) return;
+            mediaUrl = normalizeMediaUrl(backupData.url || '');
+            if (!mediaUrl) {
+                throw new Error('备用源未获取到播放链接');
+            }
+            rawCover = normalizeMediaUrl(runtimeSong.cover || backupData.cover || options.cover || '');
+            lyricsRaw = String(backupData.lyrics || '');
+            songPlatform = String(runtimeSong.platform || runtimeSong.source || source);
+            backupMeta = runtimeSong.backup || null;
+        } else {
+            const parsed = await ensureParsedSong(source, id, quality);
+            if (playRequestId !== activePlayRequestId) return;
+            mediaUrl = normalizeMediaUrl(parsed?.url || '');
+            if (!mediaUrl) {
+                throw new Error(localizeErrorMessage(parsed?.error, '未获取到播放链接'));
+            }
+            rawCover = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || options.cover || '');
+            lyricsRaw = String(parsed.lyrics || '');
         }
 
         resetInlinePlaybackUi(inlineIndex);
 
-        const rawCover = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || options.cover || '');
         const parsedCoverUrl = getProxiedCoverUrl(rawCover);
         if (parsedCoverUrl && inlineIndex !== null) {
             const coverImg = document.getElementById(`cover-${inlineIndex}`);
@@ -1021,12 +1359,12 @@ async function playSongCore(source, id, name, artist, options = {}) {
             }
         }
 
-        const parsedLyrics = parseLyrics(parsed.lyrics || '');
+        const parsedLyrics = parseLyrics(lyricsRaw);
         if (inlineLyrics) {
             inlineLyrics.textContent = parsedLyrics.length > 0 ? parsedLyrics[0].text : '';
         }
 
-        const playUrl = buildMediaProxyUrl(parsed.url);
+        const playUrl = buildMediaProxyUrl(mediaUrl);
         if (!playUrl) {
             throw new Error('播放链接无效');
         }
@@ -1048,10 +1386,12 @@ async function playSongCore(source, id, name, artist, options = {}) {
             id,
             name,
             artist,
-            platform: source,
+            platform: songPlatform,
             cover: rawCover,
-            lyricsRaw: parsed.lyrics || '',
-            lyrics: parsedLyrics
+            lyricsRaw,
+            lyrics: parsedLyrics,
+            dataSource: isBackupSong ? 'backup' : 'primary',
+            backup: backupMeta
         });
 
         audio.src = playUrl;
@@ -1076,11 +1416,13 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
 // 播放歌曲
 async function playSong(source, id, name, artist, index) {
+    const runtimeSong = getSongByIndex(Number(index));
     const queueIndex = findPlaylistIndex(source, id);
     currentPlaylistIndex = queueIndex;
     renderPlaylistSheet();
     await playSongCore(source, id, name, artist, {
-        inlineIndex: index
+        inlineIndex: index,
+        song: runtimeSong
     });
 }
 
@@ -1236,7 +1578,17 @@ function loadPlaylistFromStorage() {
                 album: String(item.album || ''),
                 platform: String(item.platform || ''),
                 source: String(item.platform || ''),
-                cover: normalizeMediaUrl(item.cover || '')
+                cover: normalizeMediaUrl(item.cover || ''),
+                dataSource: item.dataSource === 'backup' ? 'backup' : 'primary',
+                backup: item?.backup && typeof item.backup === 'object'
+                    ? {
+                        source: String(item.backup.source || ''),
+                        trackId: String(item.backup.trackId || ''),
+                        urlId: String(item.backup.urlId || ''),
+                        lyricId: String(item.backup.lyricId || ''),
+                        picId: String(item.backup.picId || '')
+                    }
+                    : null
             }));
     } catch {
         return [];
@@ -1547,9 +1899,10 @@ function updateFullPlayerLyric(currentTime) {
     nextLyricEl.textContent = currentLyrics[activeIndex + 1]?.text || '';
 }
 
-function addSongToPlaylist(source, id, name, artist, album = '', cover = '') {
+function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
     const platform = String(source || '').trim();
     const songId = String(id || '').trim();
+    const runtimeSong = getSongByIndex(Number(index));
     if (!platform || !songId) return;
     const exists = findPlaylistIndex(platform, songId);
     if (exists >= 0) {
@@ -1566,7 +1919,17 @@ function addSongToPlaylist(source, id, name, artist, album = '', cover = '') {
         album: String(album || ''),
         platform,
         source: platform,
-        cover: normalizeMediaUrl(cover || '')
+        cover: normalizeMediaUrl(runtimeSong?.cover || cover || ''),
+        dataSource: runtimeSong?.dataSource === 'backup' ? 'backup' : 'primary',
+        backup: runtimeSong?.backup && typeof runtimeSong.backup === 'object'
+            ? {
+                source: String(runtimeSong.backup.source || ''),
+                trackId: String(runtimeSong.backup.trackId || ''),
+                urlId: String(runtimeSong.backup.urlId || ''),
+                lyricId: String(runtimeSong.backup.lyricId || ''),
+                picId: String(runtimeSong.backup.picId || '')
+            }
+            : null
     });
     savePlaylistToStorage();
     renderPlaylistSheet();
@@ -1580,7 +1943,8 @@ async function playSongFromPlaylist(index) {
     renderPlaylistSheet();
     await playSongCore(item.platform || item.source, item.id, item.name, item.artist, {
         inlineIndex: null,
-        cover: item.cover
+        cover: item.cover,
+        song: item
     });
 }
 
