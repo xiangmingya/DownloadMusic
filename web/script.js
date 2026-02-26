@@ -1265,7 +1265,7 @@ async function fetchSongByIdBackup(platform, songId, quality) {
     return song;
 }
 
-async function fetchSongByIdBackup3(platform, songId) {
+async function fetchSongByIdBackup3Direct(platform, songId) {
     const primaryPlatform = toPrimaryPlatform(platform);
     const backup3Source = toBackup3Source(primaryPlatform);
     const id = String(songId || '').trim();
@@ -1296,6 +1296,85 @@ async function fetchSongByIdBackup3(platform, songId) {
     return song;
 }
 
+function sortBackup3Candidates(candidates, options = {}) {
+    const requestedId = String(options.requestedId || '').trim();
+    const preferredArtist = String(options.preferredArtist || '').trim().toLowerCase();
+    const preferredKeyword = String(options.preferredKeyword || '').trim().toLowerCase();
+    return [...(Array.isArray(candidates) ? candidates : [])].sort((a, b) => {
+        const calc = (item) => {
+            const cid = String(item?.backup3?.trackId || item?.id || '').trim();
+            const name = String(item?.name || '').trim().toLowerCase();
+            const artist = String(item?.artist || '').trim().toLowerCase();
+            let score = 0;
+            if (requestedId && cid === requestedId) score += 6;
+            if (preferredKeyword && name === preferredKeyword) score += 3;
+            if (preferredKeyword && name.includes(preferredKeyword)) score += 1;
+            if (preferredArtist && artist.includes(preferredArtist)) score += 2;
+            return score;
+        };
+        return calc(b) - calc(a);
+    });
+}
+
+async function fetchSongByIdBackup3(platform, songId, options = {}) {
+    const id = String(songId || '').trim();
+    if (!id) return null;
+
+    const direct = await fetchSongByIdBackup3Direct(platform, id).catch(() => null);
+    if (direct) return direct;
+
+    const keyword = String(options.keyword || '').trim();
+    if (!keyword) return null;
+
+    const candidates = await searchSongsByKeywordPageBackup3(keyword, platform, {
+        page: 1,
+        limit: 8
+    }).catch(() => []);
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+        return null;
+    }
+
+    const ordered = sortBackup3Candidates(candidates, {
+        requestedId: id,
+        preferredArtist: options.artist || '',
+        preferredKeyword: keyword
+    });
+    const tried = new Set([id]);
+
+    for (const candidate of ordered) {
+        const candidateId = String(candidate?.backup3?.trackId || candidate?.id || '').trim();
+        if (!candidateId || tried.has(candidateId)) continue;
+        tried.add(candidateId);
+
+        const resolved = await fetchSongByIdBackup3Direct(platform, candidateId).catch(() => null);
+        if (!resolved) continue;
+
+        const merged = {
+            ...resolved,
+            id,
+            name: String(options.songName || resolved.name || candidate.name || keyword),
+            artist: String(options.songArtist || resolved.artist || candidate.artist || ''),
+            cover: normalizeMediaUrl(resolved.cover || candidate.cover || ''),
+            backup3: {
+                ...(resolved.backup3 || {}),
+                trackId: String(resolved?.backup3?.trackId || candidateId)
+            }
+        };
+
+        const payload = {
+            url: normalizeMediaUrl(merged?.backup3?.streamUrl || ''),
+            lyrics: String(merged?.backup3?.lyric || ''),
+            cover: normalizeMediaUrl(merged?.cover || '')
+        };
+        if (payload.url) {
+            backup3DataCache.set(backup3DataCacheKey(merged), payload);
+            return merged;
+        }
+    }
+
+    return null;
+}
+
 async function ensureBackup3PlayableData(song) {
     if (!song || song.dataSource !== 'backup3') {
         throw new Error('备用源3歌曲数据无效');
@@ -1308,19 +1387,44 @@ async function ensureBackup3PlayableData(song) {
     let url = normalizeMediaUrl(song?.backup3?.streamUrl || '');
     let lyrics = String(song?.backup3?.lyric || '');
     let cover = normalizeMediaUrl(song?.cover || '');
+    let refreshedSong = null;
 
     if (!url) {
-        const refreshed = await fetchSongByIdBackup3(song.platform || song.source, song.id).catch(() => null);
-        url = normalizeMediaUrl(refreshed?.backup3?.streamUrl || '');
-        lyrics = String(refreshed?.backup3?.lyric || lyrics || '');
-        cover = normalizeMediaUrl(refreshed?.cover || cover || '');
+        const targetId = String(song?.backup3?.trackId || song?.id || '').trim();
+        refreshedSong = await fetchSongByIdBackup3(song.platform || song.source, targetId, {
+            keyword: song?.name || '',
+            artist: song?.artist || '',
+            songName: song?.name || '',
+            songArtist: song?.artist || ''
+        }).catch(() => null);
+        url = normalizeMediaUrl(refreshedSong?.backup3?.streamUrl || '');
+        lyrics = String(refreshedSong?.backup3?.lyric || lyrics || '');
+        cover = normalizeMediaUrl(refreshedSong?.cover || cover || '');
     }
     if (!url) {
         throw new Error('备用源3未获取到播放链接');
     }
 
+    if (refreshedSong?.backup3 && song) {
+        song.backup3 = {
+            ...(song.backup3 || {}),
+            ...refreshedSong.backup3,
+            streamUrl: normalizeMediaUrl(refreshedSong?.backup3?.streamUrl || song?.backup3?.streamUrl || ''),
+            lyric: String(refreshedSong?.backup3?.lyric || song?.backup3?.lyric || '')
+        };
+    }
+    if (cover && song) {
+        song.cover = cover;
+    }
+
     const result = { url, lyrics, cover };
     backup3DataCache.set(cacheKey, result);
+    if (refreshedSong) {
+        const refreshedCacheKey = backup3DataCacheKey(refreshedSong);
+        if (refreshedCacheKey && refreshedCacheKey !== cacheKey) {
+            backup3DataCache.set(refreshedCacheKey, result);
+        }
+    }
     return result;
 }
 

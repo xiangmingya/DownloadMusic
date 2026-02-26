@@ -1152,6 +1152,15 @@ function normalizeQqBackup3ParseToList(parsed) {
   }];
 }
 
+function getBackup3PayloadMessage(payload, fallback = "备用源3请求失败") {
+  return String(
+    payload?.errMsg
+    || payload?.error
+    || payload?.message
+    || fallback,
+  );
+}
+
 async function handleBackup3(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
@@ -1182,6 +1191,7 @@ async function handleBackup3(request, env) {
       let text = "";
       let parsed = null;
       let data = [];
+      let payloadOk = false;
 
       if (filter === "name") {
         const requestLimit = 20;
@@ -1196,30 +1206,32 @@ async function handleBackup3(request, env) {
         parsed = result.parsed;
         const rawList = Array.isArray(parsed?.data?.list) ? parsed.data.list : [];
         data = normalizeQqBackup3SearchList(rawList);
+        payloadOk = Number(parsed?.result) === 100;
       } else {
         const result = await callQqBackup3ParseBySongmid(input);
         response = result.response;
         text = result.text;
         parsed = result.parsed;
         data = normalizeQqBackup3ParseToList(parsed);
+        payloadOk = Boolean(parsed?.success) && data.length > 0;
       }
 
-      if (response.ok && parsed && typeof parsed === "object") {
+      if (response.ok && parsed && typeof parsed === "object" && payloadOk) {
         return jsonResponse(200, {
           code: 200,
-          message: String(parsed?.errMsg || parsed?.message || "Success"),
+          message: getBackup3PayloadMessage(parsed, "Success"),
           data,
         }, {
           "Cache-Control": "no-store",
         });
       }
 
-      lastStatus = response.status || 502;
+      lastStatus = response.ok ? 502 : (response.status || 502);
       lastPayload = parsed && typeof parsed === "object"
         ? parsed
         : { code: -1, message: text || `备用源3请求失败 (${lastStatus})` };
 
-      const canRetry = response.status >= 500 || response.status === 429;
+      const canRetry = response.status >= 500 || response.status === 429 || response.ok;
       if (canRetry && attempt < maxAttempts - 1) {
         await sleep(250 * (attempt + 1));
         continue;
@@ -1236,8 +1248,8 @@ async function handleBackup3(request, env) {
   }
 
   return jsonResponse(lastStatus, {
-    code: Number(lastPayload?.code ?? -1),
-    message: String(lastPayload?.error || lastPayload?.message || "备用源3请求失败"),
+    code: Number(lastPayload?.code ?? lastPayload?.result ?? -1),
+    message: getBackup3PayloadMessage(lastPayload, "备用源3请求失败"),
     data: [],
   });
 }
