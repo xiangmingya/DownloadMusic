@@ -18,7 +18,7 @@ custom_domain = true
 
 [vars]
 # 静态前端域名白名单（用于 CORS，支持逗号分隔多个）
-ALLOWED_ORIGINS = "https://music-t9apk03g.maozi.io,https://zodyr0w32-music-t9apk03g.maozi.io,https://music.xiangming.site"
+ALLOWED_ORIGINS = "https://music-t9apk03g.maozi.io,https://zodyr0w32-music-t9apk03g.maozi.io,https://music.xiangming.site,https://music.621888.xyz"
 
 # Linux DO 端点（可不改）
 LINUXDO_AUTHORIZATION_ENDPOINT = "https://connect.linux.do/oauth2/authorize"
@@ -27,7 +27,7 @@ LINUXDO_USER_ENDPOINT = "https://connect.linux.do/api/user"
 LINUXDO_SCOPE = "openid profile"
 
 # 回调后跳转前端白名单（支持逗号分隔多个，建议填首页）
-FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/,https://music.xiangming.site/"
+FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/,https://music.xiangming.site/,https://music.621888.xyz/"
 
 # 媒体代理白名单（可选，逗号分隔；留空表示允许任意公网域名）
 MEDIA_PROXY_ALLOWED_HOSTS = ".kuwo.cn,.kwcdn.kuwo.cn,.qq.com,.music.163.com,.music.126.net"
