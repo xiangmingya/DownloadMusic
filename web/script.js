@@ -730,22 +730,36 @@ async function checkStatus() {
 }
 
 // 更新平台下拉框
-function updatePlatformSelect() {
+function updatePlatformSelect(options = {}) {
+    const forceKeywordDefault = Boolean(options?.forceKeywordDefault);
     const platformSelect = document.getElementById('platform');
+    const searchModeEl = document.getElementById('searchMode');
+    const searchMode = String(searchModeEl?.value || 'keyword').trim();
+    const allowAll = searchMode === 'keyword';
     supportedPlatforms = supportedPlatforms.filter(key => PRIMARY_ALLOWED_PLATFORMS.includes(String(key)));
     if (supportedPlatforms.length === 0) {
         supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
     }
     const current = String(platformSelect.value || '').trim();
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
-    const selected = (current === PLATFORM_ALL_VALUE || supportedPlatforms.includes(current)) ? current : fallback;
+    let selected = fallback;
+    if (allowAll) {
+        selected = forceKeywordDefault
+            ? PLATFORM_ALL_VALUE
+            : ((current === PLATFORM_ALL_VALUE || supportedPlatforms.includes(current)) ? current : PLATFORM_ALL_VALUE);
+    } else if (supportedPlatforms.includes(current)) {
+        selected = current;
+    }
 
-    const optionHtml = [
-        `<option value="${PLATFORM_ALL_VALUE}"${selected === PLATFORM_ALL_VALUE ? ' selected' : ''}>全部</option>`,
+    const optionHtml = [];
+    if (allowAll) {
+        optionHtml.push(`<option value="${PLATFORM_ALL_VALUE}"${selected === PLATFORM_ALL_VALUE ? ' selected' : ''}>全部</option>`);
+    }
+    optionHtml.push(
         ...supportedPlatforms.map(key =>
             `<option value="${key}"${key === selected ? ' selected' : ''}>${platformNames[key] || key}</option>`
         )
-    ];
+    );
     platformSelect.innerHTML = optionHtml.join('');
 }
 
@@ -943,22 +957,51 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
         const providerMap = {};
         const errors = [];
 
-        for (const platform of platforms) {
+        const platformTasks = platforms.map(platform => {
             const providerForPlatform = providerMapInput?.[platform]
                 || (forceProvider === 'multi' ? 'auto' : forceProvider);
-            try {
-                const result = await searchSongsByKeyword(keyword, platform, {
+            const task = searchSongsByKeyword(keyword, platform, {
                     page: requestPage,
                     limit: Math.min(requestLimit, searchApiLimit),
                     provider: providerForPlatform,
                     silentFallback: true
-                });
-                providerMap[platform] = String(result?.provider || providerForPlatform || 'primary');
+                })
+                .then(result => ({
+                    platform,
+                    providerForPlatform,
+                    ok: true,
+                    result
+                }))
+                .catch(error => ({
+                    platform,
+                    providerForPlatform,
+                    ok: false,
+                    error
+                }));
+            return { platform, task };
+        });
+
+        const pending = new Set(platformTasks);
+        while (pending.size > 0) {
+            const raceResult = await Promise.race(
+                Array.from(pending).map(({ platform, task }) =>
+                    task.then(payload => ({ platform, payload }))
+                )
+            );
+            const doneEntry = Array.from(pending).find(item => item.platform === raceResult.platform);
+            if (doneEntry) {
+                pending.delete(doneEntry);
+            }
+
+            const { payload } = raceResult;
+            if (payload.ok) {
+                const result = payload.result;
+                providerMap[payload.platform] = String(result?.provider || payload.providerForPlatform || 'primary');
                 if (Array.isArray(result?.songs) && result.songs.length > 0) {
                     mergedSongs.push(...result.songs);
                 }
-            } catch (error) {
-                errors.push(error);
+            } else {
+                errors.push(payload.error);
             }
         }
 
@@ -3095,7 +3138,8 @@ document.querySelectorAll('.type-btn').forEach(btn => {
 });
 
 function updatePlatformSelector() {
-    updatePlatformSelect();
+    const searchMode = String(document.getElementById('searchMode')?.value || 'keyword').trim();
+    updatePlatformSelect({ forceKeywordDefault: searchMode === 'keyword' });
 }
 
 document.getElementById('searchMode').addEventListener('change', updatePlatformSelector);
