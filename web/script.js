@@ -166,9 +166,23 @@ function setButtonIcon(buttonEl, iconName, size = 18) {
     buttonEl.innerHTML = getIconSvg(iconName, size);
 }
 
+function buildTurntableFabIcon() {
+    return [
+        '<span class="turntable-icon" aria-hidden="true">',
+        '  <span class="turntable-arm"></span>',
+        '  <span class="turntable-disc">',
+        '    <span class="turntable-disc-label"></span>',
+        '  </span>',
+        '</span>'
+    ].join('');
+}
+
 function initStaticIcons() {
     setButtonIcon(document.getElementById('playlistFabBtn'), 'menu', 22);
-    setButtonIcon(document.getElementById('playerFabBtn'), 'record', 22);
+    const playerFabBtn = document.getElementById('playerFabBtn');
+    if (playerFabBtn) {
+        playerFabBtn.innerHTML = buildTurntableFabIcon();
+    }
 
     setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 19);
 
