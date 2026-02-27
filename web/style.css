@@ -838,12 +838,27 @@ footer {
     gap: 8px;
 }
 
-.add-playlist-btn {
-    padding: 8px 12px;
-    min-width: 42px;
+.song-header > div:last-child button {
+    width: 44px;
+    min-width: 44px;
+    height: 34px;
+    padding: 0;
+    margin-left: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     letter-spacing: 0;
-    font-size: 16px;
     line-height: 1;
+    font-size: 13px;
+}
+
+.song-header > div:last-child .play-btn-item,
+.song-header > div:last-child .add-playlist-btn {
+    font-size: 16px;
+}
+
+.add-playlist-btn {
+    font-size: 16px;
 }
 
 .floating-dock {
