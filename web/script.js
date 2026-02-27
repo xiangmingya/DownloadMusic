@@ -9,6 +9,7 @@ const API_ROUTES = {
     backup3: `${API_BASE}/backup3`
 };
 const PRIMARY_ALLOWED_PLATFORMS = ['netease', 'qq', 'kuwo'];
+const PLATFORM_ALL_VALUE = 'all';
 const BACKUP_SOURCE_MAP = {
     netease: 'netease',
     qq: 'tencent',
@@ -45,6 +46,7 @@ let keywordPagingState = {
     page: 0,
     limit: searchApiLimit,
     provider: 'primary',
+    providerMap: null,
     hasMore: false,
     loading: false
 };
@@ -736,15 +738,27 @@ function updatePlatformSelect() {
     }
     const current = String(platformSelect.value || '').trim();
     const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
-    const selected = supportedPlatforms.includes(current) ? current : fallback;
+    const selected = (current === PLATFORM_ALL_VALUE || supportedPlatforms.includes(current)) ? current : fallback;
 
-    platformSelect.innerHTML = supportedPlatforms.map(key =>
-        `<option value="${key}"${key === selected ? ' selected' : ''}>${platformNames[key] || key}</option>`
-    ).join('');
+    const optionHtml = [
+        `<option value="${PLATFORM_ALL_VALUE}"${selected === PLATFORM_ALL_VALUE ? ' selected' : ''}>全部</option>`,
+        ...supportedPlatforms.map(key =>
+            `<option value="${key}"${key === selected ? ' selected' : ''}>${platformNames[key] || key}</option>`
+        )
+    ];
+    platformSelect.innerHTML = optionHtml.join('');
 }
 
 function platformDisplayName(platformKey) {
+    if (String(platformKey || '').trim() === PLATFORM_ALL_VALUE) {
+        return '全部平台';
+    }
     return platformNames[platformKey] || defaultPlatformNameMap[platformKey] || platformKey || '当前平台';
+}
+
+function getAvailableSearchPlatforms() {
+    const filtered = supportedPlatforms.filter(key => PRIMARY_ALLOWED_PLATFORMS.includes(String(key)));
+    return filtered.length > 0 ? filtered : [...PRIMARY_ALLOWED_PLATFORMS];
 }
 
 async function callBackupApi(params, options = {}) {
@@ -916,6 +930,48 @@ async function searchSongsByKeywordPageBackup3(keyword, selectedPlatform, option
 }
 
 async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
+    const normalizedSelectedPlatform = String(selectedPlatform || '').trim().toLowerCase();
+    if (normalizedSelectedPlatform === PLATFORM_ALL_VALUE) {
+        const requestPage = Math.max(1, Number(options.page || 1));
+        const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
+        const forceProvider = String(options.provider || 'auto');
+        const providerMapInput = (options.providerMap && typeof options.providerMap === 'object')
+            ? options.providerMap
+            : null;
+        const platforms = getAvailableSearchPlatforms();
+        const mergedSongs = [];
+        const providerMap = {};
+        const errors = [];
+
+        for (const platform of platforms) {
+            const providerForPlatform = providerMapInput?.[platform]
+                || (forceProvider === 'multi' ? 'auto' : forceProvider);
+            try {
+                const result = await searchSongsByKeyword(keyword, platform, {
+                    page: requestPage,
+                    limit: Math.min(requestLimit, searchApiLimit),
+                    provider: providerForPlatform,
+                    silentFallback: true
+                });
+                providerMap[platform] = String(result?.provider || providerForPlatform || 'primary');
+                if (Array.isArray(result?.songs) && result.songs.length > 0) {
+                    mergedSongs.push(...result.songs);
+                }
+            } catch (error) {
+                errors.push(error);
+            }
+        }
+
+        const songs = mergeSongsWithoutDuplicates([], mergedSongs);
+        if (songs.length > 0) {
+            return { songs, provider: 'multi', providerMap };
+        }
+        if (errors.length >= platforms.length && errors[0]) {
+            throw errors[0];
+        }
+        return { songs: [], provider: 'multi', providerMap };
+    }
+
     const requestPage = Math.max(1, Number(options.page || 1));
     const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
     const forceProvider = String(options.provider || 'auto');
@@ -1007,21 +1063,29 @@ function resetKeywordPagingState() {
         page: 0,
         limit: searchApiLimit,
         provider: 'primary',
+        providerMap: null,
         hasMore: false,
         loading: false
     };
 }
 
-function enableKeywordPaging(keyword, platform, firstBatchCount, provider = 'primary') {
+function enableKeywordPaging(keyword, platform, firstBatchCount, provider = 'primary', extra = {}) {
     const normalizedProvider = String(provider || 'primary');
-    const effectiveLimit = normalizedProvider === 'backup3' ? 10 : searchApiLimit;
+    const normalizedPlatform = String(platform || '').trim();
+    const isAllPlatform = normalizedPlatform === PLATFORM_ALL_VALUE;
+    const platformCount = isAllPlatform ? getAvailableSearchPlatforms().length : 1;
+    const effectiveLimitBase = normalizedProvider === 'backup3' ? 10 : searchApiLimit;
+    const effectiveLimit = Math.max(1, effectiveLimitBase * Math.max(1, platformCount));
     keywordPagingState = {
         enabled: true,
-        platform: String(platform || ''),
+        platform: normalizedPlatform,
         keyword: String(keyword || ''),
         page: 1,
         limit: effectiveLimit,
         provider: normalizedProvider,
+        providerMap: (extra?.providerMap && typeof extra.providerMap === 'object')
+            ? { ...extra.providerMap }
+            : null,
         // Optimistic: allow trying "next" once at list end, then decide by actual response.
         hasMore: true,
         loading: false
@@ -1058,13 +1122,22 @@ async function loadNextKeywordPage() {
             {
                 page: nextPage,
                 limit: keywordPagingState.limit,
-                provider: keywordPagingState.provider
+                provider: keywordPagingState.provider,
+                providerMap: keywordPagingState.providerMap || undefined
             }
         );
         const songs = Array.isArray(result?.songs) ? result.songs : [];
+        if (result?.providerMap && typeof result.providerMap === 'object') {
+            keywordPagingState.providerMap = { ...result.providerMap };
+        }
 
         keywordPagingState.page = nextPage;
-        if (songs.length < keywordPagingState.limit) {
+        const isAllPlatform = String(keywordPagingState.platform || '') === PLATFORM_ALL_VALUE;
+        if (isAllPlatform) {
+            if (songs.length === 0) {
+                keywordPagingState.hasMore = false;
+            }
+        } else if (songs.length < keywordPagingState.limit) {
             keywordPagingState.hasMore = false;
         }
         if (songs.length === 0) {
@@ -1677,9 +1750,15 @@ async function search() {
     if (!input) return;
 
     const searchMode = document.getElementById('searchMode').value;
-    const platform = document.getElementById('platform').value;
+    const selectedPlatform = document.getElementById('platform').value;
+    let platform = selectedPlatform;
     const quality = document.getElementById('quality').value;
     const resultsDiv = document.getElementById('results');
+
+    if (searchMode !== 'keyword' && String(platform) === PLATFORM_ALL_VALUE) {
+        platform = supportedPlatforms.includes('netease') ? 'netease' : (supportedPlatforms[0] || 'netease');
+        showToast(`当前模式不支持“全部”，已切换到${platformDisplayName(platform)}`, 'info');
+    }
 
     resultsDiv.innerHTML = '<div class="empty-state">検索中...</div>';
 
@@ -1693,15 +1772,18 @@ async function search() {
                 return;
             }
 
-            const { songs, provider } = await searchSongsByKeyword(input, platform, {
+            const { songs, provider, providerMap } = await searchSongsByKeyword(input, platform, {
                 page: 1,
                 limit: searchApiLimit
             });
             if (songs.length > 0) {
-                enableKeywordPaging(input, platform, songs.length, provider);
+                enableKeywordPaging(input, platform, songs.length, provider, { providerMap });
                 displaySongsWithPagination(songs);
             } else {
-                resultsDiv.innerHTML = `<div class="empty-state">${platformDisplayName(platform)}没有结果，请切换其他平台检索</div>`;
+                const emptyMessage = String(platform) === PLATFORM_ALL_VALUE
+                    ? '全部平台没有结果，请换关键词重试'
+                    : `${platformDisplayName(platform)}没有结果，请切换其他平台检索`;
+                resultsDiv.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
             }
             return;
         }
