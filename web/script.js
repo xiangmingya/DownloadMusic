@@ -29,9 +29,9 @@ const defaultPlatformNameMap = {
     migu: '咪咕音乐'
 };
 const sourceNameMap = {
-    primary: 'TuneHub API',
-    backup: 'GDStudio API',
-    backup3: '雨糖小屋 QQ API'
+    primary: 'TuneHub',
+    backup: 'GDStudio',
+    backup3: '雨糖'
 };
 
 let platformNames = { ...defaultPlatformNameMap };
