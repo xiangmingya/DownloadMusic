@@ -169,7 +169,6 @@ function setButtonIcon(buttonEl, iconName, size = 18) {
 function buildTurntableFabIcon() {
     return [
         '<span class="turntable-icon" aria-hidden="true">',
-        '  <span class="turntable-arm"></span>',
         '  <span class="turntable-disc">',
         '    <span class="turntable-disc-label"></span>',
         '  </span>',
