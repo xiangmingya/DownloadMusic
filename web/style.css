@@ -250,6 +250,28 @@ button:hover {
     background: var(--jp-accent-hover);
 }
 
+.icon-park {
+    display: block;
+    width: 1em;
+    height: 1em;
+    color: currentColor;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.icon-park.solid {
+    fill: currentColor;
+    stroke: none;
+}
+
+button .icon-park {
+    pointer-events: none;
+}
+
 .search-type {
     display: flex;
     gap: 10px;
@@ -1127,12 +1149,15 @@ footer {
 
 .top-btn-icon {
     font-size: 20px;
-    line-height: 1;
+    line-height: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .full-player-close-btn .top-btn-icon {
-    font-size: 24px;
-    margin-top: -1px;
+    font-size: 20px;
+    margin-top: 0;
 }
 
 .full-player-main {
@@ -1257,9 +1282,11 @@ footer {
 }
 
 .full-player-controls .control-icon {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-size: 24px;
-    line-height: 1;
+    line-height: 0;
 }
 
 .full-player-controls .control-text {

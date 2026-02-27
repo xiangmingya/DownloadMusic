@@ -123,6 +123,69 @@ function normalizeMediaUrl(url) {
     return u;
 }
 
+// IconPark-style inline SVG icons (replace emoji/symbol icons).
+function getIconSvg(name, size = 18) {
+    const s = Math.max(12, Number(size || 18));
+    const base = (paths, cls = '') => {
+        const iconClass = `icon-park ${cls}`.trim();
+        return `<svg class="${iconClass}" viewBox="0 0 48 48" width="${s}" height="${s}" fill="none" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+    };
+    switch (String(name || '').trim()) {
+        case 'play':
+            return base('<path d="M18 12L36 24L18 36V12Z" fill="currentColor" stroke="none"/>', 'solid');
+        case 'pause':
+            return base('<path d="M16 12H22V36H16V12ZM26 12H32V36H26V12Z" fill="currentColor" stroke="none"/>', 'solid');
+        case 'plus':
+            return base('<path d="M24 10V38M10 24H38" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>');
+        case 'close':
+            return base('<path d="M12 12L36 36M36 12L12 36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>');
+        case 'prev':
+            return base('<path d="M14 12V36M34 12L18 24L34 36V12Z" fill="currentColor" stroke="none"/>', 'solid');
+        case 'next':
+            return base('<path d="M34 12V36M14 12L30 24L14 36V12Z" fill="currentColor" stroke="none"/>', 'solid');
+        case 'menu':
+            return base('<path d="M10 14H38M10 24H38M10 34H38" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>');
+        case 'record':
+            return base('<circle cx="24" cy="24" r="14" stroke="currentColor" stroke-width="3.5"/><circle cx="24" cy="24" r="4" fill="currentColor" stroke="none"/>');
+        case 'fullscreen-enter':
+            return base('<path d="M17 8H8V17M31 8H40V17M8 31V40H17M40 31V40H31" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>');
+        case 'fullscreen-exit':
+            return base('<path d="M17 19H8V8H19M31 19H40V8H29M8 40V29H19M40 40V29H29" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>');
+        default:
+            return base('<circle cx="24" cy="24" r="3" fill="currentColor" stroke="none"/>', 'solid');
+    }
+}
+
+function setIconHtml(el, iconName, size = 18) {
+    if (!el) return;
+    el.innerHTML = getIconSvg(iconName, size);
+}
+
+function setButtonIcon(buttonEl, iconName, size = 18) {
+    if (!buttonEl) return;
+    buttonEl.innerHTML = getIconSvg(iconName, size);
+}
+
+function initStaticIcons() {
+    setButtonIcon(document.getElementById('playlistFabBtn'), 'menu', 22);
+    setButtonIcon(document.getElementById('playerFabBtn'), 'record', 22);
+
+    setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 19);
+
+    const closeIconEl = document.querySelector('#fullPlayerCloseBtn .top-btn-icon');
+    setIconHtml(closeIconEl, 'close', 18);
+
+    const prevIconEl = document.querySelector('#fullPlayerPrevBtn .control-icon');
+    const toggleIconEl = document.getElementById('fullPlayerToggleIcon');
+    const nextIconEl = document.querySelector('#fullPlayerNextBtn .control-icon');
+    const queueIconEl = document.querySelector('#fullPlayerQueueBtn .control-icon');
+
+    setIconHtml(prevIconEl, 'prev', 20);
+    setIconHtml(toggleIconEl, 'play', 20);
+    setIconHtml(nextIconEl, 'next', 20);
+    setIconHtml(queueIconEl, 'menu', 19);
+}
+
 function buildMediaProxyUrl(rawUrl, options = {}) {
     const mediaUrl = normalizeMediaUrl(rawUrl);
     if (!mediaUrl) return '';
@@ -1924,8 +1987,8 @@ function renderLocalPage() {
                     </div>
                 </div>
                 <div>
-                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">▶</button>
-                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">＋</button>
+                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 16)}</button>
+                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 16)}</button>
                     <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
                 </div>
             </div>
@@ -2143,18 +2206,18 @@ function resetInlinePlaybackUi(keepIndex = null) {
     const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
     const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
     const oldInlineLyrics = document.getElementById(`inline-lyrics-${currentPlayingIndex}`);
-    if (oldBtn) oldBtn.textContent = '▶';
+    if (oldBtn) oldBtn.innerHTML = getIconSvg('play', 16);
     if (oldPlayer) oldPlayer.style.display = 'none';
     if (oldInlineLyrics) oldInlineLyrics.textContent = '';
 }
 
 function syncInlinePlayButtonState() {
     document.querySelectorAll('.play-btn-item').forEach(btn => {
-        btn.textContent = '▶';
+        btn.innerHTML = getIconSvg('play', 16);
     });
     if (currentPlayingIndex !== null && !audio.paused) {
         const activeBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
-        if (activeBtn) activeBtn.textContent = '⏸';
+        if (activeBtn) activeBtn.innerHTML = getIconSvg('pause', 16);
     }
 }
 
@@ -2559,7 +2622,7 @@ function renderPlaylistSheet() {
     if (!listEl) return;
 
     if (playlistSongs.length === 0) {
-        listEl.innerHTML = '<div class="playlist-empty">播放列表为空，搜索后点击 ＋ 添加歌曲</div>';
+        listEl.innerHTML = '<div class="playlist-empty">播放列表为空，搜索后点击“添加”按钮</div>';
         return;
     }
 
@@ -2763,7 +2826,7 @@ function updateBrowserFullscreenButtonState() {
     const icon = document.getElementById('fullPlayerBrowserFullscreenIcon');
     if (!btn || !icon) return;
     const active = isBrowserFullscreenActive();
-    icon.textContent = active ? '⤡' : '⤢';
+    icon.innerHTML = getIconSvg(active ? 'fullscreen-exit' : 'fullscreen-enter', 19);
     const label = active ? '退出真全屏' : '进入真全屏';
     btn.title = label;
     btn.setAttribute('aria-label', label);
@@ -2797,7 +2860,7 @@ function updateFullPlayerControlState() {
     const playerFab = document.getElementById('playerFabBtn');
     const paused = audio.paused;
     if (toggleIcon) {
-        toggleIcon.textContent = paused ? '▶' : '⏸';
+        toggleIcon.innerHTML = getIconSvg(paused ? 'play' : 'pause', 20);
     }
     if (toggleBtn) {
         toggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
@@ -3160,6 +3223,7 @@ document.getElementById('searchInput').addEventListener('keypress', e => {
 });
 
 // 初始化
+initStaticIcons();
 currentPlayMode = loadPlayModeFromStorage();
 playlistSongs = loadPlaylistFromStorage();
 renderPlaylistSheet();
