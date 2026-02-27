@@ -28,6 +28,11 @@ const defaultPlatformNameMap = {
     kugou: '酷狗音乐',
     migu: '咪咕音乐'
 };
+const sourceNameMap = {
+    primary: 'TuneHub API',
+    backup: 'GDStudio API',
+    backup3: '雨糖小屋 QQ API'
+};
 
 let platformNames = { ...defaultPlatformNameMap };
 let supportedPlatforms = ['netease', 'qq', 'kuwo'];
@@ -768,6 +773,11 @@ function platformDisplayName(platformKey) {
         return '全部平台';
     }
     return platformNames[platformKey] || defaultPlatformNameMap[platformKey] || platformKey || '当前平台';
+}
+
+function sourceDisplayNameBySong(song) {
+    const dataSource = normalizeSongDataSource(song?.dataSource);
+    return sourceNameMap[dataSource] || sourceNameMap.primary;
 }
 
 function getAvailableSearchPlatforms() {
@@ -1901,6 +1911,7 @@ function renderLocalPage() {
         const safeCover = escapeForSingleQuote(song.cover || '');
         const coverUrl = getProxiedCoverUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
+        const sourceName = sourceDisplayNameBySong(song);
 
         return `
         <div class="result-item" id="song-${globalIndex}">
@@ -1908,7 +1919,7 @@ function renderLocalPage() {
                 <div>
                     <img class="song-cover" id="cover-${globalIndex}" src="${coverUrl}" style="${coverStyle}" alt="" onerror="this.style.display='none'" onload="if(this.src){this.style.display='block'}">
                     <div class="song-info">
-                        <h3>${song.name}<span class="platform-badge">${platformNames[platform] || platform}</span></h3>
+                        <h3>${song.name}<span class="platform-badge">${platformNames[platform] || platform}</span><span class="source-badge">${sourceName}</span></h3>
                         <p>${song.artist}</p>
                     </div>
                 </div>
