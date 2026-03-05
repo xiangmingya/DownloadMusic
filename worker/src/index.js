@@ -1447,6 +1447,109 @@ async function backup4TryQqBackup3(platform, id) {
   throw new Error(String(result?.parsed?.errMsg || "qq backup3 parse failed"));
 }
 
+function mapBackup4SearchItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list
+    .map((item) => {
+      const id = String(item?.id || item?.songid || item?.songmid || "").trim();
+      if (!id) return null;
+      const artists = Array.isArray(item?.artist)
+        ? item.artist.map((v) => String(v || "").trim()).filter(Boolean).join(", ")
+        : String(item?.artist || item?.author || "").trim();
+      return {
+        id,
+        name: String(item?.name || item?.title || "未知歌曲"),
+        artist: artists || "未知歌手",
+        album: String(item?.album || ""),
+        cover: normalizeMediaUrl(item?.cover || item?.pic || ""),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function backup4SearchViaMethod(platform, keyword, page, limit) {
+  const data = await callSearch(platform, keyword, page, limit);
+  const mapped = mapBackup4SearchItems(data);
+  if (mapped.length > 0) {
+    return { list: mapped, provider: "method_search" };
+  }
+  throw new Error("method search empty");
+}
+
+async function backup4SearchViaGdstudio(platform, keyword, page, limit) {
+  if (platform !== "netease" && platform !== "kuwo") return null;
+  const source = platform === "netease" ? "netease" : "kuwo";
+  const endpoint = new URL(BACKUP_API_URL);
+  endpoint.searchParams.set("types", "search");
+  endpoint.searchParams.set("source", source);
+  endpoint.searchParams.set("name", keyword);
+  endpoint.searchParams.set("count", String(limit));
+  endpoint.searchParams.set("pages", String(page));
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const list = mapBackup4SearchItems(parsed);
+  if (response.ok && list.length > 0) {
+    return { list, provider: "gdstudio_search" };
+  }
+  throw new Error(String(parsed?.detail || parsed?.message || `gdstudio search failed (${response.status})`));
+}
+
+async function backup4SearchViaQqBackup3(keyword, page, limit) {
+  const result = await callQqBackup3Search({ keyword, page, limit });
+  const payload = result?.parsed;
+  const success = Number(payload?.result) === 100;
+  const normalized = normalizeQqBackup3SearchList(payload?.data?.list);
+  const list = normalized
+    .map((item) => ({
+      id: String(item?.songid || "").trim(),
+      name: String(item?.title || "未知歌曲"),
+      artist: String(item?.author || "未知歌手"),
+      album: "",
+      cover: normalizeMediaUrl(item?.pic || ""),
+    }))
+    .filter((item) => item.id);
+  if (result?.response?.ok && success && list.length > 0) {
+    return { list, provider: "qq_backup3_search" };
+  }
+  throw new Error(String(payload?.errMsg || "qq backup3 search failed"));
+}
+
+function getBackup4SearchChain(platform) {
+  if (platform === "qq") {
+    return [
+      (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit),
+      (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+    ];
+  }
+  return [
+    (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit),
+    (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+  ];
+}
+
+async function backup4Search(platform, keyword, page, limit) {
+  const errors = [];
+  const chain = getBackup4SearchChain(platform);
+  for (const runner of chain) {
+    try {
+      const result = await runner(platform, keyword, page, limit);
+      if (Array.isArray(result?.list) && result.list.length > 0) {
+        return result;
+      }
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err || "backup4 search error"));
+    }
+  }
+  throw new Error(errors.join("; ") || "backup4 search failed");
+}
+
 function getBackup4ProviderChain(platform) {
   if (platform === "qq") {
     return [backup4TryOnrender, backup4TryLxmusicSigned, backup4TryQqBackup3];
@@ -1465,15 +1568,47 @@ async function handleBackup4(request, env) {
   if (!auth.ok) return auth.response;
 
   const reqUrl = new URL(request.url);
+  const mode = String(reqUrl.searchParams.get("mode") || "url").trim().toLowerCase();
   const platform = normalizeBackup4Platform(reqUrl.searchParams.get("platform"));
-  const id = String(reqUrl.searchParams.get("id") || "").trim();
-  const quality = backup4NormalizeQuality(reqUrl.searchParams.get("quality"));
-  const name = String(reqUrl.searchParams.get("name") || "").trim();
-  const artist = String(reqUrl.searchParams.get("artist") || "").trim();
 
   if (!BACKUP4_ALLOWED_PLATFORMS.has(platform)) {
     return jsonResponse(400, { code: -1, message: "备用源4参数无效: platform" });
   }
+
+  if (mode === "search") {
+    const keyword = String(reqUrl.searchParams.get("keyword") || "").trim();
+    const page = toPositiveInt(reqUrl.searchParams.get("page"), 1);
+    const limit = toPositiveInt(reqUrl.searchParams.get("limit"), 20);
+    if (!keyword) {
+      return jsonResponse(400, { code: -1, message: "缺少参数: keyword" });
+    }
+    try {
+      const result = await backup4Search(platform, keyword, page, limit);
+      return jsonResponse(200, {
+        code: 0,
+        message: "Success",
+        data: result.list,
+        provider: result.provider,
+      }, {
+        "Cache-Control": "no-store",
+      });
+    } catch (err) {
+      return jsonResponse(502, {
+        code: -1,
+        message: err instanceof Error ? err.message : "备用源4搜索失败",
+        data: [],
+      });
+    }
+  }
+
+  if (mode !== "url") {
+    return jsonResponse(400, { code: -1, message: "备用源4参数无效: mode" });
+  }
+
+  const id = String(reqUrl.searchParams.get("id") || "").trim();
+  const quality = backup4NormalizeQuality(reqUrl.searchParams.get("quality"));
+  const name = String(reqUrl.searchParams.get("name") || "").trim();
+  const artist = String(reqUrl.searchParams.get("artist") || "").trim();
   if (!id) {
     return jsonResponse(400, { code: -1, message: "缺少参数: id" });
   }

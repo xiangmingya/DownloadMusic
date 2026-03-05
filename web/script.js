@@ -395,6 +395,26 @@ function normalizeBackup3Song(item, selectedPlatform, backup3Source) {
     };
 }
 
+function normalizeBackup4Song(item, selectedPlatform, provider = 'backup4_search') {
+    const trackId = String(item?.id || item?.songid || item?.songmid || '').trim();
+    return {
+        id: trackId,
+        name: String(item?.name || item?.title || '未知歌曲'),
+        artist: String(item?.artist || item?.author || '未知歌手'),
+        album: String(item?.album || ''),
+        source: selectedPlatform,
+        platform: selectedPlatform,
+        cover: normalizeMediaUrl(item?.cover || item?.pic || ''),
+        dataSource: 'backup4',
+        backup: null,
+        backup3: null,
+        backup4: {
+            provider: String(provider || 'backup4_search'),
+            trackId
+        }
+    };
+}
+
 function backupSongDataCacheKey(song, quality) {
     const platform = toPrimaryPlatform(song?.platform || song?.source);
     const trackId = String(song?.backup?.trackId || song?.id || '').trim();
@@ -1142,6 +1162,34 @@ async function searchSongsByKeywordPageBackup3(keyword, selectedPlatform, option
         .map(item => normalizeBackup3Song(item, platform, backup3Source));
 }
 
+async function searchSongsByKeywordPageBackup4(keyword, selectedPlatform, options = {}) {
+    const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
+    const platform = supportedPlatforms.includes(selectedPlatform) ? selectedPlatform : fallback;
+    if (!platform) {
+        return [];
+    }
+
+    const requestPage = Math.max(1, Number(options.page || 1));
+    const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
+    const data = await callBackup4Api({
+        mode: 'search',
+        platform,
+        keyword,
+        page: requestPage,
+        limit: requestLimit
+    }, {
+        timeoutMs: 18000,
+        retries: 1,
+        retryDelayMs: 650
+    });
+    const list = Array.isArray(data?.data) ? data.data : [];
+    const provider = String(data?.provider || 'backup4_search');
+    return list
+        .filter(item => item && (item.id || item.songid || item.songmid))
+        .slice(0, requestLimit)
+        .map(item => normalizeBackup4Song(item, platform, provider));
+}
+
 async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
     const normalizedSelectedPlatform = String(selectedPlatform || '').trim().toLowerCase();
     if (normalizedSelectedPlatform === PLATFORM_ALL_VALUE) {
@@ -1240,6 +1288,13 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
         });
         return { songs, provider: 'backup3' };
     }
+    if (forceProvider === 'backup4') {
+        const songs = await searchSongsByKeywordPageBackup4(keyword, selectedPlatform, {
+            page: requestPage,
+            limit: requestLimit
+        });
+        return { songs, provider: 'backup4' };
+    }
 
     let primarySongs = [];
     let primaryError = null;
@@ -1289,6 +1344,21 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             toastBackupUnavailableOnce();
         }
         // ignore backup3 errors
+    }
+
+    try {
+        const backup4Songs = await searchSongsByKeywordPageBackup4(keyword, selectedPlatform, {
+            page: requestPage,
+            limit: requestLimit
+        });
+        if (backup4Songs.length > 0) {
+            if (!silentFallback) {
+                showToast(primaryError ? '前3层备用异常，已切换第4层备用源' : '前3层无结果，已切换第4层备用源', 'info');
+            }
+            return { songs: backup4Songs, provider: 'backup4' };
+        }
+    } catch (backup4Error) {
+        // ignore backup4 errors
     }
 
     if (primaryError) {
@@ -2379,7 +2449,7 @@ function isSameSong(source, id) {
 
 function normalizeSongDataSource(raw) {
     const value = String(raw || '').trim();
-    return (value === 'backup' || value === 'backup3') ? value : 'primary';
+    return (value === 'backup' || value === 'backup3' || value === 'backup4') ? value : 'primary';
 }
 
 function bindSongMeta(song) {
