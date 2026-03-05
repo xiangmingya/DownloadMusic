@@ -7,6 +7,7 @@
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - 备用源代理：`/api/proxy/backup`（GDStudio）
   - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
+  - 第四层备用解析：`/api/proxy/backup4`（QQ/网易/酷我 多源链路）
 
 ## 路由
 

@@ -12,6 +12,15 @@ const QQ_BACKUP3_SEARCH_URL = "https://yutangxiaowu.cn:3015/api/qmusic/search";
 const QQ_BACKUP3_PARSE_URL = "https://yutangxiaowu.cn:3015/api/parseqmusic";
 const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
+const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
+const BACKUP4_TIMEOUT_MS = 18000;
+const BACKUP4_LXMUSIC_ONRENDER_URL = "https://lxmusicapi.onrender.com";
+const BACKUP4_LXMUSIC_ONRENDER_KEY = "share-v3";
+const BACKUP4_LXMUSIC_SIGNED_URL = "https://88.lxmusic.xn--fiqs8s";
+const BACKUP4_LXMUSIC_SCRIPT_MD5 = "1888f9865338afe6d5534b35171c61a4";
+const BACKUP4_LXMUSIC_SECRET_KEY = "JaJ?a7Nwk_Fgj?2o:znAkst";
+const BACKUP4_OIAPI_MUSIC163_URL = "https://oiapi.net/api/Music_163";
+const BACKUP4_OIAPI_KUWO_URL = "https://oiapi.net/api/Kuwo";
 
 export default {
   async fetch(request, env) {
@@ -66,6 +75,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/backup3" && request.method === "GET") {
       return withCors(request, env, await handleBackup3(request, env));
+    }
+    if (url.pathname === "/api/proxy/backup4" && request.method === "GET") {
+      return withCors(request, env, await handleBackup4(request, env));
     }
 
     return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
@@ -1251,6 +1263,251 @@ async function handleBackup3(request, env) {
     code: Number(lastPayload?.code ?? lastPayload?.result ?? -1),
     message: getBackup3PayloadMessage(lastPayload, "备用源3请求失败"),
     data: [],
+  });
+}
+
+function normalizeBackup4Platform(platform) {
+  const raw = String(platform || "").trim().toLowerCase();
+  if (raw === "tx" || raw === "tencent") return "qq";
+  if (raw === "wy") return "netease";
+  if (raw === "kw") return "kuwo";
+  return raw;
+}
+
+function backup4PlatformCode(platform) {
+  if (platform === "qq") return "tx";
+  if (platform === "netease") return "wy";
+  if (platform === "kuwo") return "kw";
+  return "";
+}
+
+function backup4NormalizeQuality(quality) {
+  const text = String(quality || "").trim().toLowerCase();
+  return text.startsWith("128") ? "128k" : "320k";
+}
+
+function backup4BrFromQuality(quality) {
+  return backup4NormalizeQuality(quality) === "128k" ? 128 : 320;
+}
+
+function backup4BuildKuwoKeyword(name, artist, fallbackId) {
+  const title = String(name || "").trim();
+  const singer = String(artist || "").trim();
+  const merged = `${title}${singer}`.trim();
+  if (merged) return merged;
+  return String(fallbackId || "").trim();
+}
+
+function backup4ExtractLinkFromMessage(message) {
+  const text = String(message || "");
+  const matched = text.match(/音乐链接[：:](\S+)/);
+  return normalizeMediaUrl(matched?.[1] || "");
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(text || "")));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function backup4TryGdstudio(platform, id, quality) {
+  if (platform !== "netease" && platform !== "kuwo") return null;
+
+  const source = platform === "netease" ? "netease" : "kuwo";
+  const endpoint = new URL(BACKUP_API_URL);
+  endpoint.searchParams.set("types", "url");
+  endpoint.searchParams.set("source", source);
+  endpoint.searchParams.set("id", id);
+  endpoint.searchParams.set("br", String(backup4BrFromQuality(quality)));
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.url || "");
+  if (response.ok && url) {
+    return { url, provider: "gdstudio" };
+  }
+  throw new Error(String(parsed?.detail || parsed?.message || `gdstudio failed (${response.status})`));
+}
+
+async function backup4TryOnrender(platform, id, quality) {
+  const source = backup4PlatformCode(platform);
+  if (!source) return null;
+
+  const endpoint = `${BACKUP4_LXMUSIC_ONRENDER_URL}/url/${source}/${encodeURIComponent(id)}/${backup4NormalizeQuality(quality)}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Request-Key": BACKUP4_LXMUSIC_ONRENDER_KEY,
+      "User-Agent": "Mozilla/5.0",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.url || "");
+  if (response.ok && Number(parsed?.code) === 0 && url) {
+    return { url, provider: "onrender" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `onrender failed (${response.status})`));
+}
+
+async function backup4TryLxmusicSigned(platform, id, quality) {
+  const source = backup4PlatformCode(platform);
+  if (!source) return null;
+
+  const q = backup4NormalizeQuality(quality);
+  const requestPath = `/lxmusicv4/url/${source}/${id}/${q}`;
+  const sign = await sha256Hex(`${requestPath}${BACKUP4_LXMUSIC_SCRIPT_MD5}${BACKUP4_LXMUSIC_SECRET_KEY}`);
+  const endpoint = `${BACKUP4_LXMUSIC_SIGNED_URL}${requestPath}?sign=${sign}`;
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "x-request-key": "lxmusic",
+      "user-agent": "lx-music-mobile/2.0.0",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.data || "");
+  if (response.ok && Number(parsed?.code) === 0 && url) {
+    return { url, provider: "lxmusic_signed" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `lxmusic signed failed (${response.status})`));
+}
+
+async function backup4TryOiapiMusic163(platform, id) {
+  if (platform !== "netease") return null;
+
+  const endpoint = new URL(BACKUP4_OIAPI_MUSIC163_URL);
+  endpoint.searchParams.set("id", id);
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const first = Array.isArray(parsed?.data) ? parsed.data[0] : null;
+  const url = normalizeMediaUrl(first?.url || "");
+  if (response.ok && Number(parsed?.code) === 0 && url) {
+    return { url, provider: "oiapi_music163" };
+  }
+  throw new Error(String(parsed?.message || `oiapi music163 failed (${response.status})`));
+}
+
+async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
+  if (platform !== "kuwo") return null;
+
+  const keyword = backup4BuildKuwoKeyword(name, artist, id);
+  if (!keyword) return null;
+
+  const endpoint = new URL(BACKUP4_OIAPI_KUWO_URL);
+  endpoint.searchParams.set("msg", keyword);
+  endpoint.searchParams.set("n", "1");
+  endpoint.searchParams.set("br", backup4NormalizeQuality(quality) === "128k" ? "7" : "5");
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.data?.url || backup4ExtractLinkFromMessage(parsed?.message || ""));
+  if (response.ok && Number(parsed?.code) === 1 && url) {
+    return { url, provider: "oiapi_kuwo" };
+  }
+  throw new Error(String(parsed?.message || `oiapi kuwo failed (${response.status})`));
+}
+
+async function backup4TryQqBackup3(platform, id) {
+  if (platform !== "qq") return null;
+
+  const result = await callQqBackup3ParseBySongmid(id);
+  const url = normalizeMediaUrl(result?.parsed?.url || "");
+  if (result?.response?.ok && result?.parsed?.success && url) {
+    return { url, provider: "qq_backup3_parse" };
+  }
+  throw new Error(String(result?.parsed?.errMsg || "qq backup3 parse failed"));
+}
+
+function getBackup4ProviderChain(platform) {
+  if (platform === "qq") {
+    return [backup4TryOnrender, backup4TryLxmusicSigned, backup4TryQqBackup3];
+  }
+  if (platform === "netease") {
+    return [backup4TryGdstudio, backup4TryOnrender, backup4TryLxmusicSigned, backup4TryOiapiMusic163];
+  }
+  if (platform === "kuwo") {
+    return [backup4TryGdstudio, backup4TryOnrender, backup4TryLxmusicSigned, backup4TryOiapiKuwo];
+  }
+  return [];
+}
+
+async function handleBackup4(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const reqUrl = new URL(request.url);
+  const platform = normalizeBackup4Platform(reqUrl.searchParams.get("platform"));
+  const id = String(reqUrl.searchParams.get("id") || "").trim();
+  const quality = backup4NormalizeQuality(reqUrl.searchParams.get("quality"));
+  const name = String(reqUrl.searchParams.get("name") || "").trim();
+  const artist = String(reqUrl.searchParams.get("artist") || "").trim();
+
+  if (!BACKUP4_ALLOWED_PLATFORMS.has(platform)) {
+    return jsonResponse(400, { code: -1, message: "备用源4参数无效: platform" });
+  }
+  if (!id) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: id" });
+  }
+
+  const errors = [];
+  const chain = getBackup4ProviderChain(platform);
+  for (const runner of chain) {
+    try {
+      const result = await runner(platform, id, quality, name, artist);
+      if (result?.url) {
+        return jsonResponse(200, {
+          code: 0,
+          message: "Success",
+          data: {
+            url: result.url,
+            provider: result.provider,
+            platform,
+            id,
+            quality,
+          },
+        }, {
+          "Cache-Control": "no-store",
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err || "unknown backup4 error");
+      errors.push(message);
+    }
+  }
+
+  return jsonResponse(502, {
+    code: -1,
+    message: "备用源4全部失败",
+    errors,
   });
 }
 
