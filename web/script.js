@@ -30,7 +30,7 @@ const defaultPlatformNameMap = {
     migu: '咪咕音乐'
 };
 const sourceNameMap = {
-    primary: 'TuneHub',
+    primary: '主接口',
     backup: 'GDStudio',
     backup3: '雨糖',
     backup4: '多源'
@@ -74,9 +74,7 @@ const backup3DataCache = new Map();
 const backupPicCache = new Map();
 const LOCAL_KEY_PREFIX = 'downloadmusic_tunehub_key_';
 const linuxdoUserId = String(APP_CONTEXT?.user?.linuxdo_id || '').trim();
-const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
 const playModeStorageKey = `${LOCAL_KEY_PREFIX}playmode_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
-let linuxdoUserKey = '';
 const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 const favoriteStorageKey = `${LOCAL_KEY_PREFIX}favorites_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 const recentStorageKey = `${LOCAL_KEY_PREFIX}recent_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
@@ -470,137 +468,10 @@ async function apiFetch(url, init = {}) {
     }
 }
 
-function isLinuxdoLogin() {
-    return AUTH_TYPE === 'linuxdo';
-}
-
-function setUserKeyStatus(message, cls = '') {
-    const statusEl = document.getElementById('userKeyStatus');
-    if (!statusEl) return;
-    statusEl.textContent = message;
-    statusEl.className = `key-status ${cls}`.trim();
-}
-
-function maskKey(key) {
-    const text = String(key || '').trim();
-    if (!text) return '';
-    if (text.length <= 10) return '****';
-    return `${text.slice(0, 4)}****${text.slice(-4)}`;
-}
-
-function loadLinuxdoKeyFromLocalStorage() {
-    if (!isLinuxdoLogin()) return '';
-    try {
-        return String(localStorage.getItem(linuxdoKeyStorageKey) || '').trim();
-    } catch {
-        return '';
-    }
-}
-
-function saveLinuxdoKeyToLocalStorage(key) {
-    if (!isLinuxdoLogin()) return;
-    try {
-        localStorage.setItem(linuxdoKeyStorageKey, key);
-    } catch {
-        // ignore storage failures
-    }
-}
-
-function clearLinuxdoKeyFromLocalStorage() {
-    if (!isLinuxdoLogin()) return;
-    try {
-        localStorage.removeItem(linuxdoKeyStorageKey);
-    } catch {
-        // ignore storage failures
-    }
-}
-
-function applyUserKeyState() {
-    const input = document.getElementById('userApiKeyInput');
-    if (input) input.value = '';
-
-    if (linuxdoUserKey) {
-        setUserKeyStatus(`已在本浏览器保存 Key：${maskKey(linuxdoUserKey)}`, 'ok');
-    } else {
-        setUserKeyStatus('未配置 Key，请先填写后再解析/下载（仅保存到本浏览器）。', 'warn');
-    }
-}
-
-async function saveUserKey() {
-    const input = document.getElementById('userApiKeyInput');
-    if (!input) return;
-    const key = input.value.trim();
-    if (!key) {
-        setUserKeyStatus('请输入 TuneHub API Key', 'warn');
-        return;
-    }
-    if (!key.startsWith('th_') || key.length < 12) {
-        setUserKeyStatus('Key 格式不正确（需 th_ 开头）', 'warn');
-        return;
-    }
-
-    linuxdoUserKey = key;
-    saveLinuxdoKeyToLocalStorage(key);
-    applyUserKeyState();
-    showToast('Key 保存成功', 'success');
-}
-
-async function clearUserKey() {
-    linuxdoUserKey = '';
-    clearLinuxdoKeyFromLocalStorage();
-    applyUserKeyState();
-    showToast('Key 已清空', 'info');
-}
-
-async function initLinuxdoKeyPanel() {
-    if (!isLinuxdoLogin()) return;
-
-    const saveBtn = document.getElementById('saveUserKeyBtn');
-    const clearBtn = document.getElementById('clearUserKeyBtn');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', async () => {
-            try {
-                await saveUserKey();
-            } catch (error) {
-                setUserKeyStatus(error.message || '保存失败', 'warn');
-                showToast(error.message || '保存失败', 'error');
-            }
-        });
-    }
-    if (clearBtn) {
-        clearBtn.addEventListener('click', async () => {
-            try {
-                await clearUserKey();
-            } catch (error) {
-                setUserKeyStatus(error.message || '清空失败', 'warn');
-                showToast(error.message || '清空失败', 'error');
-            }
-        });
-    }
-
-    linuxdoUserKey = loadLinuxdoKeyFromLocalStorage();
-    applyUserKeyState();
-}
-
-async function ensureLinuxdoKeyReady() {
-    if (!isLinuxdoLogin()) return;
-    if (linuxdoUserKey) return;
-    throw new Error('请先填写你的 TuneHub API Key');
-}
-
 async function parseSongs(platform, ids, quality) {
-    await ensureLinuxdoKeyReady();
-
-    const headers = {
-        'Content-Type': 'application/json'
-    };
-    if (isLinuxdoLogin() && linuxdoUserKey) {
-        headers['X-Tunehub-Key'] = linuxdoUserKey;
-    }
-
     const response = await apiFetch(API_ROUTES.parse, {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             platform,
             ids,
@@ -2092,7 +1963,7 @@ async function search() {
 
         if (searchMode === 'keyword') {
             if (currentSearchType === 'playlist') {
-                resultsDiv.innerHTML = '<div class="empty-state">TuneHub V3 暂不支持关键词歌单搜索，请切换 ID 模式</div>';
+                resultsDiv.innerHTML = '<div class="empty-state">关键词歌单搜索暂不可用，请切换 ID 模式</div>';
                 return;
             }
 
@@ -3810,5 +3681,4 @@ updateFullPlayerControlState();
 updatePlayModeButtonState();
 updateBrowserFullscreenButtonState();
 checkStatus();
-initLinuxdoKeyPanel();
 setInterval(checkStatus, 60000);

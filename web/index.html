@@ -125,24 +125,6 @@
 
             <section class="app-view search-view" id="searchView" style="display:none;" aria-labelledby="searchViewTitle">
             <div class="view-title"><p class="eyebrow">探索</p><h1 id="searchViewTitle">找到想听的声音</h1><p>支持歌曲、歌单与 ID 解析。</p></div>
-            <section class="key-panel key-panel-admin" id="adminKeyPanel" style="display:none;">
-                <h2>Key 模式</h2>
-                <p>当前为密码登录，默认使用服务器配置的 TuneHub Key。</p>
-            </section>
-
-            <section class="key-panel" id="userKeyPanel" style="display:none;">
-                <h2>你的 TuneHub API Key</h2>
-                <p class="key-panel-desc">Linux DO 登录不会使用服务器 Key。你的 Key 仅保存在当前浏览器，不保存到服务器。</p>
-                <p class="privacy-note">隐私说明：我们不会在服务器保存你的 Key；Key 只存在你当前浏览器（localStorage），可随时清空。</p>
-                <div class="key-form">
-                    <input id="userApiKeyInput" type="password" placeholder="输入 th_ 开头的 Key" autocomplete="off">
-                    <button id="saveUserKeyBtn" type="button">保存 Key</button>
-                    <button id="clearUserKeyBtn" type="button" class="ghost-btn">清空</button>
-                    <a class="apply-key-link app-apply-link" href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">去申请 TuneHub Key</a>
-                </div>
-                <p id="userKeyStatus" class="key-status"></p>
-            </section>
-
             <div class="search-section">
                 <div class="search-box">
                     <select id="searchMode">
@@ -194,10 +176,7 @@
                     <span id="serviceStatus">服务状态: <span class="loading">检查中...</span></span>
                     <span id="healthStatus">健康状态: <span class="loading">检查中...</span></span>
                 </div>
-                <div class="source-links">
-                    <span>主源: <a href="https://tunehub.sayqz.com/" target="_blank" rel="noopener noreferrer">TuneHub API</a></span>
-                    <span>备用: <a href="https://music-api.gdstudio.xyz/api.php" target="_blank" rel="noopener noreferrer">GDStudio API</a></span>
-                </div>
+                <div class="source-links"><span>解析服务：多源自动切换</span></div>
             </div>
         </footer>
 
@@ -276,7 +255,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260804-01';
+        const APP_ASSET_VERSION = '20260804-02';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -366,9 +345,6 @@
             document.getElementById('appContainer').style.display = '';
             document.getElementById('userChip').textContent =
                 `${window.APP_CONTEXT.user.name} · ${authType === 'password' ? '密码登录' : 'Linux DO'}`;
-
-            document.getElementById('adminKeyPanel').style.display = authType === 'password' ? '' : 'none';
-            document.getElementById('userKeyPanel').style.display = authType === 'linuxdo' ? '' : 'none';
 
             if (!appScriptLoaded && !appScriptLoading) {
                 appScriptLoading = true;
