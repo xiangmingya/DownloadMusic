@@ -86,6 +86,7 @@ let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
 let homeSource = 'netease';
+let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
@@ -1360,6 +1361,42 @@ function getSongByIndex(index) {
     return allSongs[index] || null;
 }
 
+function chartMatchScore(candidate, song) {
+    const normalize = value => String(value || '').toLowerCase().replace(/[\s·・,，、()（）\-_.]/g, '');
+    const candidateName = normalize(candidate?.name);
+    const songName = normalize(song?.name);
+    const candidateArtist = normalize(candidate?.artist);
+    const songArtist = normalize(song?.artist);
+    let score = candidateName === songName ? 8 : (candidateName.includes(songName) || songName.includes(candidateName) ? 3 : 0);
+    if (candidateArtist && songArtist && (candidateArtist.includes(songArtist) || songArtist.includes(candidateArtist))) score += 4;
+    return score;
+}
+
+async function resolveLookupOnlySong(song) {
+    if (!song?.lookupOnly) return song;
+    const keyword = `${String(song.name || '').trim()} ${String(song.artist || '').trim()}`.trim();
+    if (!keyword) throw new Error('这首榜单歌曲缺少匹配信息');
+    const candidates = await callPlatformMethod('kuwo', 'search', { keyword, page: 1, limit: 8 }, {
+        timeoutMs: 12000,
+        retries: 1,
+        retryDelayMs: 450
+    });
+    const list = Array.isArray(candidates) ? candidates : [];
+    const matched = [...list].sort((a, b) => chartMatchScore(b, song) - chartMatchScore(a, song))[0];
+    if (!matched?.id) throw new Error('未能匹配到酷我歌曲');
+    Object.assign(song, {
+        id: String(matched.id),
+        name: String(matched.name || song.name),
+        artist: String(matched.artist || song.artist),
+        album: String(matched.album || song.album || ''),
+        cover: normalizeMediaUrl(matched.cover || song.cover || ''),
+        platform: 'kuwo',
+        source: 'kuwo',
+        lookupOnly: false
+    });
+    return song;
+}
+
 async function fetchBackupPicUrl(song) {
     if (!song || song.dataSource !== 'backup') return '';
     const picId = String(song?.backup?.picId || '').trim();
@@ -2234,7 +2271,11 @@ function hydrateMissingCovers(pageSongs, startIndex) {
 async function downloadSong(source, id, name, artist, index = null, songObj = null) {
     try {
         const quality = document.getElementById('quality').value;
-        const runtimeSong = songObj || getSongByIndex(Number(index));
+        const runtimeSong = await resolveLookupOnlySong(songObj || getSongByIndex(Number(index)));
+        source = String(runtimeSong?.platform || runtimeSong?.source || source);
+        id = String(runtimeSong?.id || id);
+        name = String(runtimeSong?.name || name);
+        artist = String(runtimeSong?.artist || artist);
         let mediaUrl = '';
         if (runtimeSong?.dataSource === 'backup') {
             const backupData = await ensureBackupPlayableData(runtimeSong, quality);
@@ -2391,8 +2432,15 @@ function isFavoriteSong(song) {
     return favoriteSongs.some(item => songIdentity(item) === songIdentity(song));
 }
 
-function toggleFavoriteByIndex(index) {
-    const song = toLibrarySong(getSongByIndex(Number(index)));
+async function toggleFavoriteByIndex(index) {
+    let rawSong;
+    try {
+        rawSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
+    } catch (error) {
+        showToast(`收藏失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        return;
+    }
+    const song = toLibrarySong(rawSong);
     if (!song) return;
     const existingIndex = favoriteSongs.findIndex(item => songIdentity(item) === songIdentity(song));
     if (existingIndex >= 0) {
@@ -2455,8 +2503,15 @@ function createSavedPlaylist(defaultName = '') {
     return playlist;
 }
 
-function saveSongToCustomPlaylistByIndex(index) {
-    const song = toLibrarySong(getSongByIndex(Number(index)));
+async function saveSongToCustomPlaylistByIndex(index) {
+    let rawSong;
+    try {
+        rawSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
+    } catch (error) {
+        showToast(`保存失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        return;
+    }
+    const song = toLibrarySong(rawSong);
     if (!song) return;
     const suggested = savedPlaylists[0]?.name || '我的歌单';
     const selectedName = String(window.prompt('输入要保存到的歌单名称（同名会加入已有歌单）', suggested) || '').trim().slice(0, 40);
@@ -2558,41 +2613,41 @@ async function playSavedPlaylist(playlistId) {
 }
 
 function setAppView(view) {
-    const valid = ['home', 'search', 'library', 'toplist'].includes(view) ? view : 'home';
+    const valid = ['home', 'search', 'library'].includes(view) ? view : 'home';
     document.getElementById('homeView').style.display = valid === 'home' ? '' : 'none';
     document.getElementById('searchView').style.display = valid === 'search' ? '' : 'none';
     document.getElementById('libraryView').style.display = valid === 'library' ? '' : 'none';
-    document.getElementById('toplistView').style.display = valid === 'toplist' ? '' : 'none';
     document.querySelectorAll('[data-view-target]').forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-view-target') === valid);
     });
     if (valid === 'library') renderLibrary();
 }
 
-const HOME_DISCOVERY_BY_SOURCE = {
+const HOME_DIRECT_TOPLISTS = {
     netease: [
-        { title: '网易云热歌', note: '从网易云音乐里发现当下热门', keyword: '热歌榜' },
-        { title: '网易云推荐', note: '用一组新歌打开今天', keyword: '每日推荐' },
-        { title: '网易云经典', note: '回到那些一直在的旋律', keyword: '经典老歌' }
+        { id: '3778678', title: '网易云热歌榜', note: '每日更新 · 点开就是歌曲列表' },
+        { id: '3779629', title: '网易云新歌榜', note: '每日更新 · 点开就是歌曲列表' },
+        { id: '19723756', title: '网易云飙升榜', note: '每日更新 · 点开就是歌曲列表' }
     ],
     qq: [
-        { title: 'QQ 热歌', note: '从 QQ 音乐里看看大家在听什么', keyword: '热歌榜' },
-        { title: 'QQ 流行', note: '刷新一下你的常听列表', keyword: '流行歌曲' },
-        { title: 'QQ 经典', note: '适合反复播放的熟悉旋律', keyword: '经典老歌' }
+        { id: '26', title: 'QQ 音乐热歌榜', note: '每日更新 · 点开就是歌曲列表' },
+        { id: '27', title: 'QQ 音乐新歌榜', note: '每日更新 · 点开就是歌曲列表' },
+        { id: '62', title: 'QQ 音乐飙升榜', note: '每日更新 · 点开就是歌曲列表' }
     ],
     kuwo: [
-        { title: '酷我热歌', note: '从酷我音乐里找当下热门', keyword: '热歌榜' },
-        { title: '酷我新歌', note: '给耳朵一点新鲜感', keyword: '新歌推荐' },
-        { title: '酷我怀旧', note: '把时间倒回一首歌里', keyword: '怀旧金曲' }
+        { id: 'hot', title: '酷我热歌榜', note: '热门单曲 · 点开就是歌曲列表' },
+        { id: 'new', title: '酷我新歌榜', note: '新鲜上架 · 点开就是歌曲列表' }
     ]
 };
 
-function renderHomeSourceContent() {
-    const entries = HOME_DISCOVERY_BY_SOURCE[homeSource] || HOME_DISCOVERY_BY_SOURCE.netease;
-    document.querySelectorAll('[data-discovery-row]').forEach(button => {
-        const item = entries[Number(button.dataset.discoveryRow)];
+function renderHomeToplistCards() {
+    document.querySelectorAll('[data-home-toplist]').forEach((button, position) => {
+        const platform = button.dataset.homeToplist;
+        const variants = HOME_DIRECT_TOPLISTS[platform] || [];
+        const item = variants[(homeToplistRotation + position) % variants.length];
         if (!item) return;
-        button.dataset.searchKeyword = item.keyword;
+        button.dataset.toplistId = item.id;
+        button.dataset.toplistName = item.title;
         const title = button.querySelector('strong');
         const note = button.querySelector('small');
         if (title) title.textContent = item.title;
@@ -2610,7 +2665,7 @@ function syncHomeSourceSwitch() {
         button.hidden = !availableSource;
         button.classList.toggle('active', source === homeSource);
     });
-    renderHomeSourceContent();
+    renderHomeToplistCards();
 }
 
 function runHomeSearch(keyword) {
@@ -2641,56 +2696,15 @@ function resetSearchViewMode() {
     if (backButton) backButton.style.display = 'none';
 }
 
-function setToplistDirectoryLoading() {
-    const grid = document.getElementById('toplistGrid');
-    if (grid) grid.innerHTML = '<div class="collection-empty">正在加载榜单歌单…</div>';
-}
-
-function renderToplistDirectory(entries, platform) {
-    const grid = document.getElementById('toplistGrid');
-    if (!grid) return;
-    if (!entries.length) {
-        grid.innerHTML = '<div class="collection-empty">暂时没有可展示的榜单歌单。</div>';
-        return;
-    }
-    grid.innerHTML = entries.map(item => {
-        const cover = getProxiedCoverUrl(item.cover || '');
-        const subtitle = String(item.description || '实时更新').replace(/\s+/g, ' ').slice(0, 58);
-        const countText = item.count ? `${item.count} 首歌曲` : '打开榜单';
-        return `<button type="button" class="toplist-card" data-toplist-id="${escapeHtml(item.id)}" data-toplist-platform="${escapeHtml(platform)}" data-toplist-name="${escapeHtml(item.name)}"><img class="toplist-cover" src="${escapeHtml(cover)}" alt="" onerror="this.style.opacity='.35'"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(subtitle)}</small><em>${countText}</em></span></button>`;
-    }).join('');
-}
-
-async function openToplistDirectory() {
-    const platform = homeSource;
-    const title = document.getElementById('toplistViewTitle');
-    const description = document.getElementById('toplistViewDescription');
-    if (title) title.textContent = `${platformDisplayName(platform)}榜单歌单`;
-    if (description) description.textContent = '选择一张榜单，直接查看其中的歌曲。';
-    setAppView('toplist');
-    setToplistDirectoryLoading();
-    try {
-        const url = new URL(API_ROUTES.toplists, window.location.href);
-        url.searchParams.set('platform', platform);
-        const response = await apiFetch(url.toString(), { timeoutMs: 18000 });
-        const payload = await response.json();
-        if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单加载失败');
-        renderToplistDirectory(Array.isArray(payload?.data) ? payload.data : [], platform);
-    } catch (error) {
-        const grid = document.getElementById('toplistGrid');
-        if (grid) grid.innerHTML = `<div class="collection-empty">${escapeHtml(localizeErrorMessage(error?.message, '榜单暂不可用'))}</div>`;
-    }
-}
-
 async function openToplistSongs(platform, id, name) {
     const heading = document.getElementById('searchViewEyebrow');
     const title = document.getElementById('searchViewTitle');
     const description = document.getElementById('searchViewDescription');
     const searchSection = document.querySelector('#searchView .search-section');
     const backButton = document.getElementById('backToToplistsBtn');
-    if (heading) heading.textContent = '榜单歌单';
+    if (heading) heading.textContent = platformDisplayName(platform);
     if (title) title.textContent = name || '榜单歌曲';
-    if (description) description.textContent = '正在展示这张榜单里的歌曲。';
+    if (description) description.textContent = '直接播放、收藏或加入你的歌单。';
     if (searchSection) searchSection.style.display = 'none';
     if (backButton) backButton.style.display = '';
     setAppView('search');
@@ -2729,12 +2743,15 @@ function initHomeInterface() {
         runHomeSearch(document.getElementById('homeSearchInput')?.value);
     });
     document.querySelectorAll('[data-search-keyword]').forEach(button => button.addEventListener('click', () => runHomeSearch(button.getAttribute('data-search-keyword'))));
-    document.querySelectorAll('[data-discovery-row], [data-toplist-open]').forEach(button => button.addEventListener('click', openToplistDirectory));
-    document.getElementById('toplistGrid')?.addEventListener('click', event => {
-        const button = event.target.closest('[data-toplist-id]');
-        if (button) openToplistSongs(button.dataset.toplistPlatform, button.dataset.toplistId, button.dataset.toplistName);
+    document.querySelectorAll('[data-home-toplist]').forEach(button => button.addEventListener('click', () => {
+        openToplistSongs(button.dataset.homeToplist, button.dataset.toplistId, button.dataset.toplistName);
+    }));
+    document.querySelector('[data-toplist-refresh]')?.addEventListener('click', () => {
+        homeToplistRotation += 1;
+        sessionStorage.setItem('downloadmusic_home_toplist_rotation', String(homeToplistRotation));
+        renderHomeToplistCards();
     });
-    document.getElementById('backToToplistsBtn')?.addEventListener('click', openToplistDirectory);
+    document.getElementById('backToToplistsBtn')?.addEventListener('click', () => setAppView('home'));
     document.getElementById('homeSourceSwitch')?.addEventListener('click', event => {
         const button = event.target.closest('[data-home-source]');
         if (!button || button.disabled) return;
@@ -2955,7 +2972,17 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
 // 播放歌曲
 async function playSong(source, id, name, artist, index) {
-    const runtimeSong = getSongByIndex(Number(index));
+    let runtimeSong;
+    try {
+        runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
+    } catch (error) {
+        showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        return;
+    }
+    source = String(runtimeSong?.platform || runtimeSong?.source || source);
+    id = String(runtimeSong?.id || id);
+    name = String(runtimeSong?.name || name);
+    artist = String(runtimeSong?.artist || artist);
     const queueIndex = findPlaylistIndex(source, id);
     currentPlaylistIndex = queueIndex;
     renderPlaylistSheet();
@@ -3447,10 +3474,20 @@ function updateFullPlayerLyric(currentTime) {
     nextLyricEl.textContent = currentLyrics[activeIndex + 1]?.text || '';
 }
 
-function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
-    const platform = String(source || '').trim();
-    const songId = String(id || '').trim();
-    const runtimeSong = getSongByIndex(Number(index));
+async function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
+    let runtimeSong;
+    try {
+        runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
+    } catch (error) {
+        showToast(`加入播放列表失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        return;
+    }
+    const platform = String(runtimeSong?.platform || runtimeSong?.source || source || '').trim();
+    const songId = String(runtimeSong?.id || id || '').trim();
+    name = String(runtimeSong?.name || name);
+    artist = String(runtimeSong?.artist || artist);
+    album = String(runtimeSong?.album || album);
+    cover = String(runtimeSong?.cover || cover);
     if (!platform || !songId) return;
     const exists = findPlaylistIndex(platform, songId);
     if (exists >= 0) {

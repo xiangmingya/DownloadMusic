@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260804-03">
+    <link rel="stylesheet" href="style.css?v=20260804-04">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -109,11 +109,11 @@
 
                 <div class="home-columns">
                     <section class="home-section ranking-section" aria-labelledby="rankingTitle">
-                        <div class="section-heading"><div><p class="eyebrow">探索入口</p><h2 id="rankingTitle">热门方向</h2></div><button class="text-link" type="button" data-toplist-open>查看榜单</button></div>
+                        <div class="section-heading"><div><p class="eyebrow">探索入口</p><h2 id="rankingTitle">热门方向</h2></div><button class="text-link" type="button" data-toplist-refresh>换一批</button></div>
                         <div class="ranking-list">
-                            <button type="button" class="ranking-row" data-discovery-row="0"><span>01</span><strong>热歌榜</strong><small>看看大家最近都在听什么</small></button>
-                            <button type="button" class="ranking-row" data-discovery-row="1"><span>02</span><strong>流行热歌</strong><small>刷新一下你的播放列表</small></button>
-                            <button type="button" class="ranking-row" data-discovery-row="2"><span>03</span><strong>经典回响</strong><small>总有一首会让你停下来</small></button>
+                            <button type="button" class="ranking-row" data-home-toplist="netease"><span>01</span><strong>网易云热歌榜</strong><small>每日更新 · 点开就是歌曲列表</small></button>
+                            <button type="button" class="ranking-row" data-home-toplist="qq"><span>02</span><strong>QQ 音乐热歌榜</strong><small>每日更新 · 点开就是歌曲列表</small></button>
+                            <button type="button" class="ranking-row" data-home-toplist="kuwo"><span>03</span><strong>酷我热歌榜</strong><small>热门单曲 · 点开就是歌曲列表</small></button>
                         </div>
                     </section>
                     <section class="home-section collection-section" aria-labelledby="collectionTitle">
@@ -123,13 +123,8 @@
                 </div>
             </section>
 
-            <section class="app-view toplist-view" id="toplistView" style="display:none;" aria-labelledby="toplistViewTitle">
-                <div class="view-title toplist-title-row"><div><p class="eyebrow">热门方向</p><h1 id="toplistViewTitle">榜单歌单</h1><p id="toplistViewDescription">选择一张榜单，直接查看其中的歌曲。</p></div><button class="text-link" type="button" data-view-target="home">返回首页</button></div>
-                <div id="toplistGrid" class="toplist-grid" aria-live="polite"></div>
-            </section>
-
             <section class="app-view search-view" id="searchView" style="display:none;" aria-labelledby="searchViewTitle">
-            <div class="view-title"><p class="eyebrow" id="searchViewEyebrow">探索</p><h1 id="searchViewTitle">找到想听的声音</h1><p id="searchViewDescription">支持歌曲、歌单与 ID 解析。</p><button id="backToToplistsBtn" class="text-link" type="button" style="display:none;">返回榜单列表</button></div>
+            <div class="view-title"><p class="eyebrow" id="searchViewEyebrow">探索</p><h1 id="searchViewTitle">找到想听的声音</h1><p id="searchViewDescription">支持歌曲、歌单与 ID 解析。</p><button id="backToToplistsBtn" class="text-link" type="button" style="display:none;">返回首页</button></div>
             <div class="search-section">
                 <div class="search-box">
                     <select id="searchMode">
@@ -260,7 +255,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260804-03';
+        const APP_ASSET_VERSION = '20260804-04';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

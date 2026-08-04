@@ -26,6 +26,10 @@ const BACKUP4_QQMP3_ENDPOINTS = [
   "https://www.qqmp3.vip/api/kw.php",
   "https://bb.qqmp3.vip/api/kw.php",
 ];
+const KUWO_TOPLIST_ENDPOINTS = [
+  "https://www.qqmp3.vip/api/songs.php",
+  "https://bb.qqmp3.vip/api/songs.php",
+];
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 
 export default {
@@ -1310,6 +1314,46 @@ async function callToplist(platform, id) {
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
     return parseToplistQQSongs(json, id);
+  }
+
+  if (platform === "kuwo") {
+    const isNew = id === "new";
+    let lastError = null;
+    for (const baseUrl of KUWO_TOPLIST_ENDPOINTS) {
+      const endpoint = new URL(baseUrl);
+      if (isNew) endpoint.searchParams.set("type", "new");
+      try {
+        const { status, json } = await upstreamJson(endpoint.toString(), {
+          headers: {
+            Accept: "application/json, text/plain, */*",
+            Origin: "https://www.qqmp3.vip",
+            Referer: "https://www.qqmp3.vip/",
+            "User-Agent": "Mozilla/5.0",
+          },
+        });
+        const rows = Array.isArray(json?.data) ? json.data : [];
+        if (status < 200 || status >= 300 || Number(json?.code) !== 200 || rows.length === 0) {
+          throw new Error(`上游请求失败 (${status})`);
+        }
+        return {
+          id,
+          name: isNew ? "酷我新歌榜" : "酷我热歌榜",
+          cover: "",
+          songs: rows.slice(0, 50).map((item, index) => ({
+            // 该榜单数据没有酷我歌曲 ID；前端在用户操作歌曲时再按歌名和歌手匹配酷我 ID。
+            id: `kuwo-chart-${String(item?.rid || index)}`,
+            name: String(item?.name || "未知歌曲"),
+            artist: String(item?.artist || "未知歌手"),
+            album: "",
+            cover: normalizeMediaUrl(item?.pic || ""),
+            lookupOnly: true,
+          })).filter((item) => item.name && item.artist),
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("酷我榜单暂不可用");
   }
 
   throw new Error("该音乐源暂不支持榜单详情");
