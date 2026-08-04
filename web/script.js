@@ -2511,7 +2511,7 @@ function songRowMarkup(song, collection, index) {
     const image = cover
         ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
         : '<span class="mini-song-art" aria-hidden="true"></span>';
-    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 22)}</button></div>`;
+    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 28)}</button></div>`;
 }
 
 function renderHomeNowPlaying() {
@@ -2549,7 +2549,7 @@ function updateHomeNowPlayingControlState() {
     const canControl = Boolean(hasSong && audio.src);
     const paused = audio.paused;
     btn.disabled = !canControl;
-    btn.innerHTML = getIconSvg(paused ? 'play' : 'pause', 26);
+    btn.innerHTML = getIconSvg(paused ? 'play' : 'pause', 34);
     btn.setAttribute('aria-label', paused ? '播放' : '暂停');
     btn.setAttribute('title', paused ? '播放' : '暂停');
     if (!canControl && hasSong) {
