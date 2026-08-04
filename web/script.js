@@ -85,7 +85,6 @@ let playlistSongs = [];
 let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
-let homeSource = 'netease';
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
@@ -795,39 +794,13 @@ async function checkStatus() {
     }
 }
 
-// 更新平台下拉框
-function updatePlatformSelect(options = {}) {
-    const forceKeywordDefault = Boolean(options?.forceKeywordDefault);
-    const platformSelect = document.getElementById('platform');
-    const searchModeEl = document.getElementById('searchMode');
-    const searchMode = String(searchModeEl?.value || 'keyword').trim();
-    const allowAll = searchMode === 'keyword';
+// 搜索始终自动并发尝试网易云、QQ 音乐与酷我，不再向用户暴露平台选择。
+function updatePlatformSelect() {
     supportedPlatforms = supportedPlatforms.filter(key => PRIMARY_ALLOWED_PLATFORMS.includes(String(key)));
     if (supportedPlatforms.length === 0) {
         supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
     }
-    const current = String(platformSelect.value || '').trim();
-    const fallback = supportedPlatforms.includes('netease') ? 'netease' : supportedPlatforms[0];
-    let selected = fallback;
-    if (allowAll) {
-        selected = forceKeywordDefault
-            ? PLATFORM_ALL_VALUE
-            : ((current === PLATFORM_ALL_VALUE || supportedPlatforms.includes(current)) ? current : PLATFORM_ALL_VALUE);
-    } else if (supportedPlatforms.includes(current)) {
-        selected = current;
-    }
-
-    const optionHtml = [];
-    if (allowAll) {
-        optionHtml.push(`<option value="${PLATFORM_ALL_VALUE}"${selected === PLATFORM_ALL_VALUE ? ' selected' : ''}>全部</option>`);
-    }
-    optionHtml.push(
-        ...supportedPlatforms.map(key =>
-            `<option value="${key}"${key === selected ? ' selected' : ''}>${platformNames[key] || key}</option>`
-        )
-    );
-    platformSelect.innerHTML = optionHtml.join('');
-    syncHomeSourceSwitch();
+    renderHomeToplistCards();
 }
 
 function platformDisplayName(platformKey) {
@@ -1085,9 +1058,9 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
         const providerMapInput = (options.providerMap && typeof options.providerMap === 'object')
             ? options.providerMap
             : null;
-        const platforms = getAvailableSearchPlatforms();
-        const mergedSongs = [];
-        const providerMap = {};
+        const requestedPlatforms = Array.isArray(options.platforms) ? options.platforms : null;
+        const platforms = (requestedPlatforms || getAvailableSearchPlatforms())
+            .filter(platform => getAvailableSearchPlatforms().includes(platform));
         const errors = [];
 
         const platformTasks = platforms.map(platform => {
@@ -1129,23 +1102,22 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             const { payload } = raceResult;
             if (payload.ok) {
                 const result = payload.result;
-                providerMap[payload.platform] = String(result?.provider || payload.providerForPlatform || 'primary');
                 if (Array.isArray(result?.songs) && result.songs.length > 0) {
-                    mergedSongs.push(...result.songs);
+                    return {
+                        songs: result.songs,
+                        provider: 'multi',
+                        providerMap: { [payload.platform]: String(result?.provider || payload.providerForPlatform || 'primary') },
+                        activePlatform: payload.platform
+                    };
                 }
             } else {
                 errors.push(payload.error);
             }
         }
-
-        const songs = mergeSongsWithoutDuplicates([], mergedSongs);
-        if (songs.length > 0) {
-            return { songs, provider: 'multi', providerMap };
-        }
         if (errors.length >= platforms.length && errors[0]) {
             throw errors[0];
         }
-        return { songs: [], provider: 'multi', providerMap };
+        return { songs: [], provider: 'multi', providerMap: {} };
     }
 
     const requestPage = Math.max(1, Number(options.page || 1));
@@ -1262,6 +1234,7 @@ function resetKeywordPagingState() {
         limit: searchApiLimit,
         provider: 'primary',
         providerMap: null,
+        activePlatform: '',
         hasMore: false,
         loading: false
     };
@@ -1271,7 +1244,7 @@ function enableKeywordPaging(keyword, platform, firstBatchCount, provider = 'pri
     const normalizedProvider = String(provider || 'primary');
     const normalizedPlatform = String(platform || '').trim();
     const isAllPlatform = normalizedPlatform === PLATFORM_ALL_VALUE;
-    const platformCount = isAllPlatform ? getAvailableSearchPlatforms().length : 1;
+    const platformCount = isAllPlatform && !extra?.activePlatform ? getAvailableSearchPlatforms().length : 1;
     const effectiveLimitBase = normalizedProvider === 'backup3' ? 10 : searchApiLimit;
     const effectiveLimit = Math.max(1, effectiveLimitBase * Math.max(1, platformCount));
     keywordPagingState = {
@@ -1284,6 +1257,7 @@ function enableKeywordPaging(keyword, platform, firstBatchCount, provider = 'pri
         providerMap: (extra?.providerMap && typeof extra.providerMap === 'object')
             ? { ...extra.providerMap }
             : null,
+        activePlatform: String(extra?.activePlatform || ''),
         // Optimistic: allow trying "next" once at list end, then decide by actual response.
         hasMore: true,
         loading: false
@@ -1321,13 +1295,15 @@ async function loadNextKeywordPage() {
                 page: nextPage,
                 limit: keywordPagingState.limit,
                 provider: keywordPagingState.provider,
-                providerMap: keywordPagingState.providerMap || undefined
+                providerMap: keywordPagingState.providerMap || undefined,
+                platforms: keywordPagingState.activePlatform ? [keywordPagingState.activePlatform] : undefined
             }
         );
         const songs = Array.isArray(result?.songs) ? result.songs : [];
         if (result?.providerMap && typeof result.providerMap === 'object') {
             keywordPagingState.providerMap = { ...result.providerMap };
         }
+        if (result?.activePlatform) keywordPagingState.activePlatform = String(result.activePlatform);
 
         keywordPagingState.page = nextPage;
         const isAllPlatform = String(keywordPagingState.platform || '') === PLATFORM_ALL_VALUE;
@@ -1984,17 +1960,16 @@ async function search() {
     if (!input) return;
 
     const searchMode = document.getElementById('searchMode').value;
-    const selectedPlatform = document.getElementById('platform').value;
-    let platform = selectedPlatform;
+    let platform = PLATFORM_ALL_VALUE;
     const quality = document.getElementById('quality').value;
     const resultsDiv = document.getElementById('results');
 
     if (searchMode !== 'keyword' && String(platform) === PLATFORM_ALL_VALUE) {
         platform = supportedPlatforms.includes('netease') ? 'netease' : (supportedPlatforms[0] || 'netease');
-        showToast(`当前模式不支持“全部”，已切换到${platformDisplayName(platform)}`, 'info');
+        showToast(`ID / 歌单解析会自动尝试可用音乐源`, 'info');
     }
 
-    resultsDiv.innerHTML = '<div class="empty-state">検索中...</div>';
+    resultsDiv.innerHTML = '<div class="empty-state">正在同时搜索网易云、QQ 音乐和酷我…</div>';
 
     try {
         currentSearchParams = null;
@@ -2006,12 +1981,12 @@ async function search() {
                 return;
             }
 
-            const { songs, provider, providerMap } = await searchSongsByKeyword(input, platform, {
+            const { songs, provider, providerMap, activePlatform } = await searchSongsByKeyword(input, platform, {
                 page: 1,
                 limit: searchApiLimit
             });
             if (songs.length > 0) {
-                enableKeywordPaging(input, platform, songs.length, provider, { providerMap });
+                enableKeywordPaging(input, platform, songs.length, provider, { providerMap, activePlatform });
                 displaySongsWithPagination(songs);
             } else {
                 const emptyMessage = String(platform) === PLATFORM_ALL_VALUE
@@ -2655,29 +2630,14 @@ function renderHomeToplistCards() {
     });
 }
 
-function syncHomeSourceSwitch() {
-    const available = new Set(supportedPlatforms);
-    if (!available.has(homeSource)) homeSource = supportedPlatforms[0] || 'netease';
-    document.querySelectorAll('[data-home-source]').forEach(button => {
-        const source = button.getAttribute('data-home-source');
-        const availableSource = available.has(source);
-        button.disabled = !availableSource;
-        button.hidden = !availableSource;
-        button.classList.toggle('active', source === homeSource);
-    });
-    renderHomeToplistCards();
-}
-
 function runHomeSearch(keyword) {
     const input = String(keyword || '').trim();
     if (!input) return;
     resetSearchViewMode();
-    const platform = document.getElementById('platform');
     const searchInput = document.getElementById('searchInput');
     const mode = document.getElementById('searchMode');
     if (mode) mode.value = 'keyword';
     updatePlatformSelect();
-    if (platform && Array.from(platform.options).some(option => option.value === homeSource)) platform.value = homeSource;
     if (searchInput) searchInput.value = input;
     setAppView('search');
     search();
@@ -2752,12 +2712,6 @@ function initHomeInterface() {
         renderHomeToplistCards();
     });
     document.getElementById('backToToplistsBtn')?.addEventListener('click', () => setAppView('home'));
-    document.getElementById('homeSourceSwitch')?.addEventListener('click', event => {
-        const button = event.target.closest('[data-home-source]');
-        if (!button || button.disabled) return;
-        homeSource = button.getAttribute('data-home-source');
-        syncHomeSourceSwitch();
-    });
     document.getElementById('homeNowPlayingBtn')?.addEventListener('click', () => setFullPlayerOpen(true));
     document.getElementById('createPlaylistBtn')?.addEventListener('click', () => createSavedPlaylist());
     document.getElementById('favoriteList')?.addEventListener('click', event => {
@@ -2776,7 +2730,7 @@ function initHomeInterface() {
         const card = event.target.closest('[data-play-saved-playlist]');
         if (card) playSavedPlaylist(card.dataset.playSavedPlaylist);
     });
-    syncHomeSourceSwitch();
+    renderHomeToplistCards();
 }
 
 function bindSongMeta(song) {
@@ -3790,8 +3744,7 @@ document.querySelectorAll('.type-btn').forEach(btn => {
 });
 
 function updatePlatformSelector() {
-    const searchMode = String(document.getElementById('searchMode')?.value || 'keyword').trim();
-    updatePlatformSelect({ forceKeywordDefault: searchMode === 'keyword' });
+    updatePlatformSelect();
 }
 
 document.getElementById('searchMode').addEventListener('change', updatePlatformSelector);

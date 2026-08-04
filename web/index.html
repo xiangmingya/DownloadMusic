@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260804-04">
+    <link rel="stylesheet" href="style.css?v=20260804-05">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -90,13 +90,6 @@
                     </div>
                 </div>
 
-                <div class="home-source-switch" id="homeSourceSwitch" role="group" aria-label="选择音乐源">
-                    <span>当前音乐源</span>
-                    <button type="button" class="source-switch-btn active" data-home-source="netease">网易云</button>
-                    <button type="button" class="source-switch-btn" data-home-source="qq">QQ 音乐</button>
-                    <button type="button" class="source-switch-btn" data-home-source="kuwo">酷我</button>
-                </div>
-
                 <section class="home-section" aria-labelledby="quickStartTitle">
                     <div class="section-heading"><div><p class="eyebrow">快速开始</p><h2 id="quickStartTitle">此刻适合什么</h2></div></div>
                     <div class="mood-grid">
@@ -138,10 +131,6 @@
                     <div class="search-type">
                         <button class="type-btn active" data-type="song">单曲</button>
                         <button class="type-btn" data-type="playlist">歌单</button>
-                    </div>
-                    <div class="platform-selector" id="platformSelector">
-                        <label>平台:</label>
-                        <select id="platform"></select>
                     </div>
                     <div class="quality-selector">
                         <label>音质:</label>
@@ -255,7 +244,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260804-04';
+        const APP_ASSET_VERSION = '20260804-05';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
