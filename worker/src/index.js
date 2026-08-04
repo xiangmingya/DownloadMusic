@@ -1605,13 +1605,6 @@ function backup4ExtractLinkFromMessage(message) {
   return normalizeMediaUrl(matched?.[1] || "");
 }
 
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(text || "")));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 async function backup4TryGdstudio(platform, id, quality) {
   if (platform !== "netease" && platform !== "kuwo") return null;
 
