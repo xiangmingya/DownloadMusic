@@ -7,7 +7,9 @@ const API_ROUTES = {
     media: `${API_BASE}/media`,
     backup: `${API_BASE}/backup`,
     backup3: `${API_BASE}/backup3`,
-    backup4: `${API_BASE}/backup4`
+    backup4: `${API_BASE}/backup4`,
+    toplists: `${API_BASE}/toplists`,
+    toplist: `${API_BASE}/toplist`
 };
 const PRIMARY_ALLOWED_PLATFORMS = ['netease', 'qq', 'kuwo'];
 const PLATFORM_ALL_VALUE = 'all';
@@ -2556,10 +2558,11 @@ async function playSavedPlaylist(playlistId) {
 }
 
 function setAppView(view) {
-    const valid = ['home', 'search', 'library'].includes(view) ? view : 'home';
+    const valid = ['home', 'search', 'library', 'toplist'].includes(view) ? view : 'home';
     document.getElementById('homeView').style.display = valid === 'home' ? '' : 'none';
     document.getElementById('searchView').style.display = valid === 'search' ? '' : 'none';
     document.getElementById('libraryView').style.display = valid === 'library' ? '' : 'none';
+    document.getElementById('toplistView').style.display = valid === 'toplist' ? '' : 'none';
     document.querySelectorAll('[data-view-target]').forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-view-target') === valid);
     });
@@ -2613,6 +2616,7 @@ function syncHomeSourceSwitch() {
 function runHomeSearch(keyword) {
     const input = String(keyword || '').trim();
     if (!input) return;
+    resetSearchViewMode();
     const platform = document.getElementById('platform');
     const searchInput = document.getElementById('searchInput');
     const mode = document.getElementById('searchMode');
@@ -2624,6 +2628,89 @@ function runHomeSearch(keyword) {
     search();
 }
 
+function resetSearchViewMode() {
+    const heading = document.getElementById('searchViewEyebrow');
+    const title = document.getElementById('searchViewTitle');
+    const description = document.getElementById('searchViewDescription');
+    const searchSection = document.querySelector('#searchView .search-section');
+    const backButton = document.getElementById('backToToplistsBtn');
+    if (heading) heading.textContent = '探索';
+    if (title) title.textContent = '找到想听的声音';
+    if (description) description.textContent = '支持歌曲、歌单与 ID 解析。';
+    if (searchSection) searchSection.style.display = '';
+    if (backButton) backButton.style.display = 'none';
+}
+
+function setToplistDirectoryLoading() {
+    const grid = document.getElementById('toplistGrid');
+    if (grid) grid.innerHTML = '<div class="collection-empty">正在加载榜单歌单…</div>';
+}
+
+function renderToplistDirectory(entries, platform) {
+    const grid = document.getElementById('toplistGrid');
+    if (!grid) return;
+    if (!entries.length) {
+        grid.innerHTML = '<div class="collection-empty">暂时没有可展示的榜单歌单。</div>';
+        return;
+    }
+    grid.innerHTML = entries.map(item => {
+        const cover = getProxiedCoverUrl(item.cover || '');
+        const subtitle = String(item.description || '实时更新').replace(/\s+/g, ' ').slice(0, 58);
+        const countText = item.count ? `${item.count} 首歌曲` : '打开榜单';
+        return `<button type="button" class="toplist-card" data-toplist-id="${escapeHtml(item.id)}" data-toplist-platform="${escapeHtml(platform)}" data-toplist-name="${escapeHtml(item.name)}"><img class="toplist-cover" src="${escapeHtml(cover)}" alt="" onerror="this.style.opacity='.35'"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(subtitle)}</small><em>${countText}</em></span></button>`;
+    }).join('');
+}
+
+async function openToplistDirectory() {
+    const platform = homeSource;
+    const title = document.getElementById('toplistViewTitle');
+    const description = document.getElementById('toplistViewDescription');
+    if (title) title.textContent = `${platformDisplayName(platform)}榜单歌单`;
+    if (description) description.textContent = '选择一张榜单，直接查看其中的歌曲。';
+    setAppView('toplist');
+    setToplistDirectoryLoading();
+    try {
+        const url = new URL(API_ROUTES.toplists, window.location.href);
+        url.searchParams.set('platform', platform);
+        const response = await apiFetch(url.toString(), { timeoutMs: 18000 });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单加载失败');
+        renderToplistDirectory(Array.isArray(payload?.data) ? payload.data : [], platform);
+    } catch (error) {
+        const grid = document.getElementById('toplistGrid');
+        if (grid) grid.innerHTML = `<div class="collection-empty">${escapeHtml(localizeErrorMessage(error?.message, '榜单暂不可用'))}</div>`;
+    }
+}
+
+async function openToplistSongs(platform, id, name) {
+    const heading = document.getElementById('searchViewEyebrow');
+    const title = document.getElementById('searchViewTitle');
+    const description = document.getElementById('searchViewDescription');
+    const searchSection = document.querySelector('#searchView .search-section');
+    const backButton = document.getElementById('backToToplistsBtn');
+    if (heading) heading.textContent = '榜单歌单';
+    if (title) title.textContent = name || '榜单歌曲';
+    if (description) description.textContent = '正在展示这张榜单里的歌曲。';
+    if (searchSection) searchSection.style.display = 'none';
+    if (backButton) backButton.style.display = '';
+    setAppView('search');
+    const results = document.getElementById('results');
+    results.innerHTML = '<div class="empty-state">正在加载榜单歌曲…</div>';
+    try {
+        const url = new URL(API_ROUTES.toplist, window.location.href);
+        url.searchParams.set('platform', platform);
+        url.searchParams.set('id', id);
+        const response = await apiFetch(url.toString(), { timeoutMs: 20000 });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单歌曲加载失败');
+        const songs = (Array.isArray(payload?.data?.songs) ? payload.data.songs : []).map(song => ({ ...song, platform }));
+        if (!songs.length) throw new Error('这张榜单暂时没有可播放歌曲');
+        displaySongsWithPagination(songs);
+    } catch (error) {
+        results.innerHTML = `<div class="empty-state">${escapeHtml(localizeErrorMessage(error?.message, '榜单歌曲加载失败'))}</div>`;
+    }
+}
+
 function initHomeInterface() {
     favoriteSongs = loadLocalSongList(favoriteStorageKey, 500);
     recentSongs = loadLocalSongList(recentStorageKey, 24);
@@ -2633,13 +2720,21 @@ function initHomeInterface() {
     renderLibrary();
     document.querySelectorAll('[data-view-target]').forEach(item => item.addEventListener('click', event => {
         if (item.tagName === 'A') event.preventDefault();
-        setAppView(item.getAttribute('data-view-target'));
+        const target = item.getAttribute('data-view-target');
+        if (target === 'search') resetSearchViewMode();
+        setAppView(target);
     }));
     document.getElementById('homeSearchForm')?.addEventListener('submit', event => {
         event.preventDefault();
         runHomeSearch(document.getElementById('homeSearchInput')?.value);
     });
-    document.querySelectorAll('[data-search-keyword], [data-discovery-row]').forEach(button => button.addEventListener('click', () => runHomeSearch(button.getAttribute('data-search-keyword'))));
+    document.querySelectorAll('[data-search-keyword]').forEach(button => button.addEventListener('click', () => runHomeSearch(button.getAttribute('data-search-keyword'))));
+    document.querySelectorAll('[data-discovery-row], [data-toplist-open]').forEach(button => button.addEventListener('click', openToplistDirectory));
+    document.getElementById('toplistGrid')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-toplist-id]');
+        if (button) openToplistSongs(button.dataset.toplistPlatform, button.dataset.toplistId, button.dataset.toplistName);
+    });
+    document.getElementById('backToToplistsBtn')?.addEventListener('click', openToplistDirectory);
     document.getElementById('homeSourceSwitch')?.addEventListener('click', event => {
         const button = event.target.closest('[data-home-source]');
         if (!button || button.disabled) return;

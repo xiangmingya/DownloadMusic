@@ -80,6 +80,12 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/proxy/method" && request.method === "GET") {
       return withCors(request, env, await handleMethod(request, env));
     }
+    if (url.pathname === "/api/proxy/toplists" && request.method === "GET") {
+      return withCors(request, env, await handleToplists(request, env));
+    }
+    if (url.pathname === "/api/proxy/toplist" && request.method === "GET") {
+      return withCors(request, env, await handleToplist(request, env));
+    }
     if (url.pathname === "/api/proxy/parse" && request.method === "POST") {
       return withCors(request, env, await handleParse(request, env));
     }
@@ -1210,6 +1216,129 @@ async function callPlaylist(platform, id) {
   }
 
   throw new Error("不支持的平台");
+}
+
+function parseToplistsNetease(resp) {
+  const lists = Array.isArray(resp?.list) ? resp.list : [];
+  return lists.slice(0, 30).map((item) => ({
+    id: String(item?.id || ""),
+    name: String(item?.name || "网易云榜单"),
+    description: String(item?.description || item?.updateFrequency || "实时更新"),
+    cover: normalizeMediaUrl(item?.coverImgUrl || ""),
+    count: Number(item?.trackCount || 0),
+  })).filter((item) => item.id);
+}
+
+function parseToplistsQQ(resp) {
+  const groups = Array.isArray(resp?.toplist?.data?.group) ? resp.toplist.data.group : [];
+  return groups.flatMap((group) => {
+    const groupName = String(group?.groupName || "QQ 音乐榜单");
+    const lists = Array.isArray(group?.toplist) ? group.toplist : [];
+    return lists.map((item) => ({
+      id: String(item?.topId || ""),
+      name: String(item?.title || "QQ 音乐榜单"),
+      description: String(item?.updateTips || item?.intro || groupName).replace(/<[^>]+>/g, " ").trim(),
+      cover: normalizeMediaUrl(item?.frontPicUrl || item?.mbFrontPicUrl || ""),
+      count: Number(item?.totalNum || 0),
+    })).filter((item) => item.id);
+  }).slice(0, 30);
+}
+
+function parseToplistQQSongs(resp, id) {
+  const data = resp?.toplist?.data || {};
+  const info = data?.data || {};
+  const songs = Array.isArray(data?.songInfoList) ? data.songInfoList : [];
+  return {
+    id: String(info?.topId || id),
+    name: String(info?.title || "QQ 音乐榜单"),
+    cover: normalizeMediaUrl(info?.frontPicUrl || info?.mbFrontPicUrl || ""),
+    songs: songs.map((item) => ({
+      id: String(item?.mid || ""),
+      name: String(item?.name || item?.title || "未知歌曲"),
+      artist: (Array.isArray(item?.singer) ? item.singer : []).map((singer) => singer?.name || singer?.title).filter(Boolean).join(", "),
+      album: String(item?.album?.name || item?.album?.title || ""),
+      cover: normalizeMediaUrl(qqAlbumCoverUrl(item?.album || {})),
+    })).filter((item) => item.id),
+  };
+}
+
+async function callToplists(platform) {
+  if (platform === "netease") {
+    const { status, json } = await upstreamJson("https://music.163.com/api/toplist", {
+      headers: NETEASE_WEB_HEADERS,
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseToplistsNetease(json);
+  }
+
+  if (platform === "qq") {
+    const body = {
+      comm: { cv: 4747474, ct: 24, format: "json", inCharset: "utf-8", outCharset: "utf-8", platform: "yqq.json", needNewCode: 1 },
+      toplist: { module: "musicToplist.ToplistInfoServer", method: "GetAll", param: {} },
+    };
+    const { status, json } = await upstreamJson("https://u.y.qq.com/cgi-bin/musicu.fcg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Referer: "https://y.qq.com/" },
+      body: JSON.stringify(body),
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseToplistsQQ(json);
+  }
+
+  if (platform === "kuwo") {
+    throw new Error("酷我官网榜单暂不允许匿名读取");
+  }
+
+  throw new Error("不支持的平台");
+}
+
+async function callToplist(platform, id) {
+  if (platform === "netease") {
+    const data = await callPlaylist(platform, id);
+    return { id, name: "网易云榜单", cover: "", songs: data.list || [] };
+  }
+
+  if (platform === "qq") {
+    const body = {
+      comm: { cv: 4747474, ct: 24, format: "json", inCharset: "utf-8", outCharset: "utf-8", platform: "yqq.json", needNewCode: 1 },
+      toplist: { module: "musicToplist.ToplistInfoServer", method: "GetDetail", param: { topid: Number(id), offset: 0, num: 100 } },
+    };
+    const { status, json } = await upstreamJson("https://u.y.qq.com/cgi-bin/musicu.fcg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Referer: "https://y.qq.com/" },
+      body: JSON.stringify(body),
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    return parseToplistQQSongs(json, id);
+  }
+
+  throw new Error("该音乐源暂不支持榜单详情");
+}
+
+async function handleToplists(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const platform = String(new URL(request.url).searchParams.get("platform") || "").trim();
+  if (!platform) return jsonResponse(400, { code: -1, message: "缺少参数: platform" });
+  try {
+    return jsonResponse(200, { code: 0, message: "Success", data: await callToplists(platform) });
+  } catch (err) {
+    return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取榜单失败" });
+  }
+}
+
+async function handleToplist(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const url = new URL(request.url);
+  const platform = String(url.searchParams.get("platform") || "").trim();
+  const id = String(url.searchParams.get("id") || "").trim();
+  if (!platform || !id) return jsonResponse(400, { code: -1, message: "缺少参数: platform / id" });
+  try {
+    return jsonResponse(200, { code: 0, message: "Success", data: await callToplist(platform, id) });
+  } catch (err) {
+    return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取榜单详情失败" });
+  }
 }
 
 async function handleMethod(request, env) {
