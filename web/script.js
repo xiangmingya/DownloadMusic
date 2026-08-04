@@ -78,7 +78,14 @@ const linuxdoKeyStorageKey = `${LOCAL_KEY_PREFIX}${linuxdoUserId || 'default'}`;
 const playModeStorageKey = `${LOCAL_KEY_PREFIX}playmode_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 let linuxdoUserKey = '';
 const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
+const favoriteStorageKey = `${LOCAL_KEY_PREFIX}favorites_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
+const recentStorageKey = `${LOCAL_KEY_PREFIX}recent_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
+const savedPlaylistStorageKey = `${LOCAL_KEY_PREFIX}saved_playlists_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 let playlistSongs = [];
+let favoriteSongs = [];
+let recentSongs = [];
+let savedPlaylists = [];
+let homeSource = 'netease';
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
@@ -149,6 +156,10 @@ function getIconSvg(name, size = 18) {
             return base('<path d="M10 14H38M10 24H38M10 34H38" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>');
         case 'record':
             return base('<circle cx="24" cy="24" r="14" stroke="currentColor" stroke-width="3.5"/><circle cx="24" cy="24" r="4" fill="currentColor" stroke="none"/>');
+        case 'heart':
+            return base('<path d="M24 39S9 30.2 9 18.8C9 13.9 12.8 10 17.5 10c3 0 5.2 1.5 6.5 3.8C25.3 11.5 27.5 10 30.5 10 35.2 10 39 13.9 39 18.8 39 30.2 24 39 24 39Z" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>');
+        case 'bookmark':
+            return base('<path d="M15 9H33A2 2 0 0 1 35 11V39L24 32L13 39V11A2 2 0 0 1 15 9Z" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>');
         case 'fullscreen-enter':
             return base('<path d="M17 8H8V17M31 8H40V17M8 31V40H17M40 31V40H31" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>');
         case 'fullscreen-exit':
@@ -942,6 +953,7 @@ function updatePlatformSelect(options = {}) {
         )
     );
     platformSelect.innerHTML = optionHtml.join('');
+    syncHomeSourceSwitch();
 }
 
 function platformDisplayName(platformKey) {
@@ -2194,7 +2206,9 @@ function renderLocalPage() {
                 </div>
                 <div>
                     <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 16)}</button>
+                    <button class="favorite-song-btn" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${isFavoriteSong(song) ? '取消收藏' : '收藏'}">${getIconSvg('heart', 16)}</button>
                     <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 16)}</button>
+                    <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 16)}</button>
                     <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
                 </div>
             </div>
@@ -2452,6 +2466,336 @@ function normalizeSongDataSource(raw) {
     return (value === 'backup' || value === 'backup3' || value === 'backup4') ? value : 'primary';
 }
 
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function toLibrarySong(song) {
+    if (!song || !song.id) return null;
+    return {
+        id: String(song.id),
+        name: String(song.name || '未知歌曲'),
+        artist: String(song.artist || '未知歌手'),
+        album: String(song.album || ''),
+        platform: String(song.platform || song.source || ''),
+        source: String(song.platform || song.source || ''),
+        cover: normalizeMediaUrl(song.cover || ''),
+        dataSource: normalizeSongDataSource(song.dataSource),
+        backup: song?.backup && typeof song.backup === 'object' ? song.backup : null,
+        backup3: song?.backup3 && typeof song.backup3 === 'object' ? song.backup3 : null
+    };
+}
+
+function loadLocalSongList(key, limit = 100) {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+        return Array.isArray(parsed)
+            ? parsed.map(toLibrarySong).filter(Boolean).slice(0, limit)
+            : [];
+    } catch {
+        return [];
+    }
+}
+
+function saveLocalSongList(key, songs) {
+    try {
+        localStorage.setItem(key, JSON.stringify((songs || []).map(toLibrarySong).filter(Boolean)));
+    } catch {
+        // 浏览器无痕模式或空间已满时，应用仍可继续播放。
+    }
+}
+
+function songIdentity(song) {
+    return `${String(song?.platform || song?.source || '')}:${String(song?.id || '')}`;
+}
+
+function isFavoriteSong(song) {
+    return favoriteSongs.some(item => songIdentity(item) === songIdentity(song));
+}
+
+function toggleFavoriteByIndex(index) {
+    const song = toLibrarySong(getSongByIndex(Number(index)));
+    if (!song) return;
+    const existingIndex = favoriteSongs.findIndex(item => songIdentity(item) === songIdentity(song));
+    if (existingIndex >= 0) {
+        favoriteSongs.splice(existingIndex, 1);
+        showToast('已从喜欢的音乐移除', 'info');
+    } else {
+        favoriteSongs.unshift(song);
+        favoriteSongs = favoriteSongs.slice(0, 500);
+        showToast('已加入喜欢的音乐', 'success');
+    }
+    saveLocalSongList(favoriteStorageKey, favoriteSongs);
+    renderHomeCollection();
+    renderLibrary();
+    renderLocalPage();
+}
+
+function rememberRecentSong(song) {
+    const item = toLibrarySong(song);
+    if (!item) return;
+    recentSongs = [item, ...recentSongs.filter(entry => songIdentity(entry) !== songIdentity(item))].slice(0, 24);
+    saveLocalSongList(recentStorageKey, recentSongs);
+    renderHomeNowPlaying();
+    renderHomeCollection();
+    renderLibrary();
+}
+
+function loadSavedPlaylists() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(savedPlaylistStorageKey) || '[]');
+        if (!Array.isArray(raw)) return [];
+        return raw
+            .filter(item => item && item.id && item.name)
+            .map(item => ({
+                id: String(item.id),
+                name: String(item.name).slice(0, 40),
+                songs: Array.isArray(item.songs) ? item.songs.map(toLibrarySong).filter(Boolean).slice(0, 500) : []
+            }));
+    } catch {
+        return [];
+    }
+}
+
+function saveSavedPlaylists() {
+    try {
+        localStorage.setItem(savedPlaylistStorageKey, JSON.stringify(savedPlaylists));
+    } catch {
+        showToast('歌单保存失败，请检查浏览器存储空间', 'error');
+    }
+}
+
+function createSavedPlaylist(defaultName = '') {
+    const rawName = window.prompt('输入歌单名称', defaultName || '我的歌单');
+    const name = String(rawName || '').trim().slice(0, 40);
+    if (!name) return null;
+    const playlist = { id: crypto.randomUUID(), name, songs: [] };
+    savedPlaylists.unshift(playlist);
+    saveSavedPlaylists();
+    renderLibrary();
+    showToast(`已创建歌单「${name}」`, 'success');
+    return playlist;
+}
+
+function saveSongToCustomPlaylistByIndex(index) {
+    const song = toLibrarySong(getSongByIndex(Number(index)));
+    if (!song) return;
+    const suggested = savedPlaylists[0]?.name || '我的歌单';
+    const selectedName = String(window.prompt('输入要保存到的歌单名称（同名会加入已有歌单）', suggested) || '').trim().slice(0, 40);
+    if (!selectedName) return;
+    let playlist = savedPlaylists.find(item => item.name === selectedName);
+    if (!playlist) {
+        playlist = { id: crypto.randomUUID(), name: selectedName, songs: [] };
+        savedPlaylists.unshift(playlist);
+    }
+    if (playlist.songs.some(item => songIdentity(item) === songIdentity(song))) {
+        showToast('这首歌已经在该歌单中', 'info');
+        return;
+    }
+    playlist.songs.push(song);
+    saveSavedPlaylists();
+    renderLibrary();
+    showToast(`已加入「${playlist.name}」`, 'success');
+}
+
+function songRowMarkup(song, collection, index) {
+    const cover = getProxiedCoverUrl(song.cover || '');
+    const image = cover
+        ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
+        : '<span class="mini-song-art" aria-hidden="true"></span>';
+    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 16)}</button></div>`;
+}
+
+function renderHomeNowPlaying() {
+    const title = document.getElementById('homeNowPlayingTitle');
+    const artist = document.getElementById('homeNowPlayingArtist');
+    const art = document.getElementById('homeNowPlayingArt');
+    const btn = document.getElementById('homeNowPlayingBtn');
+    if (!title || !artist || !art || !btn) return;
+    if (!currentPlayingSong) {
+        title.textContent = '还没有开始播放';
+        artist.textContent = '选一首歌，让这里成为你的入口。';
+        art.style.backgroundImage = '';
+        btn.disabled = true;
+        return;
+    }
+    title.textContent = currentPlayingSong.name || '正在播放';
+    artist.textContent = currentPlayingSong.artist || '';
+    const cover = getProxiedCoverUrl(currentPlayingSong.cover || '');
+    art.style.backgroundImage = cover ? `url("${cover.replace(/"/g, '%22')}")` : '';
+    art.style.backgroundSize = 'cover';
+    art.style.backgroundPosition = 'center';
+    btn.disabled = false;
+}
+
+function renderHomeCollection() {
+    const list = document.getElementById('homeCollectionList');
+    if (!list) return;
+    const source = recentSongs.length ? recentSongs : favoriteSongs;
+    const collection = recentSongs.length ? 'recent' : 'favorites';
+    if (!source.length) {
+        list.innerHTML = '<div class="collection-empty">从探索里播放或收藏一首歌，<br>它就会出现在这里。</div>';
+        return;
+    }
+    list.innerHTML = source.slice(0, 3).map((song, index) => songRowMarkup(song, collection, index)).join('');
+}
+
+function renderLibrary() {
+    const favoriteList = document.getElementById('favoriteList');
+    const recentList = document.getElementById('recentList');
+    const savedList = document.getElementById('savedPlaylistList');
+    if (!favoriteList || !recentList || !savedList) return;
+    document.getElementById('favoriteCount').textContent = String(favoriteSongs.length);
+    document.getElementById('recentCount').textContent = String(recentSongs.length);
+    document.getElementById('playlistCount').textContent = String(savedPlaylists.length);
+    favoriteList.innerHTML = favoriteSongs.length
+        ? favoriteSongs.slice(0, 5).map((song, index) => songRowMarkup(song, 'favorites', index)).join('')
+        : '<div class="library-empty">还没有收藏。搜索结果右侧的心形按钮可以收藏歌曲。</div>';
+    recentList.innerHTML = recentSongs.length
+        ? recentSongs.slice(0, 5).map((song, index) => songRowMarkup(song, 'recent', index)).join('')
+        : '<div class="library-empty">还没有播放记录。</div>';
+    savedList.innerHTML = savedPlaylists.length
+        ? savedPlaylists.map(item => `<button type="button" class="saved-playlist-card" data-play-saved-playlist="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small><span>播放歌单</span></button>`).join('')
+        : '<div class="library-empty">新建歌单后，可在搜索结果中将歌曲保存进去。</div>';
+}
+
+async function playCollectionSong(collection, index) {
+    const groups = { favorites: favoriteSongs, recent: recentSongs };
+    const songs = groups[collection];
+    const song = songs?.[Number(index)];
+    if (!song) return;
+    allSongs = songs.map(toLibrarySong).filter(Boolean);
+    await playSong(song.platform, song.id, song.name, song.artist, Number(index));
+}
+
+async function playSavedPlaylist(playlistId) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    if (!playlist || !playlist.songs.length) {
+        showToast('这个歌单还是空的', 'info');
+        return;
+    }
+    allSongs = playlist.songs.map(toLibrarySong).filter(Boolean);
+    const song = allSongs[0];
+    await playSong(song.platform, song.id, song.name, song.artist, 0);
+}
+
+function setAppView(view) {
+    const valid = ['home', 'search', 'library'].includes(view) ? view : 'home';
+    document.getElementById('homeView').style.display = valid === 'home' ? '' : 'none';
+    document.getElementById('searchView').style.display = valid === 'search' ? '' : 'none';
+    document.getElementById('libraryView').style.display = valid === 'library' ? '' : 'none';
+    document.querySelectorAll('[data-view-target]').forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-view-target') === valid);
+    });
+    if (valid === 'library') renderLibrary();
+}
+
+const HOME_DISCOVERY_BY_SOURCE = {
+    netease: [
+        { title: '网易云热歌', note: '从网易云音乐里发现当下热门', keyword: '热歌榜' },
+        { title: '网易云推荐', note: '用一组新歌打开今天', keyword: '每日推荐' },
+        { title: '网易云经典', note: '回到那些一直在的旋律', keyword: '经典老歌' }
+    ],
+    qq: [
+        { title: 'QQ 热歌', note: '从 QQ 音乐里看看大家在听什么', keyword: '热歌榜' },
+        { title: 'QQ 流行', note: '刷新一下你的常听列表', keyword: '流行歌曲' },
+        { title: 'QQ 经典', note: '适合反复播放的熟悉旋律', keyword: '经典老歌' }
+    ],
+    kuwo: [
+        { title: '酷我热歌', note: '从酷我音乐里找当下热门', keyword: '热歌榜' },
+        { title: '酷我新歌', note: '给耳朵一点新鲜感', keyword: '新歌推荐' },
+        { title: '酷我怀旧', note: '把时间倒回一首歌里', keyword: '怀旧金曲' }
+    ]
+};
+
+function renderHomeSourceContent() {
+    const entries = HOME_DISCOVERY_BY_SOURCE[homeSource] || HOME_DISCOVERY_BY_SOURCE.netease;
+    document.querySelectorAll('[data-discovery-row]').forEach(button => {
+        const item = entries[Number(button.dataset.discoveryRow)];
+        if (!item) return;
+        button.dataset.searchKeyword = item.keyword;
+        const title = button.querySelector('strong');
+        const note = button.querySelector('small');
+        if (title) title.textContent = item.title;
+        if (note) note.textContent = item.note;
+    });
+}
+
+function syncHomeSourceSwitch() {
+    const available = new Set(supportedPlatforms);
+    if (!available.has(homeSource)) homeSource = supportedPlatforms[0] || 'netease';
+    document.querySelectorAll('[data-home-source]').forEach(button => {
+        const source = button.getAttribute('data-home-source');
+        const availableSource = available.has(source);
+        button.disabled = !availableSource;
+        button.hidden = !availableSource;
+        button.classList.toggle('active', source === homeSource);
+    });
+    renderHomeSourceContent();
+}
+
+function runHomeSearch(keyword) {
+    const input = String(keyword || '').trim();
+    if (!input) return;
+    const platform = document.getElementById('platform');
+    const searchInput = document.getElementById('searchInput');
+    const mode = document.getElementById('searchMode');
+    if (mode) mode.value = 'keyword';
+    updatePlatformSelect();
+    if (platform && Array.from(platform.options).some(option => option.value === homeSource)) platform.value = homeSource;
+    if (searchInput) searchInput.value = input;
+    setAppView('search');
+    search();
+}
+
+function initHomeInterface() {
+    favoriteSongs = loadLocalSongList(favoriteStorageKey, 500);
+    recentSongs = loadLocalSongList(recentStorageKey, 24);
+    savedPlaylists = loadSavedPlaylists();
+    renderHomeNowPlaying();
+    renderHomeCollection();
+    renderLibrary();
+    document.querySelectorAll('[data-view-target]').forEach(item => item.addEventListener('click', event => {
+        if (item.tagName === 'A') event.preventDefault();
+        setAppView(item.getAttribute('data-view-target'));
+    }));
+    document.getElementById('homeSearchForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        runHomeSearch(document.getElementById('homeSearchInput')?.value);
+    });
+    document.querySelectorAll('[data-search-keyword], [data-discovery-row]').forEach(button => button.addEventListener('click', () => runHomeSearch(button.getAttribute('data-search-keyword'))));
+    document.getElementById('homeSourceSwitch')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-home-source]');
+        if (!button || button.disabled) return;
+        homeSource = button.getAttribute('data-home-source');
+        syncHomeSourceSwitch();
+    });
+    document.getElementById('homeNowPlayingBtn')?.addEventListener('click', () => setFullPlayerOpen(true));
+    document.getElementById('createPlaylistBtn')?.addEventListener('click', () => createSavedPlaylist());
+    document.getElementById('favoriteList')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-play-collection]');
+        if (button) playCollectionSong(button.dataset.playCollection, button.dataset.songIndex);
+    });
+    document.getElementById('recentList')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-play-collection]');
+        if (button) playCollectionSong(button.dataset.playCollection, button.dataset.songIndex);
+    });
+    document.getElementById('homeCollectionList')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-play-collection]');
+        if (button) playCollectionSong(button.dataset.playCollection, button.dataset.songIndex);
+    });
+    document.getElementById('savedPlaylistList')?.addEventListener('click', event => {
+        const card = event.target.closest('[data-play-saved-playlist]');
+        if (card) playSavedPlaylist(card.dataset.playSavedPlaylist);
+    });
+    syncHomeSourceSwitch();
+}
+
 function bindSongMeta(song) {
     const dataSource = normalizeSongDataSource(song?.dataSource);
     currentPlayingSong = {
@@ -2484,6 +2828,7 @@ function bindSongMeta(song) {
     };
     currentLyrics = currentPlayingSong.lyrics;
     updateFullPlayerMeta();
+    rememberRecentSong(currentPlayingSong);
 }
 
 async function playSongCore(source, id, name, artist, options = {}) {
@@ -3456,6 +3801,7 @@ document.getElementById('searchInput').addEventListener('keypress', e => {
 initStaticIcons();
 currentPlayMode = loadPlayModeFromStorage();
 playlistSongs = loadPlaylistFromStorage();
+initHomeInterface();
 renderPlaylistSheet();
 bindPlayerUiEvents();
 updateFullPlayerMeta();

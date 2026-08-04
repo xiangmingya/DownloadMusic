@@ -8,6 +8,9 @@
   - 备用源代理：`/api/proxy/backup`（GDStudio）
   - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
   - 第四层备用解析：`/api/proxy/backup4`（QQ/网易/酷我 多源链路）
+    - 可选：JKAPI（网易云、QQ；需自行配置 `JKAPI_API_KEY`）
+    - 实验性：米兔音乐（酷我；上游可能返回 403，失败会自动跳过）
+  - 可选 Linux DO 邀请码注册：D1 保存邀请码摘要、用户和短时兑换凭据
 
 ## 路由
 
@@ -27,6 +30,48 @@ wrangler secret put TUNEHUB_API_KEY
 wrangler secret put LINUXDO_CLIENT_ID
 wrangler secret put LINUXDO_CLIENT_SECRET
 wrangler secret put LINUXDO_REDIRECT_URI
+```
+
+## 可选 Secret
+
+```bash
+# 仅填写你自己获得的 JKAPI Key
+wrangler secret put JKAPI_API_KEY
+```
+
+## Linux DO 邀请码（可选）
+
+密码登录不受邀请码限制，适合给家人共用；启用后只有 **首次** Linux DO 登录的用户需要邀请码。
+
+```bash
+# 1. 创建 D1，并将输出的 database_id 写进 wrangler.toml 的 [[d1_databases]]
+wrangler d1 create downloadmusic-auth
+
+# 2. 初始化表结构
+wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
+
+# 3. 设置仅供管理员调用接口的独立令牌
+wrangler secret put ADMIN_INVITE_TOKEN
+```
+
+然后将 `INVITE_LINUXDO_ENABLED` 设为 `"true"` 并重新部署。创建的邀请码仅在接口响应中显示一次；D1 不保存明文。
+
+管理接口需要请求头 `Authorization: Bearer <ADMIN_INVITE_TOKEN>`：
+
+```bash
+# 生成 3 个各可用 1 次的邀请码（expires_at 省略表示不过期）
+curl -X POST 'https://你的API域名/api/admin/invites' \
+  -H 'Authorization: Bearer 你的ADMIN_INVITE_TOKEN' \
+  -H 'Content-Type: application/json' \
+  --data '{"count":3,"max_uses":1}'
+
+# 查看最近 200 个邀请码（不会返回明文）
+curl 'https://你的API域名/api/admin/invites' \
+  -H 'Authorization: Bearer 你的ADMIN_INVITE_TOKEN'
+
+# 撤销 ID 为 12 的邀请码
+curl -X POST 'https://你的API域名/api/admin/invites/12/revoke' \
+  -H 'Authorization: Bearer 你的ADMIN_INVITE_TOKEN'
 ```
 
 ## 快速部署

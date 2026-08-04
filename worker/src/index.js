@@ -14,6 +14,7 @@ const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
 const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
 const BACKUP4_TIMEOUT_MS = 18000;
+const BACKUP4_QQMP3_TIMEOUT_MS = 8000;
 const BACKUP4_LXMUSIC_ONRENDER_URL = "https://lxmusicapi.onrender.com";
 const BACKUP4_LXMUSIC_ONRENDER_KEY = "share-v3";
 const BACKUP4_LXMUSIC_SIGNED_URL = "https://88.lxmusic.xn--fiqs8s";
@@ -21,6 +22,11 @@ const BACKUP4_LXMUSIC_SCRIPT_MD5 = "1888f9865338afe6d5534b35171c61a4";
 const BACKUP4_LXMUSIC_SECRET_KEY = "JaJ?a7Nwk_Fgj?2o:znAkst";
 const BACKUP4_OIAPI_MUSIC163_URL = "https://oiapi.net/api/Music_163";
 const BACKUP4_OIAPI_KUWO_URL = "https://oiapi.net/api/Kuwo";
+const BACKUP4_QQMP3_ENDPOINTS = [
+  "https://www.qqmp3.vip/api/kw.php",
+  "https://bb.qqmp3.vip/api/kw.php",
+];
+const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 
 export default {
   async fetch(request, env) {
@@ -53,6 +59,19 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoStatus(env));
+    }
+    if (url.pathname === "/api/auth/invitation/complete" && request.method === "POST") {
+      return withCors(request, env, await handleInvitationComplete(request, env));
+    }
+    if (url.pathname === "/api/admin/invites" && request.method === "POST") {
+      return withCors(request, env, await handleAdminCreateInvites(request, env));
+    }
+    if (url.pathname === "/api/admin/invites" && request.method === "GET") {
+      return withCors(request, env, await handleAdminListInvites(request, env));
+    }
+    const revokeInviteMatch = url.pathname.match(/^\/api\/admin\/invites\/(\d+)\/revoke$/);
+    if (revokeInviteMatch && request.method === "POST") {
+      return withCors(request, env, await handleAdminRevokeInvite(request, env, revokeInviteMatch[1]));
     }
 
     if (url.pathname === "/api/proxy/methods" && request.method === "GET") {
@@ -118,7 +137,7 @@ function withCors(request, env, response) {
   }
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
-  headers.set("Access-Control-Allow-Headers", "Content-Type, X-Tunehub-Key");
+  headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tunehub-Key");
   headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 
   return new Response(response.body, {
@@ -390,6 +409,17 @@ async function getSession(request, env) {
   if (!parsed || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) {
     return null;
   }
+  if (parsed.type === "linuxdo" && invitationLoginEnabled(env)) {
+    const db = getInviteDatabase(env);
+    if (!db) return null;
+    const linuxdoId = String(parsed?.user?.linuxdo_id || parsed?.user?.id || "").trim();
+    if (!linuxdoId) return null;
+    const user = await db
+      .prepare("SELECT disabled_at FROM linuxdo_users WHERE linuxdo_id = ?")
+      .bind(linuxdoId)
+      .first();
+    if (!user || user.disabled_at) return null;
+  }
   return parsed;
 }
 
@@ -399,6 +429,111 @@ async function requireSession(request, env) {
     return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
   }
   return { ok: true, session };
+}
+
+function invitationLoginEnabled(env) {
+  return ["1", "true", "yes", "on"].includes(String(env.INVITE_LINUXDO_ENABLED || "").trim().toLowerCase());
+}
+
+function getInviteDatabase(env) {
+  return env.DB && typeof env.DB.prepare === "function" ? env.DB : null;
+}
+
+function sqlNow() {
+  return new Date().toISOString();
+}
+
+function toSqlDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(value || "")));
+  return Array.from(new Uint8Array(digest))
+    .map((item) => item.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function randomInviteCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const groups = [];
+  for (let start = 0; start < bytes.length; start += 5) {
+    let group = "";
+    for (let i = start; i < start + 5; i += 1) {
+      group += alphabet[bytes[i] % alphabet.length];
+    }
+    groups.push(group);
+  }
+  return `DM-${groups.join("-")}`;
+}
+
+function randomTicket() {
+  return b64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+function normalizeInviteCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/[^A-Z0-9-]/g, "");
+}
+
+function inviteError(message, status = 400) {
+  return jsonResponse(status, { code: -1, message });
+}
+
+function getBearerToken(request) {
+  const header = String(request.headers.get("Authorization") || "");
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+function requireInviteAdmin(request, env) {
+  const configured = String(env.ADMIN_INVITE_TOKEN || "").trim();
+  const supplied = getBearerToken(request);
+  if (!configured) return inviteError("ADMIN_INVITE_TOKEN is not configured", 503);
+  if (!supplied || !safeEqual(supplied, configured)) return inviteError("Unauthorized", 401);
+  return null;
+}
+
+function sanitizeInviteRecord(record) {
+  return {
+    id: Number(record.id),
+    prefix: String(record.prefix || ""),
+    max_uses: Number(record.max_uses || 0),
+    used_count: Number(record.used_count || 0),
+    expires_at: record.expires_at || null,
+    revoked_at: record.revoked_at || null,
+    created_at: record.created_at || null,
+  };
+}
+
+async function findLinuxdoUser(db, linuxdoId) {
+  return db
+    .prepare(
+      "SELECT id, linuxdo_id, name, avatar, disabled_at, created_at, last_login_at FROM linuxdo_users WHERE linuxdo_id = ?",
+    )
+    .bind(linuxdoId)
+    .first();
+}
+
+async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
+  const token = await createSessionToken(
+    {
+      type: "linuxdo",
+      user: {
+        id: linuxdoId,
+        name: userName,
+        linuxdo_id: linuxdoId,
+        avatar,
+      },
+    },
+    env,
+  );
+  return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
 }
 
 async function handlePasswordLogin(request, env) {
@@ -587,27 +722,187 @@ async function handleLinuxdoLoginCallback(request, env) {
 
   const userName = pickLinuxdoName(payload, linuxdoId);
   const avatar = pickLinuxdoAvatar(payload);
-  const token = await createSessionToken(
-    {
-      type: "linuxdo",
-      user: {
-        id: linuxdoId,
-        name: userName,
-        linuxdo_id: linuxdoId,
-        avatar,
-      },
-    },
-    env,
-  );
-
   const redirectTo = safeRedirectUrl(statePayload.redirect, env, request.url);
+
+  // 默认保持旧行为，方便先部署数据库和管理接口；启用后仅 Linux DO 新用户需要邀请码。
+  if (!invitationLoginEnabled(env)) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: redirectTo,
+        "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
+      },
+    });
+  }
+
+  const db = getInviteDatabase(env);
+  if (!db) {
+    return Response.redirect(`${redirectTo}?login=invite_unavailable`, 302);
+  }
+
+  const knownUser = await findLinuxdoUser(db, linuxdoId);
+  if (knownUser?.disabled_at) {
+    return Response.redirect(`${redirectTo}?login=disabled`, 302);
+  }
+  if (knownUser) {
+    await db
+      .prepare("UPDATE linuxdo_users SET name = ?, avatar = ?, last_login_at = ? WHERE id = ?")
+      .bind(userName, avatar, sqlNow(), knownUser.id)
+      .run();
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: redirectTo,
+        "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
+      },
+    });
+  }
+
+  const ticket = randomTicket();
+  const ticketHash = await sha256Hex(ticket);
+  const createdAt = sqlNow();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await db
+    .prepare(
+      "INSERT INTO pending_linuxdo_registrations (ticket_hash, linuxdo_id, name, avatar, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET ticket_hash = excluded.ticket_hash, name = excluded.name, avatar = excluded.avatar, expires_at = excluded.expires_at, created_at = excluded.created_at",
+    )
+    .bind(ticketHash, linuxdoId, userName, avatar, expiresAt, createdAt)
+    .run();
+
+  const inviteUrl = new URL(redirectTo);
+  inviteUrl.searchParams.set("login", "invite");
+  inviteUrl.searchParams.set("ticket", ticket);
   return new Response(null, {
     status: 302,
     headers: {
-      Location: redirectTo,
-      "Set-Cookie": buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600)),
+      Location: inviteUrl.toString(),
     },
   });
+}
+
+async function handleInvitationComplete(request, env) {
+  if (!invitationLoginEnabled(env)) return inviteError("邀请码注册尚未启用", 403);
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("邀请码数据库未配置", 503);
+
+  const body = await parseJsonBody(request);
+  const ticket = String(body.ticket || "").trim();
+  const inviteCode = normalizeInviteCode(body.invite_code);
+  if (!ticket || !inviteCode) return inviteError("请输入邀请码", 400);
+
+  const pending = await db
+    .prepare(
+      "SELECT ticket_hash, linuxdo_id, name, avatar, expires_at FROM pending_linuxdo_registrations WHERE ticket_hash = ?",
+    )
+    .bind(await sha256Hex(ticket))
+    .first();
+  if (!pending || Date.parse(pending.expires_at) <= Date.now()) {
+    return inviteError("邀请码验证已过期，请重新使用 Linux DO 登录", 410);
+  }
+
+  const existing = await findLinuxdoUser(db, pending.linuxdo_id);
+  if (existing?.disabled_at) return inviteError("此账号已被停用", 403);
+  if (existing) {
+    await db.prepare("DELETE FROM pending_linuxdo_registrations WHERE ticket_hash = ?").bind(pending.ticket_hash).run();
+    return jsonResponse(
+      200,
+      { code: 0, message: "Success" },
+      { "Set-Cookie": await createLinuxdoSession(pending.linuxdo_id, existing.name, existing.avatar, env) },
+    );
+  }
+
+  const codeHash = await sha256Hex(inviteCode);
+  const now = sqlNow();
+  // 此 UPDATE 同时判断有效期、撤销状态和余量，避免并发兑换超过邀请码额度。
+  const consume = await db
+    .prepare(
+      "UPDATE invite_codes SET used_count = used_count + 1 WHERE code_hash = ? AND revoked_at IS NULL AND used_count < max_uses AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(codeHash, now)
+    .run();
+  if (Number(consume.meta?.changes || 0) !== 1) {
+    return inviteError("邀请码无效、已用完、已撤销或已过期", 400);
+  }
+
+  const invite = await db.prepare("SELECT id FROM invite_codes WHERE code_hash = ?").bind(codeHash).first();
+  try {
+    await db
+      .prepare(
+        "INSERT INTO linuxdo_users (linuxdo_id, name, avatar, invite_code_id, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .bind(pending.linuxdo_id, pending.name, pending.avatar, invite.id, now, now)
+      .run();
+  } catch (err) {
+    // 极少数并发重复提交时尽量归还一次额度，随后让用户重新登录获取最新状态。
+    await db.prepare("UPDATE invite_codes SET used_count = MAX(used_count - 1, 0) WHERE id = ?").bind(invite?.id || 0).run();
+    return inviteError("注册状态已变化，请重新使用 Linux DO 登录", 409);
+  }
+  await db.prepare("DELETE FROM pending_linuxdo_registrations WHERE ticket_hash = ?").bind(pending.ticket_hash).run();
+
+  return jsonResponse(
+    200,
+    { code: 0, message: "Success" },
+    { "Set-Cookie": await createLinuxdoSession(pending.linuxdo_id, pending.name, pending.avatar, env) },
+  );
+}
+
+async function handleAdminCreateInvites(request, env) {
+  const authError = requireInviteAdmin(request, env);
+  if (authError) return authError;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("邀请码数据库未配置", 503);
+
+  const body = await parseJsonBody(request);
+  const count = Math.max(1, Math.min(20, Number.parseInt(body.count, 10) || 1));
+  const maxUses = Math.max(1, Math.min(100, Number.parseInt(body.max_uses, 10) || 1));
+  let expiresAt = null;
+  if (body.expires_at) {
+    expiresAt = toSqlDate(body.expires_at);
+    if (!expiresAt || Date.parse(expiresAt) <= Date.now()) return inviteError("expires_at 必须是未来的有效时间", 400);
+  }
+
+  const createdAt = sqlNow();
+  const generated = [];
+  for (let i = 0; i < count; i += 1) {
+    const code = randomInviteCode();
+    const codeHash = await sha256Hex(code);
+    const result = await db
+      .prepare(
+        "INSERT INTO invite_codes (code_hash, prefix, max_uses, used_count, expires_at, created_at) VALUES (?, ?, ?, 0, ?, ?)",
+      )
+      .bind(codeHash, code.slice(0, 8), maxUses, expiresAt, createdAt)
+      .run();
+    generated.push({ id: Number(result.meta?.last_row_id || 0), code, max_uses: maxUses, expires_at: expiresAt });
+  }
+  return jsonResponse(200, { code: 0, message: "Success", data: { invites: generated } });
+}
+
+async function handleAdminListInvites(request, env) {
+  const authError = requireInviteAdmin(request, env);
+  if (authError) return authError;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("邀请码数据库未配置", 503);
+
+  const rows = await db
+    .prepare(
+      "SELECT id, prefix, max_uses, used_count, expires_at, revoked_at, created_at FROM invite_codes ORDER BY id DESC LIMIT 200",
+    )
+    .all();
+  return jsonResponse(200, { code: 0, message: "Success", data: { invites: (rows.results || []).map(sanitizeInviteRecord) } });
+}
+
+async function handleAdminRevokeInvite(request, env, inviteId) {
+  const authError = requireInviteAdmin(request, env);
+  if (authError) return authError;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("邀请码数据库未配置", 503);
+
+  const result = await db
+    .prepare("UPDATE invite_codes SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?")
+    .bind(sqlNow(), Number(inviteId))
+    .run();
+  if (Number(result.meta?.changes || 0) !== 1) return inviteError("邀请码不存在", 404);
+  return jsonResponse(200, { code: 0, message: "Success" });
 }
 
 async function handleLogout(env) {
@@ -1281,6 +1576,12 @@ function backup4PlatformCode(platform) {
   return "";
 }
 
+function backup4JkapiPlatformCode(platform) {
+  if (platform === "netease") return "wy";
+  if (platform === "qq") return "qq";
+  return "";
+}
+
 function backup4NormalizeQuality(quality) {
   const text = String(quality || "").trim().toLowerCase();
   return text.startsWith("128") ? "128k" : "320k";
@@ -1436,6 +1737,77 @@ async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   throw new Error(String(parsed?.message || `oiapi kuwo failed (${response.status})`));
 }
 
+async function backup4TryQqmp3(platform, id) {
+  if (platform !== "kuwo") return null;
+
+  const songId = String(id || "").trim();
+  if (!/^\d+$/.test(songId)) return null;
+
+  const errors = [];
+  for (const baseUrl of BACKUP4_QQMP3_ENDPOINTS) {
+    const endpoint = new URL(baseUrl);
+    endpoint.searchParams.set("rid", songId);
+    endpoint.searchParams.set("type", "json");
+    endpoint.searchParams.set("level", "exhigh");
+    endpoint.searchParams.set("lrc", "true");
+
+    try {
+      const response = await fetch(endpoint.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json, text/plain, */*" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(BACKUP4_QQMP3_TIMEOUT_MS),
+      });
+      const text = await response.text();
+      const parsed = parseJsonText(text);
+      const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || parsed?.data?.play_url || "");
+      const code = Number(parsed?.code);
+      if (response.ok && (Number.isNaN(code) || code === 0 || code === 200) && url) {
+        return { url, provider: "qqmp3" };
+      }
+      errors.push(String(parsed?.msg || parsed?.message || `qqmp3 failed (${response.status})`));
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : "qqmp3 request failed");
+    }
+  }
+
+  throw new Error(errors.join("; ") || "qqmp3 failed");
+}
+
+async function backup4TryJkapi(platform, id, quality, name, artist, env) {
+  const apiKey = String(env.JKAPI_API_KEY || "").trim();
+  const source = backup4JkapiPlatformCode(platform);
+  const title = String(name || "").trim();
+  const singer = String(artist || "").trim();
+  const keyword = [title, singer]
+    .filter((item) => item && item !== "未知歌手" && item !== "未知歌曲" && !item.startsWith("ID "))
+    .join(" ")
+    .trim();
+
+  // JKAPI 的 Key 必须由本 Worker 的管理员配置；未配置时静默跳过该备用源。
+  if (!apiKey || !source || !keyword) return null;
+
+  const endpoint = new URL(String(env.JKAPI_API_URL || BACKUP4_JKAPI_URL).trim());
+  endpoint.searchParams.set("plat", source);
+  endpoint.searchParams.set("type", "json");
+  endpoint.searchParams.set("apiKey", apiKey);
+  endpoint.searchParams.set("name", keyword);
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.music_url || parsed?.data?.music_url || parsed?.data?.url || "");
+  if (response.ok && Number(parsed?.code) === 1 && url) {
+    return { url, provider: "jkapi" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `jkapi failed (${response.status})`));
+}
+
 async function backup4TryQqBackup3(platform, id) {
   if (platform !== "qq") return null;
 
@@ -1550,15 +1922,32 @@ async function backup4Search(platform, keyword, page, limit) {
   throw new Error(errors.join("; ") || "backup4 search failed");
 }
 
-function getBackup4ProviderChain(platform) {
+function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
-    return [backup4TryOnrender, backup4TryLxmusicSigned, backup4TryQqBackup3];
+    return [
+      backup4TryOnrender,
+      backup4TryLxmusicSigned,
+      backup4TryQqBackup3,
+      (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env),
+    ];
   }
   if (platform === "netease") {
-    return [backup4TryGdstudio, backup4TryOnrender, backup4TryLxmusicSigned, backup4TryOiapiMusic163];
+    return [
+      backup4TryGdstudio,
+      backup4TryOnrender,
+      backup4TryLxmusicSigned,
+      backup4TryOiapiMusic163,
+      (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env),
+    ];
   }
   if (platform === "kuwo") {
-    return [backup4TryGdstudio, backup4TryOnrender, backup4TryLxmusicSigned, backup4TryOiapiKuwo];
+    return [
+      backup4TryGdstudio,
+      backup4TryOnrender,
+      backup4TryLxmusicSigned,
+      backup4TryOiapiKuwo,
+      backup4TryQqmp3,
+    ];
   }
   return [];
 }
@@ -1614,7 +2003,7 @@ async function handleBackup4(request, env) {
   }
 
   const errors = [];
-  const chain = getBackup4ProviderChain(platform);
+  const chain = getBackup4ProviderChain(platform, env);
   for (const runner of chain) {
     try {
       const result = await runner(platform, id, quality, name, artist);

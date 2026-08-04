@@ -26,6 +26,12 @@
                 <button type="submit">登录</button>
             </form>
 
+            <form id="inviteRedeemForm" class="login-form" style="display:none;">
+                <label for="inviteCodeInput">邀请码</label>
+                <input id="inviteCodeInput" name="inviteCode" type="text" placeholder="输入邀请码" autocomplete="one-time-code" spellcheck="false" required>
+                <button type="submit">完成注册</button>
+            </form>
+
             <div class="login-divider" id="linuxdoDivider">OR</div>
             <a class="linuxdo-btn" id="linuxdoLoginBtn" href="#">
                 <span class="linuxdo-logo" aria-hidden="true">
@@ -45,15 +51,80 @@
 
     <div class="container" id="appContainer" style="display:none;">
         <header>
+            <a class="app-wordmark" href="#home" data-view-target="home" aria-label="音楽首页">
+                <span class="app-wordmark-mark">音</span>
+                <span>音楽</span>
+            </a>
+            <nav class="app-nav" aria-label="主导航">
+                <button type="button" class="app-nav-item active" data-view-target="home">首页</button>
+                <button type="button" class="app-nav-item" data-view-target="search">探索</button>
+                <button type="button" class="app-nav-item" data-view-target="library">资料库</button>
+            </nav>
             <div class="header-actions">
                 <span class="user-chip" id="userChip">用户</span>
                 <a class="logout-link" id="logoutBtn" href="#">退出</a>
             </div>
-            <h1>音楽</h1>
-            <p class="subtitle">Music Downloader</p>
         </header>
 
         <main>
+            <section class="app-view home-view" id="homeView" aria-labelledby="homeTitle">
+                <div class="home-hero">
+                    <div class="hero-copy">
+                        <p class="eyebrow">你的声音空间</p>
+                        <h1 id="homeTitle">从现在想听的开始。</h1>
+                        <p class="hero-description">搜一首歌、打开一张歌单，或者从你的收藏里继续播放。</p>
+                        <form class="home-search" id="homeSearchForm">
+                            <label class="sr-only" for="homeSearchInput">搜索歌曲、歌手或歌单</label>
+                            <input id="homeSearchInput" type="search" placeholder="搜索歌曲、歌手或歌单" autocomplete="off">
+                            <button type="submit">搜索</button>
+                        </form>
+                    </div>
+                    <div class="now-playing-card" id="homeNowPlaying" aria-live="polite">
+                        <div class="now-playing-art" id="homeNowPlayingArt" aria-hidden="true"></div>
+                        <div>
+                            <p class="eyebrow">正在播放</p>
+                            <h2 id="homeNowPlayingTitle">还没有开始播放</h2>
+                            <p id="homeNowPlayingArtist">选一首歌，让这里成为你的入口。</p>
+                        </div>
+                        <button id="homeNowPlayingBtn" class="circle-play-btn" type="button" aria-label="打开播放器" disabled></button>
+                    </div>
+                </div>
+
+                <div class="home-source-switch" id="homeSourceSwitch" role="group" aria-label="选择音乐源">
+                    <span>当前音乐源</span>
+                    <button type="button" class="source-switch-btn active" data-home-source="netease">网易云</button>
+                    <button type="button" class="source-switch-btn" data-home-source="qq">QQ 音乐</button>
+                    <button type="button" class="source-switch-btn" data-home-source="kuwo">酷我</button>
+                </div>
+
+                <section class="home-section" aria-labelledby="quickStartTitle">
+                    <div class="section-heading"><div><p class="eyebrow">快速开始</p><h2 id="quickStartTitle">此刻适合什么</h2></div></div>
+                    <div class="mood-grid">
+                        <button class="mood-card mood-card-late" type="button" data-search-keyword="晚安音乐"><span>深夜</span><strong>慢一点</strong><small>把世界调成静音</small></button>
+                        <button class="mood-card mood-card-focus" type="button" data-search-keyword="轻音乐"><span>专注</span><strong>沉进去</strong><small>留给思考的空间</small></button>
+                        <button class="mood-card mood-card-drive" type="button" data-search-keyword="开车必听"><span>在路上</span><strong>出发吧</strong><small>让节奏带路</small></button>
+                        <button class="mood-card mood-card-warm" type="button" data-search-keyword="华语流行"><span>熟悉的歌</span><strong>回到这里</strong><small>值得再听一次</small></button>
+                    </div>
+                </section>
+
+                <div class="home-columns">
+                    <section class="home-section ranking-section" aria-labelledby="rankingTitle">
+                        <div class="section-heading"><div><p class="eyebrow">探索入口</p><h2 id="rankingTitle">热门方向</h2></div><button class="text-link" type="button" data-view-target="search">去探索</button></div>
+                        <div class="ranking-list">
+                            <button type="button" class="ranking-row" data-discovery-row="0"><span>01</span><strong>热歌榜</strong><small>看看大家最近都在听什么</small></button>
+                            <button type="button" class="ranking-row" data-discovery-row="1"><span>02</span><strong>流行热歌</strong><small>刷新一下你的播放列表</small></button>
+                            <button type="button" class="ranking-row" data-discovery-row="2"><span>03</span><strong>经典回响</strong><small>总有一首会让你停下来</small></button>
+                        </div>
+                    </section>
+                    <section class="home-section collection-section" aria-labelledby="collectionTitle">
+                        <div class="section-heading"><div><p class="eyebrow">你的资料库</p><h2 id="collectionTitle">继续聆听</h2></div><button class="text-link" type="button" data-view-target="library">全部内容</button></div>
+                        <div id="homeCollectionList" class="collection-list"></div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="app-view search-view" id="searchView" style="display:none;" aria-labelledby="searchViewTitle">
+            <div class="view-title"><p class="eyebrow">探索</p><h1 id="searchViewTitle">找到想听的声音</h1><p>支持歌曲、歌单与 ID 解析。</p></div>
             <section class="key-panel key-panel-admin" id="adminKeyPanel" style="display:none;">
                 <h2>Key 模式</h2>
                 <p>当前为密码登录，默认使用服务器配置的 TuneHub Key。</p>
@@ -104,7 +175,17 @@
 
             <div id="results" class="results"></div>
             <audio id="audio"></audio>
-            <div id="toast" class="toast"></div>
+            <div id="toast" class="toast" role="status" aria-live="polite"></div>
+            </section>
+
+            <section class="app-view library-view" id="libraryView" style="display:none;" aria-labelledby="libraryViewTitle">
+                <div class="view-title library-title-row"><div><p class="eyebrow">资料库</p><h1 id="libraryViewTitle">只属于你的音乐</h1><p>收藏、历史记录和自建歌单都只保存在当前浏览器。</p></div><button id="createPlaylistBtn" type="button" class="primary-quiet-btn">新建歌单</button></div>
+                <div class="library-grid">
+                    <section class="library-card"><div class="section-heading"><h2>我喜欢的音乐</h2><span id="favoriteCount" class="count-pill">0</span></div><div id="favoriteList" class="library-song-list"></div></section>
+                    <section class="library-card"><div class="section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><div id="recentList" class="library-song-list"></div></section>
+                    <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div></section>
+                </div>
+            </section>
         </main>
 
         <footer>
@@ -195,7 +276,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260226-15';
+        const APP_ASSET_VERSION = '20260804-01';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -342,6 +423,17 @@
             }
         }
 
+        async function redeemInvitation(ticket, inviteCode) {
+            const { response, data } = await authFetch('/invitation/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticket: ticket, invite_code: inviteCode })
+            });
+            if (!response.ok || Number(data.code) !== 0) {
+                throw new Error(data.message || '邀请码验证失败');
+            }
+        }
+
         async function doLogout() {
             await authFetch('/logout', {
                 method: 'POST'
@@ -368,14 +460,47 @@
             }
         });
 
+        let invitationTicket = '';
+        document.getElementById('inviteRedeemForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const input = document.getElementById('inviteCodeInput');
+            try {
+                await redeemInvitation(invitationTicket, String(input.value || ''));
+                invitationTicket = '';
+                await checkLoginAndStart();
+            } catch (err) {
+                setLoginTip(err.message || '邀请码验证失败，请重试。', true);
+            }
+        });
+
         document.getElementById('logoutBtn').addEventListener('click', async function (e) {
             e.preventDefault();
             await doLogout();
         });
 
-        const loginState = new URLSearchParams(window.location.search).get('login');
+        const query = new URLSearchParams(window.location.search);
+        const loginState = query.get('login');
+        const inviteTicket = query.get('ticket');
         if (loginState && loginState.startsWith('failed')) {
             setLoginTip('Linux DO 登录失败，请稍后重试。', true);
+            history.replaceState(null, '', window.location.origin + window.location.pathname);
+        }
+        if (loginState === 'invite' && inviteTicket) {
+            invitationTicket = inviteTicket;
+            document.getElementById('showPasswordLoginBtn').style.display = 'none';
+            document.getElementById('passwordLoginForm').style.display = 'none';
+            document.getElementById('linuxdoDivider').style.display = 'none';
+            document.getElementById('linuxdoLoginBtn').style.display = 'none';
+            document.getElementById('linuxdoLoginHint').style.display = 'none';
+            document.getElementById('inviteRedeemForm').style.display = 'flex';
+            setLoginTip('Linux DO 已验证，请填写邀请码完成注册。', false);
+            history.replaceState(null, '', window.location.origin + window.location.pathname);
+            document.getElementById('inviteCodeInput').focus();
+        } else if (loginState === 'invite_unavailable') {
+            setLoginTip('邀请码服务暂未配置完成，请联系管理员。', true);
+            history.replaceState(null, '', window.location.origin + window.location.pathname);
+        } else if (loginState === 'disabled') {
+            setLoginTip('此 Linux DO 账号已被停用。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
 

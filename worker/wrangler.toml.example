@@ -12,6 +12,8 @@ custom_domain = true
 # - SESSION_SECRET
 # - ADMIN_PASSWORD
 # - TUNEHUB_API_KEY
+# - JKAPI_API_KEY（可选；JKAPI 多源兜底，不要填写其他网站前端内置的 Key）
+# - ADMIN_INVITE_TOKEN（启用邀请码后必填；仅用于管理邀请码，不要给家人）
 # - LINUXDO_CLIENT_ID
 # - LINUXDO_CLIENT_SECRET
 # - LINUXDO_REDIRECT_URI
@@ -31,6 +33,18 @@ FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk0
 
 # 媒体代理白名单（可选，逗号分隔；留空表示允许任意公网域名）
 MEDIA_PROXY_ALLOWED_HOSTS = ".kuwo.cn,.kwcdn.kuwo.cn,.qq.com,.music.163.com,.music.126.net"
+
+# JKAPI 可选自定义地址；Key 请使用 JKAPI_API_KEY Secret 配置。
+# JKAPI_API_URL = "https://jkapi.com/api/music"
+
+# Linux DO 新用户邀请码：先完成 schema.sql 的 D1 初始化，再改为 true。
+INVITE_LINUXDO_ENABLED = "false"
+
+# 创建 D1 后取消下面三行的注释，并填入实际 database_id。
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "downloadmusic-auth"
+# database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
 # Cookie 可选配置
 SESSION_COOKIE_NAME = "dm_session"
