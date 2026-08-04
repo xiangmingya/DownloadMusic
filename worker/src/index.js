@@ -31,6 +31,8 @@ const KUWO_TOPLIST_ENDPOINTS = [
   "https://bb.qqmp3.vip/api/songs.php",
 ];
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
+// ChKSz 提供公开网易云接口；仅作为已有网易云备用链路的最后一层。
+const BACKUP4_CHKSZ_API_URL = "https://api.chksz.top/api";
 
 export default {
   async fetch(request, env) {
@@ -1877,6 +1879,28 @@ async function backup4TryOiapiMusic163(platform, id) {
   throw new Error(String(parsed?.message || `oiapi music163 failed (${response.status})`));
 }
 
+async function backup4TryChkszMusic163(platform, id, quality) {
+  if (platform !== "netease") return null;
+
+  const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_music`);
+  endpoint.searchParams.set("id", id);
+  endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const url = normalizeMediaUrl(parsed?.data?.url || "");
+  if (response.ok && Number(parsed?.code) === 200 && url) {
+    return { url, provider: "chksz_163" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `chksz music163 failed (${response.status})`));
+}
+
 async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   if (platform !== "kuwo") return null;
 
@@ -2039,6 +2063,41 @@ async function backup4SearchViaGdstudio(platform, keyword, page, limit) {
   throw new Error(String(parsed?.detail || parsed?.message || `gdstudio search failed (${response.status})`));
 }
 
+async function backup4SearchViaChkszMusic163(platform, keyword, page, limit) {
+  if (platform !== "netease") return null;
+
+  const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_search`);
+  endpoint.searchParams.set("keyword", keyword);
+  endpoint.searchParams.set("limit", String(limit));
+  endpoint.searchParams.set("offset", String(Math.max(0, (page - 1) * limit)));
+
+  const response = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  const parsed = parseJsonText(text);
+  const list = (Array.isArray(parsed?.data?.songs) ? parsed.data.songs : [])
+    .map((item) => {
+      const id = String(item?.id || "").trim();
+      if (!id) return null;
+      return {
+        id,
+        name: String(item?.name || "未知歌曲"),
+        artist: String(item?.artists || "未知歌手"),
+        album: String(item?.album || ""),
+        cover: normalizeMediaUrl(item?.picUrl || "").replace(/^http:\/\//i, "https://"),
+      };
+    })
+    .filter(Boolean);
+  if (response.ok && Number(parsed?.code) === 200 && list.length > 0) {
+    return { list, provider: "chksz_163_search" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `chksz search failed (${response.status})`));
+}
+
 async function backup4SearchViaQqBackup3(keyword, page, limit) {
   const result = await callQqBackup3Search({ keyword, page, limit });
   const payload = result?.parsed;
@@ -2064,6 +2123,13 @@ function getBackup4SearchChain(platform) {
     return [
       (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit),
       (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+    ];
+  }
+  if (platform === "netease") {
+    return [
+      (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit),
+      (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+      (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit),
     ];
   }
   return [
@@ -2104,6 +2170,7 @@ function getBackup4ProviderChain(platform, env) {
       backup4TryLxmusicSigned,
       backup4TryOiapiMusic163,
       (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env),
+      backup4TryChkszMusic163,
     ];
   }
   if (platform === "kuwo") {
