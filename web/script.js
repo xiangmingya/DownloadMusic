@@ -2519,12 +2519,15 @@ function renderHomeNowPlaying() {
     const artist = document.getElementById('homeNowPlayingArtist');
     const art = document.getElementById('homeNowPlayingArt');
     const btn = document.getElementById('homeNowPlayingBtn');
-    if (!title || !artist || !art || !btn) return;
+    const openBtn = document.getElementById('homeNowPlayingOpen');
+    if (!title || !artist || !art || !btn || !openBtn) return;
     if (!currentPlayingSong) {
         title.textContent = '还没有开始播放';
         artist.textContent = '选一首歌，让这里成为你的入口。';
         art.style.backgroundImage = '';
         btn.disabled = true;
+        openBtn.disabled = true;
+        updateHomeNowPlayingControlState();
         return;
     }
     title.textContent = currentPlayingSong.name || '正在播放';
@@ -2534,6 +2537,25 @@ function renderHomeNowPlaying() {
     art.style.backgroundSize = 'cover';
     art.style.backgroundPosition = 'center';
     btn.disabled = false;
+    openBtn.disabled = false;
+    openBtn.setAttribute('aria-label', `打开正在播放：${currentPlayingSong.name || '当前歌曲'}`);
+    updateHomeNowPlayingControlState();
+}
+
+function updateHomeNowPlayingControlState() {
+    const btn = document.getElementById('homeNowPlayingBtn');
+    if (!btn) return;
+    const hasSong = Boolean(currentPlayingSong);
+    const canControl = Boolean(hasSong && audio.src);
+    const paused = audio.paused;
+    btn.disabled = !canControl;
+    btn.innerHTML = getIconSvg(paused ? 'play' : 'pause', 19);
+    btn.setAttribute('aria-label', paused ? '播放' : '暂停');
+    btn.setAttribute('title', paused ? '播放' : '暂停');
+    if (!canControl && hasSong) {
+        btn.setAttribute('aria-label', '正在准备播放');
+        btn.setAttribute('title', '正在准备播放');
+    }
 }
 
 function renderHomeCollection() {
@@ -2712,7 +2734,23 @@ function initHomeInterface() {
         renderHomeToplistCards();
     });
     document.getElementById('backToToplistsBtn')?.addEventListener('click', () => setAppView('home'));
-    document.getElementById('homeNowPlayingBtn')?.addEventListener('click', () => setFullPlayerOpen(true));
+    document.getElementById('homeNowPlayingOpen')?.addEventListener('click', () => {
+        if (currentPlayingSong) setFullPlayerOpen(true);
+    });
+    document.getElementById('homeNowPlayingBtn')?.addEventListener('click', async event => {
+        event.stopPropagation();
+        if (!currentPlayingSong || !audio.src) return;
+        if (audio.paused) {
+            try {
+                await audio.play();
+            } catch (error) {
+                showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
+            }
+        } else {
+            audio.pause();
+        }
+        updateHomeNowPlayingControlState();
+    });
     document.getElementById('createPlaylistBtn')?.addEventListener('click', () => createSavedPlaylist());
     document.getElementById('favoriteList')?.addEventListener('click', event => {
         const button = event.target.closest('[data-play-collection]');
@@ -3011,17 +3049,20 @@ function updateLyrics(currentTime) {
 audio.addEventListener('ended', () => {
     syncInlinePlayButtonState();
     updateFullPlayerControlState();
+    updateHomeNowPlayingControlState();
     playByMode(1, { fromEnded: true }).catch(() => {});
 });
 
 audio.addEventListener('play', () => {
     syncInlinePlayButtonState();
     updateFullPlayerControlState();
+    updateHomeNowPlayingControlState();
 });
 
 audio.addEventListener('pause', () => {
     syncInlinePlayButtonState();
     updateFullPlayerControlState();
+    updateHomeNowPlayingControlState();
 });
 
 audio.addEventListener('loadedmetadata', () => {

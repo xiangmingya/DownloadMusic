@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260804-05">
+    <link rel="stylesheet" href="style.css?v=20260804-06">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -80,13 +80,14 @@
                         </form>
                     </div>
                     <div class="now-playing-card" id="homeNowPlaying" aria-live="polite">
+                        <button id="homeNowPlayingOpen" class="home-now-playing-open" type="button" aria-label="打开正在播放" disabled></button>
                         <div class="now-playing-art" id="homeNowPlayingArt" aria-hidden="true"></div>
                         <div>
                             <p class="eyebrow">正在播放</p>
                             <h2 id="homeNowPlayingTitle">还没有开始播放</h2>
                             <p id="homeNowPlayingArtist">选一首歌，让这里成为你的入口。</p>
                         </div>
-                        <button id="homeNowPlayingBtn" class="circle-play-btn" type="button" aria-label="打开播放器" disabled></button>
+                        <button id="homeNowPlayingBtn" class="circle-play-btn" type="button" aria-label="播放" disabled></button>
                     </div>
                 </div>
 
@@ -244,7 +245,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260804-05';
+        const APP_ASSET_VERSION = '20260804-06';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
