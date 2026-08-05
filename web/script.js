@@ -87,6 +87,8 @@ let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
+let homePlaylistKeys = [];
+let homePlaylistRefreshInFlight = false;
 let isFullPlayerOpen = false;
 let isPlaylistSheetOpen = false;
 let playlistSheetHideTimer = null;
@@ -2769,23 +2771,62 @@ async function fetchHomePlaylistCards() {
     return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
 }
 
-function renderHomePlaylistCards(cards) {
+function playlistCardKey(item) {
+    return `${String(item?.platform || '')}:${String(item?.id || '')}`;
+}
+
+function shuffleHomePlaylistCards(items) {
+    const shuffled = [...items];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+        const pick = Math.floor(Math.random() * (index + 1));
+        [shuffled[index], shuffled[pick]] = [shuffled[pick], shuffled[index]];
+    }
+    return shuffled;
+}
+
+function pickHomePlaylistCards(cards) {
+    const previous = new Set(homePlaylistKeys);
+    const selected = [];
+    const selectedKeys = new Set();
+    const platforms = ['netease', 'qq'];
+
+    platforms.forEach(platform => {
+        const seen = new Set();
+        const unique = shuffleHomePlaylistCards(cards.filter(item => item?.platform === platform))
+            .filter(item => {
+                const key = playlistCardKey(item);
+                if (!item?.id || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        const fresh = unique.filter(item => !previous.has(playlistCardKey(item)));
+        const platformPicks = (fresh.length >= 2 ? fresh : unique).slice(0, 2);
+        platformPicks.forEach(item => selectedKeys.add(playlistCardKey(item)));
+        selected.push(...platformPicks);
+    });
+
+    if (selected.length < 4) {
+        shuffleHomePlaylistCards(cards).some(item => {
+            const key = playlistCardKey(item);
+            if (!item?.id || selectedKeys.has(key)) return false;
+            selected.push(item);
+            selectedKeys.add(key);
+            return selected.length >= 4;
+        });
+    }
+
+    return shuffleHomePlaylistCards(selected).slice(0, 4);
+}
+
+function renderHomePlaylistCards(cards, options = {}) {
     const grid = document.querySelector('.mood-grid');
     if (!grid || cards.length === 0) return false;
-    const seen = new Set();
-    const picked = cards
-        .sort((a, b) => Number(b.playCount || 0) - Number(a.playCount || 0))
-        .filter(item => {
-            const key = `${item.platform}:${item.id}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        })
-        .slice(0, 4);
+    const picked = pickHomePlaylistCards(cards);
     if (picked.length === 0) return false;
+    homePlaylistKeys = picked.map(playlistCardKey);
 
-    grid.innerHTML = picked.map(item => `
-        <button class="mood-card playlist-mood-card" type="button" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}">
+    grid.innerHTML = picked.map((item, index) => `
+        <button class="mood-card playlist-mood-card${options.animate ? ' is-entering' : ''}" type="button" style="--playlist-card-delay:${index * 42}ms" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}">
             <img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover || ''))}" alt="" onerror="this.style.display='none'">
             <span>${escapeHtml(platformDisplayName(item.platform))} 歌单</span>
             <strong>${escapeHtml(item.name)}</strong>
@@ -2801,12 +2842,36 @@ function renderHomePlaylistCards(cards) {
     return true;
 }
 
-async function initHomePlaylists() {
+async function initHomePlaylists({ animate = false } = {}) {
+    if (homePlaylistRefreshInFlight) return;
+    homePlaylistRefreshInFlight = true;
+    const refreshButton = document.querySelector('[data-home-playlist-refresh]');
+    if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = '更新中…';
+    }
+    const grid = document.querySelector('.mood-grid');
     try {
         const cards = await fetchHomePlaylistCards();
-        renderHomePlaylistCards(cards);
+        if (animate && grid?.querySelector('.playlist-mood-card')) {
+            grid.classList.add('is-refreshing');
+            await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        const rendered = renderHomePlaylistCards(cards, { animate });
+        if (rendered && grid?.classList.contains('is-refreshing')) {
+            requestAnimationFrame(() => requestAnimationFrame(() => grid.classList.remove('is-refreshing')));
+        } else {
+            grid?.classList.remove('is-refreshing');
+        }
     } catch {
         // 歌单列表不可用时保留原有关键词卡片。
+        grid?.classList.remove('is-refreshing');
+    } finally {
+        homePlaylistRefreshInFlight = false;
+        if (refreshButton) {
+            refreshButton.disabled = false;
+            refreshButton.textContent = '换一批';
+        }
     }
 }
 
@@ -2878,6 +2943,7 @@ function initHomeInterface() {
         const card = event.target.closest('[data-play-saved-playlist]');
         if (card) playSavedPlaylist(card.dataset.playSavedPlaylist);
     });
+    document.querySelector('[data-home-playlist-refresh]')?.addEventListener('click', () => initHomePlaylists({ animate: true }));
     renderHomeToplistCards();
     initHomePlaylists();
 }
