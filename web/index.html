@@ -5,14 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-10">
+    <link rel="stylesheet" href="style.css?v=20260805-11">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
     </script>
 </head>
-<body class="auth-body">
-    <div class="login-shell" id="loginShell">
+<body class="auth-body auth-pending">
+    <div class="login-shell" id="loginShell" aria-busy="true">
+        <div class="auth-boot" id="authBoot" role="status" aria-live="polite">
+            <span class="auth-boot-mark" aria-hidden="true">音</span>
+            <span>正在进入你的声音空间</span>
+        </div>
         <div class="login-paper">
             <p class="login-kicker">ようこそ</p>
             <h1 class="login-title">音楽</h1>
@@ -246,7 +250,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-10';
+        const APP_ASSET_VERSION = '20260805-11';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -264,6 +268,11 @@
             } else {
                 el.classList.remove('warn');
             }
+        }
+
+        function revealLogin() {
+            document.body.classList.remove('auth-pending');
+            document.getElementById('loginShell')?.setAttribute('aria-busy', 'false');
         }
 
         async function authFetch(path, init = {}) {
@@ -331,6 +340,7 @@
             };
 
             document.body.classList.remove('auth-body');
+            document.body.classList.remove('auth-pending');
             document.body.classList.add('app-body');
             document.getElementById('loginShell').style.display = 'none';
             document.getElementById('appContainer').style.display = '';
@@ -363,11 +373,15 @@
         async function checkLoginAndStart() {
             if (loginCheckPromise) return loginCheckPromise;
             loginCheckPromise = (async function () {
-                const { response, data } = await authFetch('/me');
-                if (response.ok && Number(data.code) === 0 && data.data) {
-                    setLoginTip('', false);
-                    mountApp(data.data);
-                    return true;
+                try {
+                    const { response, data } = await authFetch('/me');
+                    if (response.ok && Number(data.code) === 0 && data.data) {
+                        setLoginTip('', false);
+                        mountApp(data.data);
+                        return true;
+                    }
+                } catch {
+                    // 网络不可用时回退到登录页，避免加载态无限停留。
                 }
                 return false;
             })();
@@ -453,6 +467,7 @@
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
         if (loginState === 'invite' && inviteTicket) {
+            revealLogin();
             invitationTicket = inviteTicket;
             document.getElementById('showPasswordLoginBtn').style.display = 'none';
             document.getElementById('passwordLoginForm').style.display = 'none';
@@ -472,8 +487,11 @@
         }
 
         (async function init() {
-            await checkLinuxdoStatus();
-            await checkLoginAndStart();
+            if (invitationTicket) return;
+            const loggedIn = await checkLoginAndStart();
+            if (loggedIn) return;
+            revealLogin();
+            void checkLinuxdoStatus();
         })();
     })();
     </script>

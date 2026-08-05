@@ -790,6 +790,43 @@ footer {
     padding: 24px;
 }
 
+.auth-boot {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    color: var(--app-muted);
+    font-family: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    letter-spacing: .04em;
+}
+
+.auth-pending .auth-boot {
+    display: flex;
+}
+
+.auth-pending .login-paper {
+    display: none;
+}
+
+.auth-boot-mark {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(151, 143, 255, .55);
+    border-radius: 50%;
+    background: rgba(111, 99, 255, .16);
+    color: var(--app-text);
+    font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
+    font-size: 18px;
+    animation: authBootPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes authBootPulse {
+    0%, 100% { opacity: .72; transform: scale(.96); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
 .login-paper {
     width: 100%;
     max-width: 460px;
