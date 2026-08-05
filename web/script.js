@@ -2997,8 +2997,9 @@ function renderMembership(data) {
         status.textContent = '管理员账号，无需购买会员。'; button.disabled = true; hint.textContent = ''; return;
     }
     status.textContent = data.active ? `有效至 ${new Date(data.expires_at).toLocaleString()}` : '当前未开通会员。';
+    button.textContent = data.active ? '使用 Linux DO 积分续费' : '使用 Linux DO 积分开通';
     button.disabled = !data.payment_configured;
-    hint.textContent = data.payment_configured ? '开通后立即获得 30 天使用时间。' : '积分支付正在配置中，请稍后再试。';
+    hint.textContent = data.payment_configured ? (data.active ? '续费后会在当前有效期基础上增加 30 天。' : '开通后立即获得 30 天使用时间。') : '积分支付正在配置中，请稍后再试。';
 }
 
 async function loadMembership() {
