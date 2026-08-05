@@ -1803,3 +1803,10 @@ footer { padding: 18px 0 106px; border-top-color: var(--app-line); }.source-link
 .home-search input:focus-visible {
     outline: none;
 }
+
+/* Keep full history available without letting the library page grow indefinitely. */
+.library-grid { align-items: start; }
+#recentList { max-height: 426px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }
+#recentList::-webkit-scrollbar { width: 6px; display: block; }
+#recentList::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(151, 143, 255, .48); }
+.mini-song-row.has-favorite-control { grid-template-columns: 44px minmax(0, 1fr) 52px 52px; }

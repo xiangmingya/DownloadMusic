@@ -2425,6 +2425,16 @@ function isFavoriteSong(song) {
     return favoriteSongs.some(item => songIdentity(item) === songIdentity(song));
 }
 
+function removeFavoriteSong(index) {
+    if (!favoriteSongs.splice(Number(index), 1).length) return;
+    saveLocalSongList(favoriteStorageKey, favoriteSongs);
+    queueLibraryCloudSave();
+    renderHomeCollection();
+    renderLibrary();
+    renderLocalPage();
+    showToast('已从喜欢的音乐移除', 'info');
+}
+
 async function toggleFavoriteByIndex(index) {
     let rawSong;
     try {
@@ -2437,8 +2447,8 @@ async function toggleFavoriteByIndex(index) {
     if (!song) return;
     const existingIndex = favoriteSongs.findIndex(item => songIdentity(item) === songIdentity(song));
     if (existingIndex >= 0) {
-        favoriteSongs.splice(existingIndex, 1);
-        showToast('已从喜欢的音乐移除', 'info');
+        removeFavoriteSong(existingIndex);
+        return;
     } else {
         favoriteSongs.unshift(song);
         favoriteSongs = favoriteSongs.slice(0, 500);
@@ -2669,12 +2679,15 @@ async function saveSongToCustomPlaylistByIndex(index) {
     showToast(`已加入「${playlist.name}」`, 'success');
 }
 
-function songRowMarkup(song, collection, index) {
+function songRowMarkup(song, collection, index, allowFavoriteRemove = false) {
     const cover = getProxiedCoverUrl(song.cover || '');
     const image = cover
         ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
         : '<span class="mini-song-art" aria-hidden="true"></span>';
-    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 32)}</button></div>`;
+    const favoriteControl = allowFavoriteRemove
+        ? `<button type="button" class="favorite-song-btn is-favorite" data-remove-favorite="${index}" aria-label="取消收藏 ${escapeHtml(song.name)}" title="取消收藏">${getIconSvg('heart', 18)}</button>`
+        : '';
+    return `<div class="mini-song-row${allowFavoriteRemove ? ' has-favorite-control' : ''}">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 32)}</button>${favoriteControl}</div>`;
 }
 
 function setNowPlayingArt(art, cover) {
@@ -2766,7 +2779,7 @@ function renderLibrary() {
     document.getElementById('recentCount').textContent = String(recentSongs.length);
     document.getElementById('playlistCount').textContent = String(savedPlaylists.length);
     favoriteList.innerHTML = favoriteSongs.length
-        ? favoriteSongs.map((song, index) => songRowMarkup(song, 'favorites', index)).join('')
+        ? favoriteSongs.map((song, index) => songRowMarkup(song, 'favorites', index, true)).join('')
         : '<div class="library-empty">还没有收藏。搜索结果右侧的心形按钮可以收藏歌曲。</div>';
     recentList.innerHTML = recentSongs.length
         ? recentSongs.map((song, index) => songRowMarkup(song, 'recent', index)).join('')
@@ -3136,6 +3149,11 @@ function initHomeInterface() {
     });
     document.getElementById('createPlaylistBtn')?.addEventListener('click', () => createSavedPlaylist());
     document.getElementById('favoriteList')?.addEventListener('click', event => {
+        const favoriteButton = event.target.closest('[data-remove-favorite]');
+        if (favoriteButton) {
+            removeFavoriteSong(favoriteButton.dataset.removeFavorite);
+            return;
+        }
         const button = event.target.closest('[data-play-collection]');
         if (button) playCollectionSong(button.dataset.playCollection, button.dataset.songIndex);
     });
