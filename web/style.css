@@ -1823,6 +1823,25 @@ footer { padding: 18px 0 106px; border-top-color: var(--app-line); }.source-link
 .app-confirm-dialog { width: min(400px, calc(100% - 28px)); }.app-confirm-dialog[open] { animation: playlistPickerIn .2s ease-out; }.app-confirm-dialog .eyebrow { margin: 0 0 8px; color: #ff9cab; }.app-confirm-dialog h2 { margin: 0; color: var(--app-text); font-size: 24px; }.app-confirm-dialog p:not(.eyebrow) { margin: 10px 0 24px; color: var(--app-muted); font-size: 14px; }.app-confirm-actions { display: flex; justify-content: flex-end; gap: 9px; }.app-confirm-actions button { min-height: 46px; padding: 0 16px; border: 1px solid var(--app-line); border-radius: 12px; background: rgba(255,255,255,.05); color: var(--app-text); font-weight: 700; }.app-confirm-actions button:last-child { border-color: rgba(255,112,137,.62); background: rgba(214,72,100,.86); color: #fff; }.app-confirm-actions button:last-child:hover, .app-confirm-actions button:last-child:focus-visible { background: #df4f69; }
 @media (max-width: 600px) { .app-confirm-dialog { width: min(100% - 20px, 400px); padding: 22px 18px; border-radius: 18px; }.app-confirm-actions button { flex: 1; } }
 
+/* Membership stays next to the account, with a compact disclosure instead of a separate page. */
+.header-actions { display: flex; align-items: center; }
+.user-membership-menu { position: relative; }
+button.user-chip { cursor: pointer; font: inherit; text-align: left; transition: color .18s ease, border-color .18s ease, background .18s ease; }
+button.user-chip:hover, button.user-chip[aria-expanded="true"] { color: var(--app-text); border-color: rgba(151,143,255,.65); background: rgba(111,99,255,.14); }
+.membership-popover { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: min(340px, calc(100vw - 28px)); padding: 18px; border: 1px solid rgba(151,143,255,.38); border-radius: 18px; background: linear-gradient(145deg, rgba(35,34,76,.98), rgba(16,16,37,.98)); box-shadow: 0 20px 52px rgba(0,0,0,.42); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-8px); transform-origin: top right; transition: opacity .18s ease, transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s linear .22s; }
+.user-membership-menu.is-open .membership-popover { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); transition-delay: 0s; }
+.membership-popover .eyebrow { margin-bottom: 6px; }
+.membership-popover-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.membership-popover-title h2 { margin: 0; color: var(--app-text); font-size: 20px; letter-spacing: -.02em; }
+.membership-state-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; background: rgba(67,209,122,.14); color: var(--app-accent); font-size: 12px; font-weight: 750; }
+.membership-popover > p:not(.eyebrow) { min-height: 21px; margin-top: 10px; color: var(--app-muted); font-size: 13px; line-height: 1.55; }
+.membership-popover-price { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; }
+.membership-popover-price strong { color: var(--app-text); font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.membership-popover-price span { color: var(--app-muted); font-size: 12px; }
+.membership-popover .membership-checkout-btn { width: 100%; min-height: 46px; margin-top: 16px; }
+.membership-popover .membership-hint { min-height: 18px; margin: 9px 0 0; font-size: 12px; }
+@media (max-width: 600px) { .membership-popover { right: 0; width: min(340px, calc(100vw - 24px)); } }
+
 /* Keep full history available without letting the library page grow indefinitely. */
 .library-grid { align-items: start; }
 #recentList { max-height: 426px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }

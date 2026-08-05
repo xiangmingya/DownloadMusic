@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-26">
+    <link rel="stylesheet" href="style.css?v=20260805-27">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -63,10 +63,19 @@
                 <button type="button" class="app-nav-item active" data-view-target="home">首页</button>
                 <button type="button" class="app-nav-item" data-view-target="search">探索</button>
                 <button type="button" class="app-nav-item" data-view-target="library">资料库</button>
-                <button type="button" class="app-nav-item" data-view-target="membership">会员</button>
             </nav>
             <div class="header-actions">
-                <span class="user-chip" id="userChip">用户</span>
+                <div class="user-membership-menu" id="userMembershipMenu">
+                    <button type="button" class="user-chip" id="userChip" aria-expanded="false" aria-controls="membershipPopover">用户</button>
+                    <section class="membership-popover" id="membershipPopover" aria-label="会员状态" aria-hidden="true" inert>
+                        <p class="eyebrow">会员状态</p>
+                        <div class="membership-popover-title"><h2>月会员</h2><span id="membershipStateBadge" class="membership-state-badge">正在读取</span></div>
+                        <p id="membershipStatusText">正在读取会员状态…</p>
+                        <div class="membership-popover-price"><strong id="membershipPrice">—</strong><span>积分 / 30 天</span></div>
+                        <button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button>
+                        <p id="membershipHint" class="membership-hint"></p>
+                    </section>
+                </div>
                 <button type="button" class="header-admin-btn" id="adminViewBtn" data-view-target="admin" style="display:none;">管理</button>
                 <a class="logout-link" id="logoutBtn" href="#">退出</a>
             </div>
@@ -161,10 +170,6 @@
                     <section class="library-card"><div class="section-heading"><div class="library-section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><button type="button" class="text-link library-play-all" data-play-collection-all="recent">播放全部</button></div><div id="recentList" class="library-song-list"></div></section>
                     <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div><div id="savedPlaylistDetail" class="saved-playlist-detail"></div></section>
                 </div>
-            </section>
-
-            <section class="app-view membership-view" id="membershipView" style="display:none;" aria-labelledby="membershipViewTitle">
-                <div class="membership-card"><p class="eyebrow">Linux DO Credit</p><h1 id="membershipViewTitle">月会员</h1><p id="membershipStatusText">正在读取会员状态…</p><strong id="membershipPrice">—</strong><small>积分 / 30 天</small><button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button><p id="membershipHint" class="membership-hint"></p></div>
             </section>
 
             <section class="app-view admin-view" id="adminView" style="display:none;" aria-labelledby="adminViewTitle">
@@ -295,7 +300,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-26';
+        const APP_ASSET_VERSION = '20260805-27';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -391,8 +396,7 @@
             document.body.classList.add('app-body');
             document.getElementById('loginShell').style.display = 'none';
             document.getElementById('appContainer').style.display = '';
-            document.getElementById('userChip').textContent =
-                `${window.APP_CONTEXT.user.name} · ${authType === 'password' ? '密码登录' : 'Linux DO'}`;
+            document.getElementById('userChip').textContent = `${window.APP_CONTEXT.user.name} · 正在读取会员`;
             if (window.APP_CONTEXT.isAdmin) document.getElementById('adminViewBtn').style.display = '';
 
             if (!appScriptLoaded && !appScriptLoading) {

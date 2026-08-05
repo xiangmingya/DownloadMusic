@@ -2965,17 +2965,15 @@ function renderSavedPlaylistDetail() {
 }
 
 function setAppView(view) {
-    const valid = ['home', 'search', 'library', 'membership', 'admin'].includes(view) ? view : 'home';
+    const valid = ['home', 'search', 'library', 'admin'].includes(view) ? view : 'home';
     document.getElementById('homeView').style.display = valid === 'home' ? '' : 'none';
     document.getElementById('searchView').style.display = valid === 'search' ? '' : 'none';
     document.getElementById('libraryView').style.display = valid === 'library' ? '' : 'none';
-    document.getElementById('membershipView').style.display = valid === 'membership' ? '' : 'none';
     document.getElementById('adminView').style.display = valid === 'admin' && APP_CONTEXT.isAdmin ? '' : 'none';
     document.querySelectorAll('[data-view-target]').forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-view-target') === valid);
     });
     if (valid === 'library') renderLibrary();
-    if (valid === 'membership') void loadMembership();
     if (valid === 'admin' && APP_CONTEXT.isAdmin) void loadAdminPanel();
 }
 
@@ -2991,19 +2989,37 @@ function renderMembership(data) {
     const price = document.getElementById('membershipPrice');
     const button = document.getElementById('membershipCheckoutBtn');
     const hint = document.getElementById('membershipHint');
-    if (!status || !price || !button || !hint) return;
+    const chip = document.getElementById('userChip');
+    const badge = document.getElementById('membershipStateBadge');
+    if (!status || !price || !button || !hint || !chip || !badge) return;
+    if (window.APP_CONTEXT) window.APP_CONTEXT.membership = data;
+    const userName = String(window.APP_CONTEXT?.user?.name || '用户');
     price.textContent = String(data.monthly_price || '10.00');
     if (data.source === 'admin') {
-        status.textContent = '管理员账号，无需购买会员。'; button.disabled = true; hint.textContent = ''; return;
+        chip.textContent = `${userName} · 家庭账号`;
+        badge.textContent = '无需会员';
+        status.textContent = '密码登录无需开通月会员。';
+        button.hidden = true;
+        button.disabled = true;
+        hint.textContent = '';
+        return;
     }
+    chip.textContent = `${userName} · ${data.active ? '已开通' : '待开通'}`;
+    badge.textContent = data.active ? '已开通' : '待开通';
     status.textContent = data.active ? `有效至 ${new Date(data.expires_at).toLocaleString()}` : '当前未开通会员。';
     button.textContent = data.active ? '使用 Linux DO 积分续费' : '使用 Linux DO 积分开通';
+    button.hidden = false;
     button.disabled = !data.payment_configured;
     hint.textContent = data.payment_configured ? (data.active ? '续费后会在当前有效期基础上增加 30 天。' : '开通后立即获得 30 天使用时间。') : '积分支付正在配置中，请稍后再试。';
 }
 
 async function loadMembership() {
-    try { renderMembership(await getJson(`${APP_API_ROOT}/membership`)); } catch (error) { document.getElementById('membershipHint').textContent = error.message || '会员状态读取失败'; }
+    try { renderMembership(await getJson(`${APP_API_ROOT}/membership`)); } catch (error) {
+        const hint = document.getElementById('membershipHint');
+        const badge = document.getElementById('membershipStateBadge');
+        if (hint) hint.textContent = error.message || '会员状态读取失败';
+        if (badge) badge.textContent = '读取失败';
+    }
 }
 
 async function startMembershipCheckout() {
@@ -3253,12 +3269,34 @@ function initHomeInterface() {
     renderHomeCollection();
     renderLibrary();
     void restoreLibraryFromCloud();
+    void loadMembership();
     document.querySelectorAll('[data-view-target]').forEach(item => item.addEventListener('click', event => {
         if (item.tagName === 'A') event.preventDefault();
         const target = item.getAttribute('data-view-target');
         if (target === 'search') resetSearchViewMode();
         setAppView(target);
     }));
+    const membershipMenu = document.getElementById('userMembershipMenu');
+    const membershipToggle = document.getElementById('userChip');
+    const membershipPopover = document.getElementById('membershipPopover');
+    const setMembershipMenuOpen = open => {
+        if (!membershipMenu || !membershipToggle || !membershipPopover) return;
+        membershipMenu.classList.toggle('is-open', open);
+        membershipToggle.setAttribute('aria-expanded', String(open));
+        membershipPopover.setAttribute('aria-hidden', String(!open));
+        membershipPopover.inert = !open;
+        if (open) void loadMembership();
+    };
+    membershipToggle?.addEventListener('click', () => setMembershipMenuOpen(!membershipMenu?.classList.contains('is-open')));
+    document.addEventListener('click', event => {
+        if (membershipMenu && !membershipMenu.contains(event.target)) setMembershipMenuOpen(false);
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && membershipMenu?.classList.contains('is-open')) {
+            setMembershipMenuOpen(false);
+            membershipToggle?.focus();
+        }
+    });
     document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
     document.getElementById('saveMembershipPriceBtn')?.addEventListener('click', async () => {
         const price = document.getElementById('adminMembershipPrice').value;
