@@ -87,6 +87,7 @@ let playlistSongs = [];
 let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
+let activeSavedPlaylistId = '';
 let cloudLibraryReady = false;
 let cloudLibrarySaveTimer = 0;
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
@@ -2770,8 +2771,9 @@ function renderLibrary() {
         ? recentSongs.map((song, index) => songRowMarkup(song, 'recent', index)).join('')
         : '<div class="library-empty">还没有播放记录。</div>';
     savedList.innerHTML = savedPlaylists.length
-        ? savedPlaylists.map(item => `<button type="button" class="saved-playlist-card" data-play-saved-playlist="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small><span>播放歌单</span></button>`).join('')
+        ? savedPlaylists.map(item => `<button type="button" class="saved-playlist-card${item.id === activeSavedPlaylistId ? ' active' : ''}" data-open-saved-playlist="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small><span>查看歌单</span></button>`).join('')
         : '<div class="library-empty">新建歌单后，可在搜索结果中将歌曲保存进去。</div>';
+    renderSavedPlaylistDetail();
 }
 
 async function playCollectionSong(collection, index) {
@@ -2792,6 +2794,62 @@ async function playSavedPlaylist(playlistId) {
     allSongs = playlist.songs.map(toLibrarySong).filter(Boolean);
     const song = allSongs[0];
     await playSong(song.platform, song.id, song.name, song.artist, 0);
+}
+
+function openSavedPlaylist(playlistId) {
+    activeSavedPlaylistId = savedPlaylists.some(item => item.id === playlistId) ? playlistId : '';
+    renderLibrary();
+}
+
+async function playSavedPlaylistSong(playlistId, index) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    const song = playlist?.songs?.[Number(index)];
+    if (!song) return;
+    allSongs = playlist.songs.map(toLibrarySong).filter(Boolean);
+    await playSong(song.platform, song.id, song.name, song.artist, Number(index));
+}
+
+function removeSavedPlaylistSong(playlistId, index) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    if (!playlist || !Number.isInteger(Number(index))) return;
+    const [removed] = playlist.songs.splice(Number(index), 1);
+    if (!removed) return;
+    saveSavedPlaylists();
+    queueLibraryCloudSave();
+    renderLibrary();
+    showToast(`已从「${playlist.name}」移除 ${removed.name}`, 'info');
+}
+
+function deleteSavedPlaylist(playlistId) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    if (!playlist || !window.confirm(`删除歌单「${playlist.name}」吗？歌单中的歌曲不会被删除。`)) return;
+    savedPlaylists = savedPlaylists.filter(item => item.id !== playlistId);
+    if (activeSavedPlaylistId === playlistId) activeSavedPlaylistId = '';
+    saveSavedPlaylists();
+    queueLibraryCloudSave();
+    renderLibrary();
+    showToast(`已删除歌单「${playlist.name}」`, 'info');
+}
+
+function renderSavedPlaylistDetail() {
+    const detail = document.getElementById('savedPlaylistDetail');
+    if (!detail) return;
+    const playlist = savedPlaylists.find(item => item.id === activeSavedPlaylistId);
+    if (!playlist) {
+        activeSavedPlaylistId = '';
+        detail.innerHTML = '';
+        return;
+    }
+    const songRows = playlist.songs.length
+        ? playlist.songs.map((song, index) => {
+            const cover = getProxiedCoverUrl(song.cover || '');
+            const art = cover
+                ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
+                : '<span class="mini-song-art" aria-hidden="true"></span>';
+            return `<div class="saved-playlist-song">${art}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" class="saved-playlist-song-play" data-play-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 20)}</button><button type="button" class="saved-playlist-song-remove" data-remove-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" aria-label="从歌单移除 ${escapeHtml(song.name)}">${getIconSvg('close', 18)}</button></div>`;
+        }).join('')
+        : '<div class="library-empty">歌单还是空的，从搜索结果中保存歌曲吧。</div>';
+    detail.innerHTML = `<div class="saved-playlist-detail-head"><div><p class="eyebrow">歌单详情</p><h3>${escapeHtml(playlist.name)}</h3><p>${playlist.songs.length} 首歌曲</p></div><div class="saved-playlist-detail-actions"><button type="button" class="saved-playlist-play-all" data-play-saved-playlist="${escapeHtml(playlist.id)}" ${playlist.songs.length ? '' : 'disabled'}>播放全部</button><button type="button" class="saved-playlist-delete" data-delete-saved-playlist="${escapeHtml(playlist.id)}">删除歌单</button></div></div><div class="saved-playlist-song-list">${songRows}</div>`;
 }
 
 function setAppView(view) {
@@ -3089,8 +3147,21 @@ function initHomeInterface() {
         if (button) playCollectionSong(button.dataset.playCollection, button.dataset.songIndex);
     });
     document.getElementById('savedPlaylistList')?.addEventListener('click', event => {
-        const card = event.target.closest('[data-play-saved-playlist]');
-        if (card) playSavedPlaylist(card.dataset.playSavedPlaylist);
+        const card = event.target.closest('[data-open-saved-playlist]');
+        if (card) openSavedPlaylist(card.dataset.openSavedPlaylist);
+    });
+    document.getElementById('savedPlaylistDetail')?.addEventListener('click', event => {
+        const target = event.target.closest('button');
+        if (!target) return;
+        if (target.dataset.playSavedPlaylist) {
+            playSavedPlaylist(target.dataset.playSavedPlaylist);
+        } else if (target.dataset.playSavedSong) {
+            playSavedPlaylistSong(target.dataset.playSavedSong, Number(target.dataset.songIndex));
+        } else if (target.dataset.removeSavedSong) {
+            removeSavedPlaylistSong(target.dataset.removeSavedSong, Number(target.dataset.songIndex));
+        } else if (target.dataset.deleteSavedPlaylist) {
+            deleteSavedPlaylist(target.dataset.deleteSavedPlaylist);
+        }
     });
     document.querySelector('[data-home-playlist-refresh]')?.addEventListener('click', () => initHomePlaylists({ animate: true }));
     renderHomeToplistCards();

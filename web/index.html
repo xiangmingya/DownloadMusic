@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-13">
+    <link rel="stylesheet" href="style.css?v=20260805-14">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -157,7 +157,7 @@
                 <div class="library-grid">
                     <section class="library-card"><div class="section-heading"><h2>我喜欢的音乐</h2><span id="favoriteCount" class="count-pill">0</span></div><div id="favoriteList" class="library-song-list"></div></section>
                     <section class="library-card"><div class="section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><div id="recentList" class="library-song-list"></div></section>
-                    <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div></section>
+                    <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div><div id="savedPlaylistDetail" class="saved-playlist-detail"></div></section>
                 </div>
             </section>
         </main>
@@ -250,7 +250,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-13';
+        const APP_ASSET_VERSION = '20260805-14';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
