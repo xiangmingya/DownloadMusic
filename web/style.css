@@ -364,8 +364,6 @@ button:hover {
 
 .icon-park {
     display: block;
-    width: 1em;
-    height: 1em;
     color: currentColor;
     stroke: currentColor;
     fill: none;
