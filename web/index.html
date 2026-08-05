@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-29">
+    <link rel="stylesheet" href="style.css?v=20260805-30">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -167,8 +167,14 @@
             </section>
 
             <section class="app-view admin-view" id="adminView" style="display:none;" aria-labelledby="adminViewTitle">
-                <div class="view-title"><p class="eyebrow">管理员</p><h1 id="adminViewTitle">会员管理</h1><p>价格与会员状态由 Worker 和 D1 管理。</p></div>
+                <div class="view-title"><p class="eyebrow">管理员</p><h1 id="adminViewTitle">管理中心</h1><p>会员价格、状态和上游服务健康度都只在这里可见。</p></div>
                 <div class="admin-grid"><section class="admin-card"><h2>月会员价格</h2><div class="admin-price-form"><input id="adminMembershipPrice" type="number" min="0.01" step="0.01" inputmode="decimal" aria-label="月会员价格"><span>积分</span><button id="saveMembershipPriceBtn" type="button">保存</button></div><p id="adminOverviewText" class="admin-muted"></p></section><section class="admin-card"><h2>有效会员</h2><div id="adminMemberList" class="admin-member-list">正在读取…</div></section></div>
+                <section class="admin-monitoring" aria-labelledby="monitoringTitle">
+                    <div class="section-heading admin-monitoring-heading"><div><p class="eyebrow">D1 聚合统计</p><h2 id="monitoringTitle">服务监控</h2><p id="monitoringSummaryText" class="admin-muted">正在读取最近服务状态…</p></div><div class="monitoring-actions"><label class="sr-only" for="monitoringRange">统计范围</label><select id="monitoringRange" aria-label="统计范围"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select><button id="refreshMonitoringBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div>
+                    <div id="monitoringKpis" class="monitoring-kpis" aria-live="polite"></div>
+                    <div class="monitoring-overview-grid"><section class="monitoring-panel"><div class="monitoring-panel-heading"><h3>最近 24 小时趋势</h3><span>请求 / 成功 / 失败</span></div><div id="monitoringTrend" class="monitoring-trend"></div></section><section class="monitoring-panel"><div class="monitoring-panel-heading"><h3>最终解析来源</h3><span>只统计成功返回播放链接</span></div><div id="monitoringFinalSources" class="monitoring-final-sources"></div></section></div>
+                    <section class="monitoring-panel monitoring-service-panel"><div class="monitoring-panel-heading"><h3>接口健康明细</h3><span>调用次数、成功率、平均响应与最近状态</span></div><div id="monitoringServiceList" class="monitoring-service-list">正在读取…</div></section>
+                </section>
             </section>
         </main>
 
@@ -294,7 +300,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-29';
+        const APP_ASSET_VERSION = '20260805-30';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

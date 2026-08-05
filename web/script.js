@@ -3027,6 +3027,99 @@ async function loadAdminPanel() {
         document.getElementById('adminOverviewText').textContent = `当前有效会员 ${overview.active_members} 人 · 已支付订单 ${overview.paid_orders} 笔`;
         document.getElementById('adminMemberList').innerHTML = members.members.length ? members.members.map(item => `<div><strong>${escapeHtml(item.name || item.linuxdo_id)}</strong><small>到期：${escapeHtml(item.expires_at || '—')}</small></div>`).join('') : '<p class="admin-muted">还没有会员。</p>';
     } catch (error) { document.getElementById('adminMemberList').textContent = error.message || '读取失败'; }
+    await loadAdminMonitoring();
+}
+
+const MONITOR_SOURCE_LABELS = {
+    netease: '网易云音乐',
+    qq: 'QQ 音乐',
+    kuwo: '酷我音乐',
+    tunehub: 'TuneHub',
+    gdstudio: 'GDStudio',
+    qq_backup3: 'QQ 备用解析',
+    qq_backup3_parse: 'QQ 备用解析',
+    onrender: 'LXMusic Onrender',
+    lxmusic_signed: 'LXMusic 签名源',
+    oiapi_music163: 'OIAPI 网易',
+    oiapi_kuwo: 'OIAPI 酷我',
+    chksz_163: 'ChKSz 网易',
+    jkapi: 'JKAPI',
+    qqmp3: 'QQMP3 酷我',
+};
+
+function monitorSourceLabel(source) {
+    return MONITOR_SOURCE_LABELS[String(source || '')] || String(source || '未知来源');
+}
+
+function monitorPercent(value) {
+    return `${Math.round(Math.max(0, Number(value || 0)) * 100)}%`;
+}
+
+function monitorTime(value) {
+    const time = Date.parse(value || '');
+    return Number.isFinite(time) ? new Date(time).toLocaleString() : '—';
+}
+
+function renderAdminMonitoring(data) {
+    const services = Array.isArray(data?.services) ? data.services : [];
+    const finalSources = Array.isArray(data?.final_sources) ? data.final_sources : [];
+    const trend = Array.isArray(data?.trend) ? data.trend : [];
+    const totalRequests = services.reduce((total, item) => total + Number(item.requests || 0), 0);
+    const totalSuccesses = services.reduce((total, item) => total + Number(item.successes || 0), 0);
+    const normalCount = services.filter(item => item.health === 'healthy').length;
+    const unstableCount = services.filter(item => item.health === 'unstable').length;
+    const downCount = services.filter(item => item.health === 'down').length;
+    const finalTotal = finalSources.reduce((total, item) => total + Number(item.hits || 0), 0);
+    const summary = document.getElementById('monitoringSummaryText');
+    if (summary) summary.textContent = services.length
+        ? `统计范围 ${data.window_days} 天 · 数据保留 ${data.retained_days} 天 · 最后汇总 ${monitorTime(data.generated_at)}`
+        : '暂时还没有上游调用记录；用户搜索、打开榜单或解析歌曲后会自动出现。';
+
+    document.getElementById('monitoringKpis').innerHTML = [
+        ['累计调用', totalRequests.toLocaleString(), '不含内部最终命中计数'],
+        ['整体成功率', totalRequests ? monitorPercent(totalSuccesses / totalRequests) : '—', `${totalSuccesses.toLocaleString()} 次成功`],
+        ['当前健康', `${normalCount} 正常`, unstableCount || downCount ? `${unstableCount} 波动 · ${downCount} 不可用` : '没有异常来源'],
+        ['最终解析', finalTotal.toLocaleString(), '成功返回播放链接的来源'],
+    ].map(([label, value, note]) => `<article class="monitoring-kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></article>`).join('');
+
+    const maxTrend = Math.max(1, ...trend.map(item => Number(item.requests || 0)));
+    document.getElementById('monitoringTrend').innerHTML = trend.map(item => {
+        const requests = Number(item.requests || 0);
+        const successes = Number(item.successes || 0);
+        const failures = Number(item.failures || 0);
+        const height = Math.max(requests ? 9 : 2, Math.round((requests / maxTrend) * 100));
+        const hour = new Date(item.bucket_hour).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<div class="monitoring-trend-item" title="${escapeHtml(`${hour}：${requests} 请求，${successes} 成功，${failures} 失败`)}"><span class="monitoring-trend-bar" style="height:${height}%"><i style="height:${requests ? Math.round((failures / requests) * 100) : 0}%"></i></span><small>${escapeHtml(hour)}</small></div>`;
+    }).join('');
+
+    document.getElementById('monitoringFinalSources').innerHTML = finalSources.length
+        ? finalSources.map(item => {
+            const hits = Number(item.hits || 0);
+            const percent = finalTotal ? hits / finalTotal : 0;
+            return `<div class="monitoring-source-row"><div><strong>${escapeHtml(monitorSourceLabel(item.source))}</strong><small>${hits.toLocaleString()} 次最终命中</small></div><div class="monitoring-share"><span><i style="width:${Math.round(percent * 100)}%"></i></span><b>${monitorPercent(percent)}</b></div></div>`;
+        }).join('')
+        : '<p class="monitoring-empty">暂无成功解析记录。</p>';
+
+    document.getElementById('monitoringServiceList').innerHTML = services.length
+        ? services.map(item => `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(monitorSourceLabel(item.source))}</strong><small>${escapeHtml(item.source)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : '尚未记录失败'}</p></article>`).join('')
+        : '<p class="monitoring-empty">暂无调用记录。</p>';
+}
+
+async function loadAdminMonitoring() {
+    const range = document.getElementById('monitoringRange');
+    const serviceList = document.getElementById('monitoringServiceList');
+    if (!range || !serviceList) return;
+    try {
+        const data = await getJson(`${APP_API_ROOT}/admin/monitoring?days=${encodeURIComponent(range.value)}`);
+        renderAdminMonitoring(data);
+    } catch (error) {
+        const message = error.message || '读取失败';
+        document.getElementById('monitoringSummaryText').textContent = message;
+        document.getElementById('monitoringKpis').innerHTML = '';
+        document.getElementById('monitoringTrend').innerHTML = '<p class="monitoring-empty">暂无趋势数据。</p>';
+        document.getElementById('monitoringFinalSources').innerHTML = '<p class="monitoring-empty">暂无来源数据。</p>';
+        serviceList.textContent = message;
+    }
 }
 
 const HOME_DIRECT_TOPLISTS = {
@@ -3288,6 +3381,8 @@ function initHomeInterface() {
         const price = document.getElementById('adminMembershipPrice').value;
         try { await getJson(`${APP_API_ROOT}/admin/settings/membership`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_price: price }) }); showToast('月会员价格已保存', 'success'); await loadAdminPanel(); } catch (error) { showToast(error.message || '保存失败', 'error'); }
     });
+    document.getElementById('monitoringRange')?.addEventListener('change', () => void loadAdminMonitoring());
+    document.getElementById('refreshMonitoringBtn')?.addEventListener('click', () => void loadAdminMonitoring());
     document.getElementById('homeSearchForm')?.addEventListener('submit', event => {
         event.preventDefault();
         runHomeSearch(document.getElementById('homeSearchInput')?.value);

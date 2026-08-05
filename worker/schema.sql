@@ -36,3 +36,23 @@ CREATE TABLE IF NOT EXISTS billing_orders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_billing_orders_linuxdo_created ON billing_orders (linuxdo_id, created_at DESC);
+
+-- 管理员服务监控：按小时聚合，不保存用户、歌曲名或 Key。
+-- Worker 会在写入时清理 30 天前的桶，体积会保持很小。
+CREATE TABLE IF NOT EXISTS service_metrics_hourly (
+  bucket_hour TEXT NOT NULL,
+  source TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  successes INTEGER NOT NULL DEFAULT 0,
+  failures INTEGER NOT NULL DEFAULT 0,
+  total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  last_success_at TEXT,
+  last_failure_at TEXT,
+  last_status INTEGER,
+  last_error TEXT,
+  PRIMARY KEY (bucket_hour, source, operation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_bucket ON service_metrics_hourly (bucket_hour DESC);
+CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_source ON service_metrics_hourly (source, bucket_hour DESC);

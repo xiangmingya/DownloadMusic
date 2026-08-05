@@ -7,6 +7,7 @@
 - 跨设备资料库同步：D1 保存收藏、最近播放与自建歌单（不保存音频、封面文件或 TuneHub Key）
 - Linux DO 月会员：Linux DO Credit 积分购买 30 天会员，价格由管理员在页面内调整
 - Linux DO 白名单管理员：只有 `ADMIN_LINUXDO_IDS` 中的账号能进入管理页；密码登录不具备管理权限
+- 管理员服务监控：D1 按小时聚合各主源和备用源的调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - 备用源代理：`/api/proxy/backup`（GDStudio）
   - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
@@ -28,6 +29,7 @@
 - `GET /api/admin/overview`
 - `PUT /api/admin/settings/membership`
 - `GET /api/admin/members`
+- `GET /api/admin/monitoring?days=1|7|30`
 - `GET /api/library`
 - `PUT /api/library`
 
@@ -72,11 +74,20 @@ wrangler secret put JKAPI_API_KEY
 # 1. 创建 D1，并将输出的 database_id 写进 wrangler.toml 的 [[d1_databases]]
 wrangler d1 create downloadmusic-auth
 
-# 2. 初始化表结构（资料库、会员与订单表）
+# 2. 初始化表结构（资料库、会员、订单与服务监控表）
 wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 ```
 
 密码登录统一使用一个家庭资料库；Linux DO 登录按每个 Linux DO 账号独立保存。
+
+## 管理员服务监控
+
+管理员用 Linux DO 白名单账号登录后，右上角会出现“管理”。服务监控仅在这个页面显示，普通用户无法请求接口。
+
+- 统计范围可切换最近 24 小时、7 天或 30 天；最近 24 小时会显示按小时趋势。
+- “最终解析来源”只统计成功返回可播放链接的 TuneHub、GDStudio、QQ 备用解析和备用源 4，不把内部搜索请求混进去。
+- 健康度规则：成功率不低于 85% 为“正常”；低于 85% 为“波动”；没有成功或近期失败明显占优为“不可用”。
+- D1 表 `service_metrics_hourly` 是小时桶聚合；不保留原始请求或用户内容。Worker 每隔约 6 小时清理 30 天以前的桶。
 
 ## 快速部署
 

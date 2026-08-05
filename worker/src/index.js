@@ -33,6 +33,9 @@ const KUWO_TOPLIST_ENDPOINTS = [
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 // ChKSz 提供公开网易云接口；仅作为已有网易云备用链路的最后一层。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.top/api";
+const SERVICE_METRICS_RETENTION_DAYS = 30;
+const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let lastServiceMetricsCleanupAt = 0;
 
 export default {
   async fetch(request, env) {
@@ -89,6 +92,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/admin/members" && request.method === "GET") {
       return withCors(request, env, await handleAdminMembers(request, env));
+    }
+    if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
+      return withCors(request, env, await handleAdminMonitoring(request, env));
     }
     if (url.pathname.startsWith("/api/proxy/")) {
       const access = await requireMusicAccess(request, env);
@@ -611,6 +617,115 @@ function apiError(message, status = 400) {
   return jsonResponse(status, { code: -1, message });
 }
 
+function metricLabel(value, fallback = "unknown") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function metricHour(value = Date.now()) {
+  const date = new Date(value);
+  date.setUTCMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
+function metricError(error) {
+  return String(error instanceof Error ? error.message : error || "请求失败")
+    .replace(/\s+/g, " ")
+    .slice(0, 240);
+}
+
+async function recordServiceMetric(env, { source, operation, success, status = 0, durationMs = 0, error = "" }) {
+  const db = getDatabase(env);
+  if (!db) return;
+  const now = sqlNow();
+  const bucket = metricHour();
+  const isSuccess = Boolean(success);
+  const safeStatus = Number.isFinite(Number(status)) ? Math.max(0, Math.floor(Number(status))) : 0;
+  const safeDuration = Math.max(0, Math.min(300000, Math.round(Number(durationMs) || 0)));
+  try {
+    await db.prepare(
+      "INSERT INTO service_metrics_hourly (bucket_hour, source, operation, requests, successes, failures, total_duration_ms, last_success_at, last_failure_at, last_status, last_error) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(bucket_hour, source, operation) DO UPDATE SET requests = requests + 1, successes = successes + excluded.successes, failures = failures + excluded.failures, total_duration_ms = total_duration_ms + excluded.total_duration_ms, last_success_at = CASE WHEN excluded.successes = 1 THEN excluded.last_success_at ELSE last_success_at END, last_failure_at = CASE WHEN excluded.failures = 1 THEN excluded.last_failure_at ELSE last_failure_at END, last_status = excluded.last_status, last_error = CASE WHEN excluded.failures = 1 THEN excluded.last_error ELSE last_error END",
+    ).bind(
+      bucket,
+      metricLabel(source),
+      metricLabel(operation),
+      isSuccess ? 1 : 0,
+      isSuccess ? 0 : 1,
+      safeDuration,
+      isSuccess ? now : null,
+      isSuccess ? null : now,
+      safeStatus,
+      isSuccess ? null : metricError(error),
+    ).run();
+
+    if (Date.now() - lastServiceMetricsCleanupAt > SERVICE_METRICS_CLEANUP_INTERVAL_MS) {
+      lastServiceMetricsCleanupAt = Date.now();
+      const cutoff = metricHour(Date.now() - SERVICE_METRICS_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+      await db.prepare("DELETE FROM service_metrics_hourly WHERE bucket_hour < ?").bind(cutoff).run();
+    }
+  } catch {
+    // 监控本身绝不能让用户的搜索、播放或下载失败。
+  }
+}
+
+async function monitoredServiceCall(env, { source, operation }, run) {
+  const startedAt = Date.now();
+  try {
+    const result = await run();
+    const status = Number(result?.status || result?.response?.status || result?.resp?.status || 200);
+    const success = status >= 200 && status < 300;
+    if (!success) {
+      const error = new Error(`上游请求失败 (${status})`);
+      error.status = status;
+      throw error;
+    }
+    await recordServiceMetric(env, { source, operation, success: true, status, durationMs: Date.now() - startedAt });
+    return result;
+  } catch (error) {
+    await recordServiceMetric(env, {
+      source,
+      operation,
+      success: false,
+      status: Number(error?.status || 0),
+      durationMs: Date.now() - startedAt,
+      error,
+    });
+    throw error;
+  }
+}
+
+async function recordFinalParseHit(env, source, durationMs = 0) {
+  await recordServiceMetric(env, {
+    source,
+    operation: "final_parse",
+    success: true,
+    status: 200,
+    durationMs,
+  });
+}
+
+function serviceHealth(row, now = Date.now()) {
+  const requests = Number(row?.requests || 0);
+  const successes = Number(row?.successes || 0);
+  const failures = Number(row?.failures || 0);
+  const successRate = requests > 0 ? successes / requests : null;
+  const lastSuccessAt = Date.parse(row?.last_success_at || "");
+  const lastFailureAt = Date.parse(row?.last_failure_at || "");
+  if (requests === 0) return { state: "unknown", label: "暂无数据", success_rate: null };
+  if (successRate === 0 || (Number.isFinite(lastFailureAt) && (!Number.isFinite(lastSuccessAt) || lastFailureAt > lastSuccessAt) && successRate < 0.5)) {
+    return { state: "down", label: "不可用", success_rate: successRate };
+  }
+  if (successRate < 0.85 || (Number.isFinite(lastSuccessAt) && now - lastSuccessAt > 6 * 60 * 60 * 1000 && failures > 0)) {
+    return { state: "unstable", label: "波动", success_rate: successRate };
+  }
+  return { state: "healthy", label: "正常", success_rate: successRate };
+}
+
 async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
   const token = await createSessionToken(
     {
@@ -858,6 +973,77 @@ async function handleAdminMembers(request, env) {
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""), name: String(row.name || ""), avatar: String(row.avatar || ""), expires_at: row.expires_at || null, updated_at: row.updated_at || null,
   })) } });
+}
+
+async function handleAdminMonitoring(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+
+  const requestedDays = Number(new URL(request.url).searchParams.get("days") || 7);
+  const days = [1, 7, 30].includes(requestedDays) ? requestedDays : 7;
+  const now = Date.now();
+  const cutoff = metricHour(now - days * 24 * 60 * 60 * 1000);
+  const trendCutoff = metricHour(now - 24 * 60 * 60 * 1000);
+  try {
+    const [summaryResult, latestResult, trendResult, finalResult] = await Promise.all([
+      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, SUM(total_duration_ms) AS total_duration_ms, MAX(last_success_at) AS last_success_at, MAX(last_failure_at) AS last_failure_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' GROUP BY source ORDER BY requests DESC, source ASC").bind(cutoff).all(),
+      db.prepare("SELECT source, last_status, last_error, bucket_hour FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' ORDER BY bucket_hour DESC").bind(cutoff).all(),
+      db.prepare("SELECT bucket_hour, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' GROUP BY bucket_hour ORDER BY bucket_hour ASC").bind(trendCutoff).all(),
+      db.prepare("SELECT source, SUM(successes) AS hits FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'final_parse' GROUP BY source ORDER BY hits DESC, source ASC").bind(cutoff).all(),
+    ]);
+    const latestBySource = new Map();
+    for (const row of latestResult.results || []) {
+      if (!latestBySource.has(row.source)) latestBySource.set(row.source, row);
+    }
+    const services = (summaryResult.results || []).map((row) => {
+      const latest = latestBySource.get(row.source) || {};
+      const requests = Number(row.requests || 0);
+      const successes = Number(row.successes || 0);
+      const failures = Number(row.failures || 0);
+      const health = serviceHealth({ ...row, requests, successes, failures }, now);
+      return {
+        source: String(row.source || "unknown"),
+        requests,
+        successes,
+        failures,
+        success_rate: health.success_rate,
+        average_duration_ms: requests > 0 ? Math.round(Number(row.total_duration_ms || 0) / requests) : 0,
+        last_success_at: row.last_success_at || null,
+        last_failure_at: row.last_failure_at || null,
+        last_status: Number(latest.last_status || 0) || null,
+        last_error: latest.last_error || "",
+        health: health.state,
+        health_label: health.label,
+      };
+    });
+    const trendLookup = new Map((trendResult.results || []).map((row) => [String(row.bucket_hour), row]));
+    const trend = Array.from({ length: 24 }, (_, index) => {
+      const bucket = metricHour(now - (23 - index) * 60 * 60 * 1000);
+      const row = trendLookup.get(bucket) || {};
+      return {
+        bucket_hour: bucket,
+        requests: Number(row.requests || 0),
+        successes: Number(row.successes || 0),
+        failures: Number(row.failures || 0),
+      };
+    });
+    const finalSources = (finalResult.results || []).map((row) => ({
+      source: String(row.source || "unknown"),
+      hits: Number(row.hits || 0),
+    }));
+    return jsonResponse(200, { code: 0, message: "Success", data: {
+      window_days: days,
+      retained_days: SERVICE_METRICS_RETENTION_DAYS,
+      generated_at: sqlNow(),
+      services,
+      trend,
+      final_sources: finalSources,
+    } });
+  } catch {
+    return apiError("服务监控表尚未初始化，请先执行最新 schema.sql", 503);
+  }
 }
 
 async function handleMembership(request, env) {
@@ -1491,7 +1677,8 @@ async function handleToplists(request, env) {
   const platform = String(new URL(request.url).searchParams.get("platform") || "").trim();
   if (!platform) return jsonResponse(400, { code: -1, message: "缺少参数: platform" });
   try {
-    return jsonResponse(200, { code: 0, message: "Success", data: await callToplists(platform) });
+    const data = await monitoredServiceCall(env, { source: platform, operation: "toplists" }, () => callToplists(platform));
+    return jsonResponse(200, { code: 0, message: "Success", data });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取榜单失败" });
   }
@@ -1505,7 +1692,8 @@ async function handleToplist(request, env) {
   const id = String(url.searchParams.get("id") || "").trim();
   if (!platform || !id) return jsonResponse(400, { code: -1, message: "缺少参数: platform / id" });
   try {
-    return jsonResponse(200, { code: 0, message: "Success", data: await callToplist(platform, id) });
+    const data = await monitoredServiceCall(env, { source: platform, operation: "toplist" }, () => callToplist(platform, id));
+    return jsonResponse(200, { code: 0, message: "Success", data });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取榜单详情失败" });
   }
@@ -1588,7 +1776,8 @@ async function handlePlaylists(request, env) {
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "netease").trim();
   try {
-    return jsonResponse(200, { code: 0, message: "Success", data: { playlists: await callPlaylists(platform) } });
+    const playlists = await monitoredServiceCall(env, { source: platform, operation: "playlists" }, () => callPlaylists(platform));
+    return jsonResponse(200, { code: 0, message: "Success", data: { playlists } });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取歌单列表失败" });
   }
@@ -1611,14 +1800,14 @@ async function handleMethod(request, env) {
       if (!keyword) return jsonResponse(400, { code: -1, message: "缺少参数: keyword" });
       const page = toPositiveInt(url.searchParams.get("page"), 1);
       const limit = toPositiveInt(url.searchParams.get("limit"), 20);
-      const data = await callSearch(platform, keyword, page, limit);
+      const data = await monitoredServiceCall(env, { source: platform, operation: "search" }, () => callSearch(platform, keyword, page, limit));
       return jsonResponse(200, { code: 0, message: "Success", data });
     }
 
     if (functionName === "playlist") {
       const id = String(url.searchParams.get("id") || "").trim();
       if (!id) return jsonResponse(400, { code: -1, message: "缺少参数: id" });
-      const data = await callPlaylist(platform, id);
+      const data = await monitoredServiceCall(env, { source: platform, operation: "playlist" }, () => callPlaylist(platform, id));
       return jsonResponse(200, { code: 0, message: "Success", data });
     }
 
@@ -1656,6 +1845,7 @@ async function handleBackup(request, env) {
   }
 
   const isPic = types === "pic";
+  const startedAt = Date.now();
   const maxAttempts = isPic ? 3 : 2;
   const cache = caches.default;
   const cacheKey = isPic ? new Request(backupUrl.toString(), { method: "GET" }) : null;
@@ -1680,6 +1870,14 @@ async function handleBackup(request, env) {
       const contentType = upstream.headers.get("Content-Type") || "application/json; charset=utf-8";
 
       if (upstream.ok) {
+        await recordServiceMetric(env, {
+          source: "gdstudio",
+          operation: `backup_${types}`,
+          success: true,
+          status: upstream.status,
+          durationMs: Date.now() - startedAt,
+        });
+        if (types === "url") await recordFinalParseHit(env, "gdstudio", Date.now() - startedAt);
         const response = new Response(text, {
           status: upstream.status,
           headers: {
@@ -1722,6 +1920,14 @@ async function handleBackup(request, env) {
   }
 
   if (isPic && cached) {
+    await recordServiceMetric(env, {
+      source: "gdstudio",
+      operation: `backup_${types}`,
+      success: false,
+      status: lastStatus,
+      durationMs: Date.now() - startedAt,
+      error: "上游失败，已返回封面缓存",
+    });
     const headers = new Headers(cached.headers);
     headers.set("X-Backup-Stale", "1");
     headers.set("Cache-Control", "public, max-age=43200");
@@ -1730,6 +1936,15 @@ async function handleBackup(request, env) {
       headers,
     });
   }
+
+  await recordServiceMetric(env, {
+    source: "gdstudio",
+    operation: `backup_${types}`,
+    success: false,
+    status: lastStatus,
+    durationMs: Date.now() - startedAt,
+    error: `上游请求失败 (${lastStatus})`,
+  });
 
   return new Response(lastText, {
     status: lastStatus,
@@ -1870,6 +2085,7 @@ async function handleBackup3(request, env) {
     return jsonResponse(400, { code: -1, message: "备用源3仅支持 QQ 平台" });
   }
 
+  const startedAt = Date.now();
   const maxAttempts = 2;
   let lastStatus = 502;
   let lastPayload = { code: -1, message: "备用源3请求失败" };
@@ -1906,6 +2122,14 @@ async function handleBackup3(request, env) {
       }
 
       if (response.ok && parsed && typeof parsed === "object" && payloadOk) {
+        await recordServiceMetric(env, {
+          source: "qq_backup3",
+          operation: filter === "id" ? "parse" : "search",
+          success: true,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+        });
+        if (filter === "id") await recordFinalParseHit(env, "qq_backup3", Date.now() - startedAt);
         return jsonResponse(200, {
           code: 200,
           message: getBackup3PayloadMessage(parsed, "Success"),
@@ -1935,6 +2159,15 @@ async function handleBackup3(request, env) {
       }
     }
   }
+
+  await recordServiceMetric(env, {
+    source: "qq_backup3",
+    operation: filter === "id" ? "parse" : "search",
+    success: false,
+    status: lastStatus,
+    durationMs: Date.now() - startedAt,
+    error: `QQ 备用源请求失败 (${lastStatus})`,
+  });
 
   return jsonResponse(lastStatus, {
     code: Number(lastPayload?.code ?? lastPayload?.result ?? -1),
@@ -2288,33 +2521,37 @@ async function backup4SearchViaQqBackup3(keyword, page, limit) {
 function getBackup4SearchChain(platform) {
   if (platform === "qq") {
     return [
-      (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit),
-      (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+      { source: "qq_backup3", run: (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit) },
+      { source: "qq", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
     ];
   }
   if (platform === "netease") {
     return [
-      (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit),
-      (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
-      (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit),
+      { source: "gdstudio", run: (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit) },
+      { source: "netease", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
+      { source: "chksz_163", run: (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit) },
     ];
   }
   return [
-    (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit),
-    (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit),
+    { source: "gdstudio", run: (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit) },
+    { source: "kuwo", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
   ];
 }
 
-async function backup4Search(platform, keyword, page, limit) {
+async function backup4Search(platform, keyword, page, limit, env) {
   const errors = [];
   const chain = getBackup4SearchChain(platform);
   for (const runner of chain) {
+    const startedAt = Date.now();
     try {
-      const result = await runner(platform, keyword, page, limit);
+      const result = await runner.run(platform, keyword, page, limit);
       if (Array.isArray(result?.list) && result.list.length > 0) {
+        await recordServiceMetric(env, { source: runner.source, operation: "search", success: true, status: 200, durationMs: Date.now() - startedAt });
         return result;
       }
+      await recordServiceMetric(env, { source: runner.source, operation: "search", success: false, status: 502, durationMs: Date.now() - startedAt, error: "搜索结果为空" });
     } catch (err) {
+      await recordServiceMetric(env, { source: runner.source, operation: "search", success: false, status: Number(err?.status || 0), durationMs: Date.now() - startedAt, error: "备用源搜索失败" });
       errors.push(err instanceof Error ? err.message : String(err || "backup4 search error"));
     }
   }
@@ -2324,29 +2561,29 @@ async function backup4Search(platform, keyword, page, limit) {
 function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
     return [
-      backup4TryOnrender,
-      backup4TryLxmusicSigned,
-      backup4TryQqBackup3,
-      (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env),
+      { source: "onrender", run: backup4TryOnrender },
+      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "qq_backup3", run: backup4TryQqBackup3 },
+      { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
     ];
   }
   if (platform === "netease") {
     return [
-      backup4TryGdstudio,
-      backup4TryOnrender,
-      backup4TryLxmusicSigned,
-      backup4TryOiapiMusic163,
-      (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env),
-      backup4TryChkszMusic163,
+      { source: "gdstudio", run: backup4TryGdstudio },
+      { source: "onrender", run: backup4TryOnrender },
+      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
+      { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
+      { source: "chksz_163", run: backup4TryChkszMusic163 },
     ];
   }
   if (platform === "kuwo") {
     return [
-      backup4TryGdstudio,
-      backup4TryOnrender,
-      backup4TryLxmusicSigned,
-      backup4TryOiapiKuwo,
-      backup4TryQqmp3,
+      { source: "gdstudio", run: backup4TryGdstudio },
+      { source: "onrender", run: backup4TryOnrender },
+      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
+      { source: "qqmp3", run: backup4TryQqmp3 },
     ];
   }
   return [];
@@ -2372,7 +2609,7 @@ async function handleBackup4(request, env) {
       return jsonResponse(400, { code: -1, message: "缺少参数: keyword" });
     }
     try {
-      const result = await backup4Search(platform, keyword, page, limit);
+      const result = await backup4Search(platform, keyword, page, limit, env);
       return jsonResponse(200, {
         code: 0,
         message: "Success",
@@ -2405,9 +2642,12 @@ async function handleBackup4(request, env) {
   const errors = [];
   const chain = getBackup4ProviderChain(platform, env);
   for (const runner of chain) {
+    const startedAt = Date.now();
     try {
-      const result = await runner(platform, id, quality, name, artist);
+      const result = await runner.run(platform, id, quality, name, artist);
       if (result?.url) {
+        await recordServiceMetric(env, { source: runner.source, operation: "parse", success: true, status: 200, durationMs: Date.now() - startedAt });
+        await recordFinalParseHit(env, result.provider || runner.source, Date.now() - startedAt);
         return jsonResponse(200, {
           code: 0,
           message: "Success",
@@ -2422,7 +2662,9 @@ async function handleBackup4(request, env) {
           "Cache-Control": "no-store",
         });
       }
+      await recordServiceMetric(env, { source: runner.source, operation: "parse", success: false, status: 502, durationMs: Date.now() - startedAt, error: "未返回可播放链接" });
     } catch (err) {
+      await recordServiceMetric(env, { source: runner.source, operation: "parse", success: false, status: Number(err?.status || 0), durationMs: Date.now() - startedAt, error: "备用源解析失败" });
       const message = err instanceof Error ? err.message : String(err || "unknown backup4 error");
       errors.push(message);
     }
@@ -2624,23 +2866,49 @@ async function handleParse(request, env) {
     return jsonResponse(400, { code: -1, message });
   }
 
-  const resp = await fetch("https://tunehub.sayqz.com/api/v1/parse", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": key,
-    },
-    body: JSON.stringify({ platform, ids, quality }),
-    signal: AbortSignal.timeout(20000),
-  });
-
-  const text = await resp.text();
-  return new Response(text, {
-    status: resp.status,
-    headers: {
-      "Content-Type": resp.headers.get("Content-Type") || "application/json; charset=utf-8",
-    },
-  });
+  const startedAt = Date.now();
+  try {
+    const resp = await fetch("https://tunehub.sayqz.com/api/v1/parse", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": key,
+      },
+      body: JSON.stringify({ platform, ids, quality }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const text = await resp.text();
+    const durationMs = Date.now() - startedAt;
+    const payload = parseJsonText(text);
+    const apiSuccess = resp.ok && Number(payload?.code) === 0;
+    const parsedItems = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+    const hasPlayableItem = apiSuccess && (parsedItems.length === 0 || parsedItems.some((item) => item?.success));
+    await recordServiceMetric(env, {
+      source: "tunehub",
+      operation: "parse",
+      success: apiSuccess,
+      status: resp.status,
+      durationMs,
+      error: apiSuccess ? "" : `TuneHub 请求失败 (${resp.status})`,
+    });
+    if (hasPlayableItem) await recordFinalParseHit(env, "tunehub", durationMs);
+    return new Response(text, {
+      status: resp.status,
+      headers: {
+        "Content-Type": resp.headers.get("Content-Type") || "application/json; charset=utf-8",
+      },
+    });
+  } catch (error) {
+    await recordServiceMetric(env, {
+      source: "tunehub",
+      operation: "parse",
+      success: false,
+      status: 502,
+      durationMs: Date.now() - startedAt,
+      error,
+    });
+    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "TuneHub 解析请求失败" });
+  }
 }
 
 function extractOgImage(html) {
