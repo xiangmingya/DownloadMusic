@@ -1,4 +1,5 @@
 const API_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
+const LIBRARY_API_URL = API_BASE.replace(/\/proxy$/, '/library');
 const API_ROUTES = {
     parse: `${API_BASE}/parse`,
     meta: `${API_BASE}/meta`,
@@ -86,6 +87,8 @@ let playlistSongs = [];
 let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
+let cloudLibraryReady = false;
+let cloudLibrarySaveTimer = 0;
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
 let homePlaylistKeys = [];
 let homePlaylistRefreshInFlight = false;
@@ -2440,6 +2443,7 @@ async function toggleFavoriteByIndex(index) {
         showToast('已加入喜欢的音乐', 'success');
     }
     saveLocalSongList(favoriteStorageKey, favoriteSongs);
+    queueLibraryCloudSave();
     renderHomeCollection();
     renderLibrary();
     renderLocalPage();
@@ -2450,6 +2454,7 @@ function rememberRecentSong(song) {
     if (!item) return;
     recentSongs = [item, ...recentSongs.filter(entry => songIdentity(entry) !== songIdentity(item))].slice(0, 24);
     saveLocalSongList(recentStorageKey, recentSongs);
+    queueLibraryCloudSave();
     renderHomeNowPlaying();
     renderHomeCollection();
     renderLibrary();
@@ -2479,13 +2484,155 @@ function saveSavedPlaylists() {
     }
 }
 
+function getLibraryDocument() {
+    return {
+        version: 1,
+        favorites: favoriteSongs.map(toLibrarySong).filter(Boolean).slice(0, 500),
+        recent: recentSongs.map(toLibrarySong).filter(Boolean).slice(0, 24),
+        playlists: savedPlaylists
+            .filter(item => item && item.id && item.name)
+            .slice(0, 100)
+            .map(item => ({
+                id: String(item.id),
+                name: String(item.name).slice(0, 40),
+                songs: Array.isArray(item.songs) ? item.songs.map(toLibrarySong).filter(Boolean).slice(0, 500) : []
+            }))
+    };
+}
+
+function applyLibraryDocument(document) {
+    if (!document || typeof document !== 'object') return false;
+    favoriteSongs = Array.isArray(document.favorites)
+        ? document.favorites.map(toLibrarySong).filter(Boolean).slice(0, 500)
+        : [];
+    recentSongs = Array.isArray(document.recent)
+        ? document.recent.map(toLibrarySong).filter(Boolean).slice(0, 24)
+        : [];
+    savedPlaylists = Array.isArray(document.playlists)
+        ? document.playlists
+            .filter(item => item && item.id && item.name)
+            .slice(0, 100)
+            .map(item => ({
+                id: String(item.id),
+                name: String(item.name).slice(0, 40),
+                songs: Array.isArray(item.songs) ? item.songs.map(toLibrarySong).filter(Boolean).slice(0, 500) : []
+            }))
+        : [];
+    saveLocalSongList(favoriteStorageKey, favoriteSongs);
+    saveLocalSongList(recentStorageKey, recentSongs);
+    saveSavedPlaylists();
+    renderHomeCollection();
+    renderLibrary();
+    return true;
+}
+
+function libraryHasContent(document) {
+    return Boolean(document.favorites?.length || document.recent?.length || document.playlists?.length);
+}
+
+function mergeLibrarySongs(primary, secondary, limit) {
+    const seen = new Set();
+    return [...(primary || []), ...(secondary || [])]
+        .map(toLibrarySong)
+        .filter(song => {
+            if (!song || seen.has(songIdentity(song))) return false;
+            seen.add(songIdentity(song));
+            return true;
+        })
+        .slice(0, limit);
+}
+
+function mergeLibraryDocuments(remote, local) {
+    const playlists = (Array.isArray(remote?.playlists) ? remote.playlists : [])
+        .filter(item => item && item.id && item.name)
+        .map(item => ({
+            id: String(item.id),
+            name: String(item.name).slice(0, 40),
+            songs: Array.isArray(item.songs) ? item.songs.map(toLibrarySong).filter(Boolean).slice(0, 500) : []
+        }));
+    const byId = new Map(playlists.map(item => [item.id, item]));
+    const byName = new Map(playlists.map(item => [item.name, item]));
+    (Array.isArray(local?.playlists) ? local.playlists : []).forEach(item => {
+        if (!item?.id || !item?.name) return;
+        const existing = byId.get(String(item.id)) || byName.get(String(item.name));
+        if (existing) {
+            existing.songs = mergeLibrarySongs(existing.songs, item.songs, 500);
+            return;
+        }
+        const playlist = {
+            id: String(item.id),
+            name: String(item.name).slice(0, 40),
+            songs: mergeLibrarySongs(item.songs, [], 500)
+        };
+        playlists.push(playlist);
+        byId.set(playlist.id, playlist);
+        byName.set(playlist.name, playlist);
+    });
+    return {
+        version: 1,
+        favorites: mergeLibrarySongs(remote?.favorites, local?.favorites, 500),
+        recent: mergeLibrarySongs(remote?.recent, local?.recent, 24),
+        playlists: playlists.slice(0, 100)
+    };
+}
+
+async function saveLibraryToCloud() {
+    if (!cloudLibraryReady) return;
+    try {
+        // ponytail: last write wins; add per-record revisions only if simultaneous edits become common.
+        const response = await apiFetch(LIBRARY_API_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ library: getLibraryDocument() }),
+            timeoutMs: 10000
+        });
+        if (!response.ok) return;
+    } catch {
+        // 本地缓存保留，下一次操作或刷新会再次尝试同步。
+    }
+}
+
+function queueLibraryCloudSave() {
+    if (!cloudLibraryReady) return;
+    clearTimeout(cloudLibrarySaveTimer);
+    cloudLibrarySaveTimer = setTimeout(saveLibraryToCloud, 350);
+}
+
+async function restoreLibraryFromCloud() {
+    const localDocument = getLibraryDocument();
+    try {
+        const response = await apiFetch(LIBRARY_API_URL, { timeoutMs: 10000 });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0) return;
+        cloudLibraryReady = true;
+        const remoteDocument = payload?.data?.library;
+        if (remoteDocument) {
+            const mergedDocument = mergeLibraryDocuments(remoteDocument, localDocument);
+            applyLibraryDocument(mergedDocument);
+            if (JSON.stringify(mergedDocument) !== JSON.stringify(remoteDocument)) {
+                await saveLibraryToCloud();
+            }
+        } else if (libraryHasContent(localDocument)) {
+            await saveLibraryToCloud();
+        }
+    } catch {
+        // D1 尚未配置或暂时不可用时，继续使用本地资料库。
+    }
+}
+
 function createSavedPlaylist(defaultName = '') {
     const rawName = window.prompt('输入歌单名称', defaultName || '我的歌单');
     const name = String(rawName || '').trim().slice(0, 40);
     if (!name) return null;
+    const existing = savedPlaylists.find(item => item.name === name);
+    if (existing) {
+        showToast(`歌单「${name}」已存在`, 'info');
+        return existing;
+    }
     const playlist = { id: crypto.randomUUID(), name, songs: [] };
     savedPlaylists.unshift(playlist);
     saveSavedPlaylists();
+    queueLibraryCloudSave();
     renderLibrary();
     showToast(`已创建歌单「${name}」`, 'success');
     return playlist;
@@ -2515,6 +2662,7 @@ async function saveSongToCustomPlaylistByIndex(index) {
     }
     playlist.songs.push(song);
     saveSavedPlaylists();
+    queueLibraryCloudSave();
     renderLibrary();
     showToast(`已加入「${playlist.name}」`, 'success');
 }
@@ -2616,10 +2764,10 @@ function renderLibrary() {
     document.getElementById('recentCount').textContent = String(recentSongs.length);
     document.getElementById('playlistCount').textContent = String(savedPlaylists.length);
     favoriteList.innerHTML = favoriteSongs.length
-        ? favoriteSongs.slice(0, 5).map((song, index) => songRowMarkup(song, 'favorites', index)).join('')
+        ? favoriteSongs.map((song, index) => songRowMarkup(song, 'favorites', index)).join('')
         : '<div class="library-empty">还没有收藏。搜索结果右侧的心形按钮可以收藏歌曲。</div>';
     recentList.innerHTML = recentSongs.length
-        ? recentSongs.slice(0, 5).map((song, index) => songRowMarkup(song, 'recent', index)).join('')
+        ? recentSongs.map((song, index) => songRowMarkup(song, 'recent', index)).join('')
         : '<div class="library-empty">还没有播放记录。</div>';
     savedList.innerHTML = savedPlaylists.length
         ? savedPlaylists.map(item => `<button type="button" class="saved-playlist-card" data-play-saved-playlist="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small><span>播放歌单</span></button>`).join('')
@@ -2882,6 +3030,7 @@ function initHomeInterface() {
     renderHomeNowPlaying();
     renderHomeCollection();
     renderLibrary();
+    void restoreLibraryFromCloud();
     document.querySelectorAll('[data-view-target]').forEach(item => item.addEventListener('click', event => {
         if (item.tagName === 'A') event.preventDefault();
         const target = item.getAttribute('data-view-target');
@@ -2980,7 +3129,6 @@ function bindSongMeta(song) {
     };
     currentLyrics = currentPlayingSong.lyrics;
     updateFullPlayerMeta();
-    rememberRecentSong(currentPlayingSong);
 }
 
 async function playSongCore(source, id, name, artist, options = {}) {
@@ -3106,7 +3254,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
             }, { once: true });
         }
 
-        bindSongMeta({
+        const songMeta = {
             id,
             name,
             artist,
@@ -3117,7 +3265,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
             dataSource: isBackupSong ? 'backup' : (isBackup3Song ? 'backup3' : 'primary'),
             backup: backupMeta,
             backup3: backup3Meta
-        });
+        };
 
         audio.src = playUrl;
         currentPlayingIndex = inlineIndex;
@@ -3126,6 +3274,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
         }
 
         await audio.play();
+        bindSongMeta(songMeta);
         syncInlinePlayButtonState();
         updateFullPlayerControlState();
     } catch (error) {

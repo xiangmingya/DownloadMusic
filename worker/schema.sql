@@ -42,3 +42,11 @@ CREATE TABLE IF NOT EXISTS pending_linuxdo_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_pending_linuxdo_expiry
   ON pending_linuxdo_registrations (expires_at);
+
+-- 收藏、最近播放与自建歌单的跨设备资料库。
+-- owner_key 由 Worker 会话生成：密码登录共享 password:family，Linux DO 各自独立。
+CREATE TABLE IF NOT EXISTS user_libraries (
+  owner_key TEXT PRIMARY KEY,
+  document TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

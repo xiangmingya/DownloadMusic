@@ -4,6 +4,7 @@
 - 密码登录
 - Linux DO OAuth 登录
 - 会话管理（HttpOnly Cookie）
+- 跨设备资料库同步：D1 保存收藏、最近播放与自建歌单（不保存音频、封面文件或 TuneHub Key）
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - 备用源代理：`/api/proxy/backup`（GDStudio）
   - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
@@ -20,6 +21,8 @@
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `GET /api/auth/linuxdo-status`
+- `GET /api/library`
+- `PUT /api/library`
 
 ## 必填 Secrets
 
@@ -39,7 +42,7 @@ wrangler secret put LINUXDO_REDIRECT_URI
 wrangler secret put JKAPI_API_KEY
 ```
 
-## Linux DO 邀请码（可选）
+## D1：资料库同步与 Linux DO 邀请码（可选）
 
 密码登录不受邀请码限制，适合给家人共用；启用后只有 **首次** Linux DO 登录的用户需要邀请码。
 
@@ -47,7 +50,7 @@ wrangler secret put JKAPI_API_KEY
 # 1. 创建 D1，并将输出的 database_id 写进 wrangler.toml 的 [[d1_databases]]
 wrangler d1 create downloadmusic-auth
 
-# 2. 初始化表结构
+# 2. 初始化表结构（同时创建跨设备资料库表）
 wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 
 # 3. 设置仅供管理员调用接口的独立令牌
@@ -55,6 +58,8 @@ wrangler secret put ADMIN_INVITE_TOKEN
 ```
 
 然后将 `INVITE_LINUXDO_ENABLED` 设为 `"true"` 并重新部署。创建的邀请码仅在接口响应中显示一次；D1 不保存明文。
+
+资料库同步无需启用邀请码。密码登录统一使用一个家庭资料库；Linux DO 登录按每个 Linux DO 账号独立保存。
 
 管理接口需要请求头 `Authorization: Bearer <ADMIN_INVITE_TOKEN>`：
 

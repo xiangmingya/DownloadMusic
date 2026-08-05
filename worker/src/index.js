@@ -66,6 +66,12 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoStatus(env));
     }
+    if (url.pathname === "/api/library" && request.method === "GET") {
+      return withCors(request, env, await handleLibraryGet(request, env));
+    }
+    if (url.pathname === "/api/library" && request.method === "PUT") {
+      return withCors(request, env, await handleLibraryPut(request, env));
+    }
     if (url.pathname === "/api/auth/invitation/complete" && request.method === "POST") {
       return withCors(request, env, await handleInvitationComplete(request, env));
     }
@@ -153,7 +159,7 @@ function withCors(request, env, response) {
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tunehub-Key");
-  headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 
   return new Response(response.body, {
     status: response.status,
@@ -452,6 +458,80 @@ function invitationLoginEnabled(env) {
 
 function getInviteDatabase(env) {
   return env.DB && typeof env.DB.prepare === "function" ? env.DB : null;
+}
+
+function libraryOwnerKey(session) {
+  if (session?.type === "password") return "password:family";
+  if (session?.type !== "linuxdo") return "";
+  const id = String(session?.user?.linuxdo_id || session?.user?.id || "").trim();
+  return id ? `linuxdo:${id}` : "";
+}
+
+function getLibraryDatabase(env) {
+  return getInviteDatabase(env);
+}
+
+function libraryUnavailableResponse() {
+  return jsonResponse(503, { code: 503, message: "资料库同步暂不可用" });
+}
+
+function parseLibraryDocument(value) {
+  try {
+    const parsed = JSON.parse(String(value || ""));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function serializeLibraryDocument(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+  const serialized = JSON.stringify(value);
+  return encoder.encode(serialized).byteLength <= 1024 * 1024 ? serialized : "";
+}
+
+async function handleLibraryGet(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getLibraryDatabase(env);
+  const ownerKey = libraryOwnerKey(auth.session);
+  if (!db) return libraryUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+
+  const row = await db
+    .prepare("SELECT document, updated_at FROM user_libraries WHERE owner_key = ?")
+    .bind(ownerKey)
+    .first();
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: {
+      library: row ? parseLibraryDocument(row.document) : null,
+      updated_at: String(row?.updated_at || ""),
+    },
+  });
+}
+
+async function handleLibraryPut(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getLibraryDatabase(env);
+  const ownerKey = libraryOwnerKey(auth.session);
+  if (!db) return libraryUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+
+  const body = await parseJsonBody(request);
+  const document = serializeLibraryDocument(body.library);
+  if (!document) return jsonResponse(400, { code: -1, message: "资料库数据无效或超过 1 MB" });
+
+  const updatedAt = sqlNow();
+  await db
+    .prepare(
+      "INSERT INTO user_libraries (owner_key, document, updated_at) VALUES (?, ?, ?) ON CONFLICT(owner_key) DO UPDATE SET document = excluded.document, updated_at = excluded.updated_at",
+    )
+    .bind(ownerKey, document, updatedAt)
+    .run();
+  return jsonResponse(200, { code: 0, message: "Success", data: { updated_at: updatedAt } });
 }
 
 function sqlNow() {
