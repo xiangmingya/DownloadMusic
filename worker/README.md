@@ -43,13 +43,12 @@ wrangler secret put LINUXDO_CLIENT_SECRET
 wrangler secret put LINUXDO_REDIRECT_URI
 wrangler secret put LDC_CLIENT_ID
 wrangler secret put LDC_CLIENT_SECRET
-wrangler secret put LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64
 ```
 
 ## Linux DO 月会员配置
 
-1. 在 LINUX DO Credit 创建商户应用，并上传对应 Ed25519 公钥。
-2. 将**私钥的 PKCS#8 Base64**、Client ID、Client Secret 分别设置为上面的三个 Worker Secret；不要写入 `wrangler.toml` 或前端。
+1. 在 LINUX DO Credit 创建商户应用。
+2. 将 Client ID、Client Secret 设置为上面的两个 Worker Secret；不要写入 `wrangler.toml` 或前端。支付按 Linux DO Credit 的易支付兼容接口使用 MD5 签名。
 3. 在 `wrangler.toml` 配置：
 
 ```toml
@@ -59,7 +58,7 @@ LDC_RETURN_URL = "https://music.621888.xyz/"
 MEMBERSHIP_REQUIRED = "true"
 ```
 
-4. 执行最新 `schema.sql` 后再部署 Worker。普通 Linux DO 用户登录不再需要邀请码；支付回调会向 Credit 查询订单并核对金额后，才延长 30 天会员。密码登录和白名单管理员不受会员限制。
+4. 执行最新 `schema.sql` 后再部署 Worker。普通 Linux DO 用户登录不再需要邀请码；支付回调会向 Credit 查询订单并核对金额后，才延长 30 天会员。密码登录不受会员限制。
 
 ## 可选 Secret
 

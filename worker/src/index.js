@@ -1138,24 +1138,10 @@ async function handleMembership(request, env) {
   } });
 }
 
-function base64Encode(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function base64Decode(value) {
-  const binary = atob(String(value || "").replace(/\s+/g, ""));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 function getCreditConfig(env) {
   return {
     clientId: String(env.LDC_CLIENT_ID || "").trim(),
     clientSecret: String(env.LDC_CLIENT_SECRET || "").trim(),
-    privateKeyPkcs8: String(env.LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64 || "").trim(),
     notifyUrl: String(env.LDC_NOTIFY_URL || "").trim(),
     returnUrl: String(env.LDC_RETURN_URL || "").trim(),
   };
@@ -1163,25 +1149,68 @@ function getCreditConfig(env) {
 
 function creditConfigured(env) {
   const cfg = getCreditConfig(env);
-  return Boolean(cfg.clientId && cfg.clientSecret && cfg.privateKeyPkcs8 && cfg.notifyUrl && cfg.returnUrl);
+  return Boolean(cfg.clientId && cfg.clientSecret && cfg.notifyUrl && cfg.returnUrl);
 }
 
 function createBillingOrderNo(linuxdoId) {
   return `DM${Date.now().toString(36).toUpperCase()}${String(linuxdoId).slice(-6)}${crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
 
-function creditCanonicalPayload(params, clientSecret) {
-  return Object.entries(params)
-    .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
-    .sort(([a], [b]) => (a < b ? -1 : (a > b ? 1 : 0)))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("&") + clientSecret;
+function md5Hex(input) {
+  const source = encoder.encode(String(input));
+  const paddedLength = ((source.length + 9 + 63) >> 6) << 6;
+  const bytes = new Uint8Array(paddedLength);
+  bytes.set(source);
+  bytes[source.length] = 0x80;
+  let bitLength = BigInt(source.length) * 8n;
+  for (let index = 0; index < 8; index += 1) {
+    bytes[paddedLength - 8 + index] = Number(bitLength & 0xffn);
+    bitLength >>= 8n;
+  }
+  const shifts = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+  const constants = Array.from({ length: 64 }, (_, index) => Math.floor(Math.abs(Math.sin(index + 1)) * 0x100000000) >>> 0);
+  let a0 = 0x67452301;
+  let b0 = 0xefcdab89;
+  let c0 = 0x98badcfe;
+  let d0 = 0x10325476;
+  const rotateLeft = (value, amount) => ((value << amount) | (value >>> (32 - amount))) >>> 0;
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    const words = Array.from({ length: 16 }, (_, index) => {
+      const position = offset + index * 4;
+      return (bytes[position] | (bytes[position + 1] << 8) | (bytes[position + 2] << 16) | (bytes[position + 3] << 24)) >>> 0;
+    });
+    let a = a0;
+    let b = b0;
+    let c = c0;
+    let d = d0;
+    for (let index = 0; index < 64; index += 1) {
+      let f;
+      let g;
+      if (index < 16) { f = (b & c) | (~b & d); g = index; }
+      else if (index < 32) { f = (d & b) | (~d & c); g = (5 * index + 1) % 16; }
+      else if (index < 48) { f = b ^ c ^ d; g = (3 * index + 5) % 16; }
+      else { f = c ^ (b | ~d); g = (7 * index) % 16; }
+      const next = d;
+      d = c;
+      c = b;
+      b = (b + rotateLeft((a + f + constants[index] + words[g]) >>> 0, shifts[index])) >>> 0;
+      a = next;
+    }
+    a0 = (a0 + a) >>> 0;
+    b0 = (b0 + b) >>> 0;
+    c0 = (c0 + c) >>> 0;
+    d0 = (d0 + d) >>> 0;
+  }
+  return [a0, b0, c0, d0].map((word) => [word & 0xff, (word >>> 8) & 0xff, (word >>> 16) & 0xff, (word >>> 24) & 0xff].map((byte) => byte.toString(16).padStart(2, "0")).join("")).join("");
 }
 
-async function signCreditPayload(params, cfg) {
-  const key = await crypto.subtle.importKey("pkcs8", base64Decode(cfg.privateKeyPkcs8), { name: "Ed25519" }, false, ["sign"]);
-  const signature = await crypto.subtle.sign("Ed25519", key, encoder.encode(creditCanonicalPayload(params, cfg.clientSecret)));
-  return base64Encode(new Uint8Array(signature));
+function easyPaySignature(params, clientSecret) {
+  const payload = Object.entries(params)
+    .filter(([key, value]) => key !== "sign" && key !== "sign_type" && value !== undefined && value !== null && String(value) !== "")
+    .sort(([a], [b]) => (a < b ? -1 : (a > b ? 1 : 0)))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&");
+  return md5Hex(`${payload}${clientSecret}`);
 }
 
 async function handleCheckout(request, env) {
@@ -1202,29 +1231,27 @@ async function handleCheckout(request, env) {
   await db.prepare("INSERT INTO billing_orders (out_trade_no, linuxdo_id, amount, status, created_at, expires_at) VALUES (?, ?, ?, 'pending', ?, ?)").bind(outTradeNo, linuxdoId, amount, createdAt, expiresAt).run();
 
   const params = {
-    client_id: cfg.clientId,
-    type: "ldcpay",
+    pid: cfg.clientId,
+    type: "epay",
     out_trade_no: outTradeNo,
+    name: "Music Downloader 月会员",
     money: amount,
-    order_name: "Music Downloader 月会员",
     notify_url: cfg.notifyUrl,
     return_url: cfg.returnUrl,
+    sign_type: "MD5",
   };
   try {
-    const sign = await signCreditPayload(params, cfg);
+    const sign = easyPaySignature(params, cfg.clientSecret);
     const response = await fetch("https://credit.linux.do/epay/pay/submit.php", {
       method: "POST",
       redirect: "manual",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ ...params, sign }),
       signal: AbortSignal.timeout(15000),
     });
     const location = response.headers.get("Location");
-    const body = await response.text();
-    const payload = parseJsonText(body);
-    const paymentLink = String(body || "").replace(/\\\//g, "/").match(/https:\/\/credit\.linux\.do\/paying\/online\?token=[A-Za-z0-9_-]+/i)?.[0] || "";
-    const checkoutUrl = location || String(payload?.data?.pay_url || payload?.data?.url || payload?.pay_url || paymentLink);
-    if (!response.ok || !checkoutUrl) throw new Error(String(payload?.error_msg || payload?.message || `积分服务未返回付款链接（HTTP ${response.status}）`));
+    if (!(response.status >= 300 && response.status < 400 && location)) throw new Error(`积分服务未返回付款链接（HTTP ${response.status}）`);
+    const checkoutUrl = new URL(location, "https://credit.linux.do/epay/pay/submit.php").toString();
     return jsonResponse(200, { code: 0, message: "Success", data: { out_trade_no: outTradeNo, checkout_url: checkoutUrl, amount } });
   } catch (err) {
     await db.prepare("UPDATE billing_orders SET status = 'failed' WHERE out_trade_no = ? AND status = 'pending'").bind(outTradeNo).run();

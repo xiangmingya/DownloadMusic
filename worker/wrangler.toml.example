@@ -19,7 +19,6 @@ custom_domain = true
 # - LINUXDO_REDIRECT_URI
 # - LDC_CLIENT_ID
 # - LDC_CLIENT_SECRET
-# - LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64
 
 [vars]
 # 静态前端域名白名单（用于 CORS，支持逗号分隔多个）
