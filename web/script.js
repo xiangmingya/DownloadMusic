@@ -2094,6 +2094,7 @@ function renderLocalPage() {
         const safeCover = escapeForSingleQuote(song.cover || '');
         const coverUrl = getProxiedCoverUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
+        const favorite = isFavoriteSong(song);
 
         return `
         <div class="result-item" id="song-${globalIndex}">
@@ -2107,7 +2108,7 @@ function renderLocalPage() {
                 </div>
                 <div>
                     <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 20)}</button>
-                    <button class="favorite-song-btn" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${isFavoriteSong(song) ? '取消收藏' : '收藏'}">${getIconSvg('heart', 18)}</button>
+                    <button class="favorite-song-btn${favorite ? ' is-favorite' : ''}" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${favorite ? '取消收藏' : '收藏'}" title="${favorite ? '取消收藏' : '收藏'}">${getIconSvg('heart', 18)}</button>
                     <button class="add-playlist-btn" onclick="addSongToPlaylist('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 18)}</button>
                     <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 18)}</button>
                     <button onclick="downloadSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
