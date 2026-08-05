@@ -1775,6 +1775,13 @@ footer { padding: 18px 0 106px; border-top-color: var(--app-line); }.source-link
 .mood-grid.is-refreshing .playlist-mood-card { opacity: 0; transform: translateY(5px) scale(.985); }.playlist-mood-card.is-entering { animation: homePlaylistCardIn .24s ease-out both; animation-delay: var(--playlist-card-delay, 0ms); }@keyframes homePlaylistCardIn { from { opacity: 0; transform: translateY(7px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (max-width: 600px) { .playlist-mood-card { min-height: 132px; height: 132px; grid-template-columns: 82px minmax(0, 1fr); }.playlist-card-cover { width: 82px; height: 132px; border-radius: 15px 0 0 15px; }.playlist-mood-card span, .playlist-mood-card strong, .playlist-mood-card small { padding: 0 12px; }.playlist-mood-card span { margin-top: 12px; }.playlist-mood-card strong { font-size: 15px; }.playlist-mood-card small { margin-bottom: 12px; } }
 
+/* Keep the two homepage lists on the same three-row rhythm. */
+.ranking-row,
+.mini-song-row {
+    min-height: 78px;
+    border-radius: 14px;
+}
+
 /* The search field is one control: show its focus state on the rounded container. */
 .home-search {
     transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
