@@ -89,6 +89,7 @@ let recentSongs = [];
 let savedPlaylists = [];
 let activeSavedPlaylistId = '';
 let pendingPlaylistSong = null;
+let pendingDeletePlaylistId = '';
 let cloudLibraryReady = false;
 let cloudLibrarySaveTimer = 0;
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
@@ -2903,9 +2904,19 @@ function removeSavedPlaylistSong(playlistId, index) {
     showToast(`已从「${playlist.name}」移除 ${removed.name}`, 'info');
 }
 
+function requestDeleteSavedPlaylist(playlistId) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    const dialog = document.getElementById('deletePlaylistDialog');
+    if (!playlist || !dialog) return;
+    pendingDeletePlaylistId = playlist.id;
+    document.getElementById('deletePlaylistDialogTitle').textContent = `删除歌单「${playlist.name}」吗？`;
+    document.getElementById('deletePlaylistDialogMessage').textContent = '歌单中的歌曲不会被删除。';
+    dialog.showModal();
+}
+
 function deleteSavedPlaylist(playlistId) {
     const playlist = savedPlaylists.find(item => item.id === playlistId);
-    if (!playlist || !window.confirm(`删除歌单「${playlist.name}」吗？歌单中的歌曲不会被删除。`)) return;
+    if (!playlist) return;
     savedPlaylists = savedPlaylists.filter(item => item.id !== playlistId);
     if (activeSavedPlaylistId === playlistId) activeSavedPlaylistId = '';
     saveSavedPlaylists();
@@ -3232,6 +3243,14 @@ function initHomeInterface() {
     document.getElementById('playlistPicker')?.addEventListener('close', () => {
         pendingPlaylistSong = null;
     });
+    document.getElementById('deletePlaylistCancelBtn')?.addEventListener('click', () => document.getElementById('deletePlaylistDialog')?.close());
+    document.getElementById('deletePlaylistConfirmBtn')?.addEventListener('click', () => {
+        if (pendingDeletePlaylistId) deleteSavedPlaylist(pendingDeletePlaylistId);
+        document.getElementById('deletePlaylistDialog')?.close();
+    });
+    document.getElementById('deletePlaylistDialog')?.addEventListener('close', () => {
+        pendingDeletePlaylistId = '';
+    });
     document.getElementById('favoriteList')?.addEventListener('click', event => {
         const favoriteButton = event.target.closest('[data-remove-favorite]');
         if (favoriteButton) {
@@ -3263,7 +3282,7 @@ function initHomeInterface() {
         } else if (target.dataset.removeSavedSong) {
             removeSavedPlaylistSong(target.dataset.removeSavedSong, Number(target.dataset.songIndex));
         } else if (target.dataset.deleteSavedPlaylist) {
-            deleteSavedPlaylist(target.dataset.deleteSavedPlaylist);
+            requestDeleteSavedPlaylist(target.dataset.deleteSavedPlaylist);
         }
     });
     document.querySelector('[data-home-playlist-refresh]')?.addEventListener('click', () => initHomePlaylists({ animate: true }));
