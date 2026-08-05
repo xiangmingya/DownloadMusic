@@ -1804,6 +1804,8 @@ footer { padding: 18px 0 106px; border-top-color: var(--app-line); }.source-link
     outline: none;
 }
 
+.library-section-heading { display: flex; align-items: center; gap: 8px; }.library-play-all { min-height: 44px; padding: 0 4px; }.library-play-all:disabled { cursor: not-allowed; color: var(--app-muted); opacity: .5; }
+
 /* Native dialog keeps keyboard focus inside the playlist picker. */
 .playlist-picker, .app-confirm-dialog { margin: auto; padding: 26px; overflow: hidden; border: 1px solid rgba(151,143,255,.44); border-radius: 22px; background: linear-gradient(145deg, #24224d, #121126 72%); color: var(--app-text); box-shadow: 0 28px 90px rgba(0,0,0,.55); }.playlist-picker { width: min(520px, calc(100% - 28px)); max-height: min(660px, calc(100vh - 28px)); }
 .playlist-picker::backdrop, .app-confirm-dialog::backdrop { background: rgba(5,5,18,.76); backdrop-filter: blur(5px); }

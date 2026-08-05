@@ -2848,6 +2848,8 @@ function renderLibrary() {
     document.getElementById('favoriteCount').textContent = String(favoriteSongs.length);
     document.getElementById('recentCount').textContent = String(recentSongs.length);
     document.getElementById('playlistCount').textContent = String(savedPlaylists.length);
+    document.querySelector('[data-play-collection-all="favorites"]').disabled = !favoriteSongs.length;
+    document.querySelector('[data-play-collection-all="recent"]').disabled = !recentSongs.length;
     favoriteList.innerHTML = favoriteSongs.length
         ? favoriteSongs.map((song, index) => songRowMarkup(song, 'favorites', index, true)).join('')
         : '<div class="library-empty">还没有收藏。搜索结果右侧的心形按钮可以收藏歌曲。</div>';
@@ -3251,6 +3253,9 @@ function initHomeInterface() {
     document.getElementById('deletePlaylistDialog')?.addEventListener('close', () => {
         pendingDeletePlaylistId = '';
     });
+    document.querySelectorAll('[data-play-collection-all]').forEach(button => button.addEventListener('click', () => {
+        playCollectionSong(button.dataset.playCollectionAll, 0);
+    }));
     document.getElementById('favoriteList')?.addEventListener('click', event => {
         const favoriteButton = event.target.closest('[data-remove-favorite]');
         if (favoriteButton) {

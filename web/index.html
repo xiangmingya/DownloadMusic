@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-19">
+    <link rel="stylesheet" href="style.css?v=20260805-20">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -155,8 +155,8 @@
             <section class="app-view library-view" id="libraryView" style="display:none;" aria-labelledby="libraryViewTitle">
                 <div class="view-title library-title-row"><div><p class="eyebrow">资料库</p><h1 id="libraryViewTitle">只属于你的音乐</h1><p>收藏、历史记录和自建歌单都只保存在当前浏览器。</p></div><button id="createPlaylistBtn" type="button" class="primary-quiet-btn">新建歌单</button></div>
                 <div class="library-grid">
-                    <section class="library-card"><div class="section-heading"><h2>我喜欢的音乐</h2><span id="favoriteCount" class="count-pill">0</span></div><div id="favoriteList" class="library-song-list"></div></section>
-                    <section class="library-card"><div class="section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><div id="recentList" class="library-song-list"></div></section>
+                    <section class="library-card"><div class="section-heading"><div class="library-section-heading"><h2>我喜欢的音乐</h2><span id="favoriteCount" class="count-pill">0</span></div><button type="button" class="text-link library-play-all" data-play-collection-all="favorites">播放全部</button></div><div id="favoriteList" class="library-song-list"></div></section>
+                    <section class="library-card"><div class="section-heading"><div class="library-section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><button type="button" class="text-link library-play-all" data-play-collection-all="recent">播放全部</button></div><div id="recentList" class="library-song-list"></div></section>
                     <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div><div id="savedPlaylistDetail" class="saved-playlist-detail"></div></section>
                 </div>
             </section>
@@ -274,7 +274,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-19';
+        const APP_ASSET_VERSION = '20260805-20';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
