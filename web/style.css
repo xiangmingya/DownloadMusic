@@ -1840,6 +1840,8 @@ button.user-chip:hover, button.user-chip[aria-expanded="true"] { color: var(--ap
 .membership-popover-price span { color: var(--app-muted); font-size: 12px; }
 .membership-popover .membership-checkout-btn { width: 100%; min-height: 46px; margin-top: 16px; }
 .membership-popover .membership-hint { min-height: 18px; margin: 9px 0 0; font-size: 12px; }
+.membership-logout-btn { width: 100%; min-height: 42px; margin-top: 14px; padding: 0 12px; border: 1px solid rgba(255,133,151,.34); border-radius: 12px; background: rgba(196,73,95,.08); color: #f0bac4; font: inherit; font-size: 13px; font-weight: 700; transition: border-color .18s ease, background .18s ease, color .18s ease; }
+.membership-logout-btn:hover, .membership-logout-btn:focus-visible { border-color: rgba(255,133,151,.7); background: rgba(196,73,95,.18); color: #fff2f4; }
 @media (max-width: 600px) { .membership-popover { right: 0; width: min(340px, calc(100vw - 24px)); } }
 
 /* Keep full history available without letting the library page grow indefinitely. */

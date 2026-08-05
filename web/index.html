@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-27">
+    <link rel="stylesheet" href="style.css?v=20260805-28">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -74,10 +74,10 @@
                         <div class="membership-popover-price"><strong id="membershipPrice">—</strong><span>积分 / 30 天</span></div>
                         <button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button>
                         <p id="membershipHint" class="membership-hint"></p>
+                        <button type="button" class="membership-logout-btn" id="logoutBtn">退出登录</button>
                     </section>
                 </div>
                 <button type="button" class="header-admin-btn" id="adminViewBtn" data-view-target="admin" style="display:none;">管理</button>
-                <a class="logout-link" id="logoutBtn" href="#">退出</a>
             </div>
         </header>
 
@@ -300,7 +300,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-27';
+        const APP_ASSET_VERSION = '20260805-28';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
