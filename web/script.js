@@ -2868,7 +2868,8 @@ function renderLibrary() {
             const cover = firstSong?.cover
                 ? `<img src="${escapeHtml(getProxiedCoverUrl(firstSong.cover))}" alt="" loading="lazy" onerror="this.remove()">`
                 : '';
-            return `<button type="button" class="saved-playlist-card${item.id === activeSavedPlaylistId ? ' active' : ''}" data-open-saved-playlist="${escapeHtml(item.id)}"><span class="saved-playlist-card-art" aria-hidden="true">${getIconSvg('record', 22)}${cover}</span><span class="saved-playlist-card-copy"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small></span><span class="saved-playlist-card-open">打开</span></button>`;
+            const isOpen = item.id === activeSavedPlaylistId;
+            return `<button type="button" class="saved-playlist-card${isOpen ? ' active' : ''}" data-open-saved-playlist="${escapeHtml(item.id)}"><span class="saved-playlist-card-art" aria-hidden="true">${getIconSvg('record', 22)}${cover}</span><span class="saved-playlist-card-copy"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small></span><span class="saved-playlist-card-open">${isOpen ? '关闭' : '打开'}</span></button>`;
         }).join('')
         : '<div class="library-empty">新建歌单后，可在搜索结果中将歌曲保存进去。</div>';
     renderSavedPlaylistDetail();
@@ -2895,7 +2896,9 @@ async function playSavedPlaylist(playlistId) {
 }
 
 function openSavedPlaylist(playlistId) {
-    activeSavedPlaylistId = savedPlaylists.some(item => item.id === playlistId) ? playlistId : '';
+    activeSavedPlaylistId = activeSavedPlaylistId === playlistId
+        ? ''
+        : (savedPlaylists.some(item => item.id === playlistId) ? playlistId : '');
     renderLibrary();
 }
 
