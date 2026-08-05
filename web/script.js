@@ -2863,7 +2863,13 @@ function renderLibrary() {
         ? recentSongs.map((song, index) => songRowMarkup(song, 'recent', index)).join('')
         : '<div class="library-empty">还没有播放记录。</div>';
     savedList.innerHTML = savedPlaylists.length
-        ? savedPlaylists.map(item => `<button type="button" class="saved-playlist-card${item.id === activeSavedPlaylistId ? ' active' : ''}" data-open-saved-playlist="${escapeHtml(item.id)}"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small><span>查看歌单</span></button>`).join('')
+        ? savedPlaylists.map(item => {
+            const firstSong = item.songs[0];
+            const cover = firstSong?.cover
+                ? `<img src="${escapeHtml(getProxiedCoverUrl(firstSong.cover))}" alt="" loading="lazy" onerror="this.remove()">`
+                : '';
+            return `<button type="button" class="saved-playlist-card${item.id === activeSavedPlaylistId ? ' active' : ''}" data-open-saved-playlist="${escapeHtml(item.id)}"><span class="saved-playlist-card-art" aria-hidden="true">${getIconSvg('record', 22)}${cover}</span><span class="saved-playlist-card-copy"><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small></span><span class="saved-playlist-card-open">打开</span></button>`;
+        }).join('')
         : '<div class="library-empty">新建歌单后，可在搜索结果中将歌曲保存进去。</div>';
     renderSavedPlaylistDetail();
 }
