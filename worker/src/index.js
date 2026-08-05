@@ -66,6 +66,15 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoStatus(env));
     }
+    if (url.pathname === "/api/membership" && request.method === "GET") {
+      return withCors(request, env, await handleMembership(request, env));
+    }
+    if (url.pathname === "/api/billing/checkout" && request.method === "POST") {
+      return withCors(request, env, await handleCheckout(request, env));
+    }
+    if (url.pathname === "/api/billing/notify/linuxdo" && request.method === "GET") {
+      return withCors(request, env, await handleBillingNotify(request, env));
+    }
     if (url.pathname === "/api/library" && request.method === "GET") {
       return withCors(request, env, await handleLibraryGet(request, env));
     }
@@ -81,9 +90,23 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/invites" && request.method === "GET") {
       return withCors(request, env, await handleAdminListInvites(request, env));
     }
+    if (url.pathname === "/api/admin/overview" && request.method === "GET") {
+      return withCors(request, env, await handleAdminOverview(request, env));
+    }
+    if (url.pathname === "/api/admin/settings/membership" && request.method === "PUT") {
+      return withCors(request, env, await handleAdminMembershipSettings(request, env));
+    }
+    if (url.pathname === "/api/admin/members" && request.method === "GET") {
+      return withCors(request, env, await handleAdminMembers(request, env));
+    }
     const revokeInviteMatch = url.pathname.match(/^\/api\/admin\/invites\/(\d+)\/revoke$/);
     if (revokeInviteMatch && request.method === "POST") {
       return withCors(request, env, await handleAdminRevokeInvite(request, env, revokeInviteMatch[1]));
+    }
+
+    if (url.pathname.startsWith("/api/proxy/")) {
+      const access = await requireMusicAccess(request, env);
+      if (!access.ok) return withCors(request, env, access.response);
     }
 
     if (url.pathname === "/api/proxy/methods" && request.method === "GET") {
@@ -460,6 +483,78 @@ function getInviteDatabase(env) {
   return env.DB && typeof env.DB.prepare === "function" ? env.DB : null;
 }
 
+function getLinuxdoId(session) {
+  return String(session?.user?.linuxdo_id || session?.user?.id || "").trim();
+}
+
+function getAdminLinuxdoIds(env) {
+  return new Set(splitCsvValues(env.ADMIN_LINUXDO_IDS || ""));
+}
+
+function isAdminSession(session, env) {
+  return session?.type === "linuxdo" && getAdminLinuxdoIds(env).has(getLinuxdoId(session));
+}
+
+async function requireAdminSession(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth;
+  if (!isAdminSession(auth.session, env)) {
+    return { ok: false, response: jsonResponse(403, { code: 403, message: "管理员权限不足" }) };
+  }
+  return auth;
+}
+
+function membershipRequired(env) {
+  return ["1", "true", "yes", "on"].includes(String(env.MEMBERSHIP_REQUIRED || "").trim().toLowerCase());
+}
+
+function parseMembershipPrice(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 999999 || Math.round(amount * 100) !== amount * 100) return "";
+  return amount.toFixed(2);
+}
+
+async function getMembershipPrice(db) {
+  try {
+    const row = await db.prepare("SELECT value FROM app_settings WHERE key = 'monthly_membership_price'").first();
+    return parseMembershipPrice(row?.value) || "10.00";
+  } catch {
+    return "10.00";
+  }
+}
+
+async function getMembershipRecord(db, linuxdoId) {
+  return db.prepare("SELECT expires_at, updated_at FROM memberships WHERE linuxdo_id = ?").bind(linuxdoId).first();
+}
+
+function membershipActive(record) {
+  return Boolean(record?.expires_at && Date.parse(record.expires_at) > Date.now());
+}
+
+async function getMembershipStatus(session, env) {
+  if (session?.type === "password" || isAdminSession(session, env)) {
+    return { active: true, expires_at: null, source: "admin" };
+  }
+  const linuxdoId = getLinuxdoId(session);
+  const db = getInviteDatabase(env);
+  if (!linuxdoId || !db) return { active: false, expires_at: null, source: "unavailable" };
+  try {
+    const record = await getMembershipRecord(db, linuxdoId);
+    return { active: membershipActive(record), expires_at: record?.expires_at || null, source: "membership" };
+  } catch {
+    return { active: false, expires_at: null, source: "unavailable" };
+  }
+}
+
+async function requireMusicAccess(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth;
+  if (!membershipRequired(env)) return auth;
+  const membership = await getMembershipStatus(auth.session, env);
+  if (membership.active) return auth;
+  return { ok: false, response: jsonResponse(402, { code: 402, message: "需要有效的月会员" }) };
+}
+
 function libraryOwnerKey(session) {
   if (session?.type === "password") return "password:family";
   if (session?.type !== "linuxdo") return "";
@@ -584,14 +679,6 @@ function getBearerToken(request) {
   const header = String(request.headers.get("Authorization") || "");
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : "";
-}
-
-function requireInviteAdmin(request, env) {
-  const configured = String(env.ADMIN_INVITE_TOKEN || "").trim();
-  const supplied = getBearerToken(request);
-  if (!configured) return inviteError("ADMIN_INVITE_TOKEN is not configured", 503);
-  if (!supplied || !safeEqual(supplied, configured)) return inviteError("Unauthorized", 401);
-  return null;
 }
 
 function sanitizeInviteRecord(record) {
@@ -942,8 +1029,8 @@ async function handleInvitationComplete(request, env) {
 }
 
 async function handleAdminCreateInvites(request, env) {
-  const authError = requireInviteAdmin(request, env);
-  if (authError) return authError;
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
   const db = getInviteDatabase(env);
   if (!db) return inviteError("邀请码数据库未配置", 503);
 
@@ -973,8 +1060,8 @@ async function handleAdminCreateInvites(request, env) {
 }
 
 async function handleAdminListInvites(request, env) {
-  const authError = requireInviteAdmin(request, env);
-  if (authError) return authError;
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
   const db = getInviteDatabase(env);
   if (!db) return inviteError("邀请码数据库未配置", 503);
 
@@ -987,8 +1074,8 @@ async function handleAdminListInvites(request, env) {
 }
 
 async function handleAdminRevokeInvite(request, env, inviteId) {
-  const authError = requireInviteAdmin(request, env);
-  if (authError) return authError;
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
   const db = getInviteDatabase(env);
   if (!db) return inviteError("邀请码数据库未配置", 503);
 
@@ -1000,6 +1087,187 @@ async function handleAdminRevokeInvite(request, env, inviteId) {
   return jsonResponse(200, { code: 0, message: "Success" });
 }
 
+async function handleAdminOverview(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("D1 数据库未配置", 503);
+  const price = await getMembershipPrice(db);
+  const members = await db.prepare("SELECT COUNT(*) AS count FROM memberships WHERE expires_at > ?").bind(sqlNow()).first();
+  const orders = await db.prepare("SELECT COUNT(*) AS count FROM billing_orders WHERE status = 'paid'").first();
+  return jsonResponse(200, { code: 0, message: "Success", data: {
+    monthly_price: price,
+    active_members: Number(members?.count || 0),
+    paid_orders: Number(orders?.count || 0),
+  } });
+}
+
+async function handleAdminMembershipSettings(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("D1 数据库未配置", 503);
+  const price = parseMembershipPrice((await parseJsonBody(request)).monthly_price);
+  if (!price) return inviteError("月会员价格必须是大于 0、最多两位小数的积分数", 400);
+  await db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('monthly_membership_price', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(price, sqlNow()).run();
+  return jsonResponse(200, { code: 0, message: "Success", data: { monthly_price: price } });
+}
+
+async function handleAdminMembers(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("D1 数据库未配置", 503);
+  const rows = await db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id ORDER BY m.expires_at DESC LIMIT 200").all();
+  return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
+    linuxdo_id: String(row.linuxdo_id || ""), name: String(row.name || ""), avatar: String(row.avatar || ""), expires_at: row.expires_at || null, updated_at: row.updated_at || null,
+  })) } });
+}
+
+async function handleMembership(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getInviteDatabase(env);
+  const membership = await getMembershipStatus(auth.session, env);
+  const price = db ? await getMembershipPrice(db) : "10.00";
+  return jsonResponse(200, { code: 0, message: "Success", data: {
+    ...membership,
+    monthly_price: price,
+    payment_configured: creditConfigured(env),
+    is_admin: isAdminSession(auth.session, env),
+  } });
+}
+
+function base64Encode(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64Decode(value) {
+  const binary = atob(String(value || "").replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function getCreditConfig(env) {
+  return {
+    clientId: String(env.LDC_CLIENT_ID || "").trim(),
+    clientSecret: String(env.LDC_CLIENT_SECRET || "").trim(),
+    privateKeyPkcs8: String(env.LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64 || "").trim(),
+    notifyUrl: String(env.LDC_NOTIFY_URL || "").trim(),
+    returnUrl: String(env.LDC_RETURN_URL || "").trim(),
+  };
+}
+
+function creditConfigured(env) {
+  const cfg = getCreditConfig(env);
+  return Boolean(cfg.clientId && cfg.clientSecret && cfg.privateKeyPkcs8 && cfg.notifyUrl && cfg.returnUrl);
+}
+
+function createBillingOrderNo(linuxdoId) {
+  return `DM${Date.now().toString(36).toUpperCase()}${String(linuxdoId).slice(-6)}${crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+}
+
+function creditCanonicalPayload(params, clientSecret) {
+  return Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&") + clientSecret;
+}
+
+async function signCreditPayload(params, cfg) {
+  const key = await crypto.subtle.importKey("pkcs8", base64Decode(cfg.privateKeyPkcs8), { name: "Ed25519" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("Ed25519", key, encoder.encode(creditCanonicalPayload(params, cfg.clientSecret)));
+  return base64Encode(new Uint8Array(signature));
+}
+
+async function handleCheckout(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  if (auth.session.type !== "linuxdo" || isAdminSession(auth.session, env)) {
+    return inviteError("该账号无需购买会员", 400);
+  }
+  const db = getInviteDatabase(env);
+  if (!db) return inviteError("D1 数据库未配置", 503);
+  if (!creditConfigured(env)) return inviteError("积分支付尚未配置", 503);
+  const cfg = getCreditConfig(env);
+  const linuxdoId = getLinuxdoId(auth.session);
+  const amount = await getMembershipPrice(db);
+  const outTradeNo = createBillingOrderNo(linuxdoId);
+  const createdAt = sqlNow();
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  await db.prepare("INSERT INTO billing_orders (out_trade_no, linuxdo_id, amount, status, created_at, expires_at) VALUES (?, ?, ?, 'pending', ?, ?)").bind(outTradeNo, linuxdoId, amount, createdAt, expiresAt).run();
+
+  const params = {
+    client_id: cfg.clientId,
+    type: "ldcpay",
+    out_trade_no: outTradeNo,
+    money: amount,
+    order_name: "Music Downloader 月会员",
+    notify_url: cfg.notifyUrl,
+    return_url: cfg.returnUrl,
+  };
+  try {
+    const sign = await signCreditPayload(params, cfg);
+    const response = await fetch("https://credit.linux.do/epay/pay/submit.php", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ ...params, sign }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const location = response.headers.get("Location");
+    const body = await response.text();
+    const payload = parseJsonText(body);
+    const checkoutUrl = location || String(payload?.data?.pay_url || payload?.data?.url || payload?.pay_url || "");
+    if (!response.ok || !checkoutUrl) throw new Error(String(payload?.error_msg || payload?.message || "创建积分订单失败"));
+    return jsonResponse(200, { code: 0, message: "Success", data: { out_trade_no: outTradeNo, checkout_url: checkoutUrl, amount } });
+  } catch (err) {
+    await db.prepare("UPDATE billing_orders SET status = 'failed' WHERE out_trade_no = ? AND status = 'pending'").bind(outTradeNo).run();
+    return inviteError(err instanceof Error ? err.message : "创建积分订单失败", 502);
+  }
+}
+
+async function queryCreditOrder(outTradeNo, cfg) {
+  const url = new URL("https://credit.linux.do/epay/api.php");
+  url.searchParams.set("act", "order");
+  url.searchParams.set("pid", cfg.clientId);
+  url.searchParams.set("key", cfg.clientSecret);
+  url.searchParams.set("out_trade_no", outTradeNo);
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { Accept: "application/json" } });
+  const payload = parseJsonText(await response.text());
+  return { response, payload };
+}
+
+async function handleBillingNotify(request, env) {
+  const cfg = getCreditConfig(env);
+  const outTradeNo = String(new URL(request.url).searchParams.get("out_trade_no") || "").trim();
+  const db = getInviteDatabase(env);
+  if (!db || !creditConfigured(env) || !outTradeNo) return new Response("failure", { status: 400 });
+  const order = await db.prepare("SELECT out_trade_no, linuxdo_id, amount, status FROM billing_orders WHERE out_trade_no = ?").bind(outTradeNo).first();
+  if (!order) return new Response("failure", { status: 404 });
+  if (order.status === "paid") return new Response("success");
+  try {
+    const { response, payload } = await queryCreditOrder(outTradeNo, cfg);
+    const paid = response.ok && Number(payload?.status) === 1 && String(payload?.out_trade_no || "") === outTradeNo && parseMembershipPrice(payload?.money) === String(order.amount);
+    if (!paid) return new Response("failure", { status: 400 });
+    const now = sqlNow();
+    const result = await db.prepare("UPDATE billing_orders SET status = 'paid', trade_no = ?, paid_at = ? WHERE out_trade_no = ? AND status = 'pending'").bind(String(payload?.trade_no || ""), now, outTradeNo).run();
+    if (Number(result.meta?.changes || 0) === 1) {
+      const current = await getMembershipRecord(db, String(order.linuxdo_id));
+      const start = membershipActive(current) ? Date.parse(current.expires_at) : Date.now();
+      const nextExpiry = new Date(start + 30 * 24 * 60 * 60 * 1000).toISOString();
+      await db.prepare("INSERT INTO memberships (linuxdo_id, expires_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(String(order.linuxdo_id), nextExpiry, now).run();
+    }
+    return new Response("success");
+  } catch {
+    return new Response("failure", { status: 502 });
+  }
+}
+
 async function handleLogout(env) {
   return jsonResponse(200, { code: 0, message: "Success" }, { "Set-Cookie": buildSessionClearCookie(env) });
 }
@@ -1009,6 +1277,7 @@ async function handleMe(request, env) {
   if (!session) {
     return jsonResponse(401, { code: 401, message: "Unauthorized" });
   }
+  const membership = await getMembershipStatus(session, env);
   return jsonResponse(200, {
     code: 0,
     message: "Success",
@@ -1016,6 +1285,8 @@ async function handleMe(request, env) {
       auth_type: String(session.type || ""),
       user: session.user || {},
       using_server_key: session.type === "password",
+      is_admin: isAdminSession(session, env),
+      membership,
     },
   });
 }

@@ -17,6 +17,9 @@ custom_domain = true
 # - LINUXDO_CLIENT_ID
 # - LINUXDO_CLIENT_SECRET
 # - LINUXDO_REDIRECT_URI
+# - LDC_CLIENT_ID
+# - LDC_CLIENT_SECRET
+# - LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64
 
 [vars]
 # 静态前端域名白名单（用于 CORS，支持逗号分隔多个）
@@ -39,6 +42,16 @@ MEDIA_PROXY_ALLOWED_HOSTS = ".kuwo.cn,.kwcdn.kuwo.cn,.qq.com,.qqmp3.vip,.music.1
 
 # Linux DO 新用户邀请码：先完成 schema.sql 的 D1 初始化，再改为 true。
 INVITE_LINUXDO_ENABLED = "false"
+
+# Linux DO 管理员白名单：填你的 Linux DO 数字 ID，支持逗号分隔；密码登录永远不是管理员。
+ADMIN_LINUXDO_IDS = ""
+
+# 设置为 true 后，Linux DO 普通用户需有有效月会员才能使用音乐代理；密码登录和管理员不受影响。
+MEMBERSHIP_REQUIRED = "false"
+
+# LINUX DO Credit 回调与支付完成后的前端回跳地址。
+# LDC_NOTIFY_URL = "https://musicapi.621888.xyz/api/billing/notify/linuxdo"
+# LDC_RETURN_URL = "https://music.621888.xyz/"
 
 # 创建 D1 后取消下面三行的注释，并填入实际 database_id。
 # [[d1_databases]]

@@ -5,6 +5,8 @@
 - Linux DO OAuth 登录
 - 会话管理（HttpOnly Cookie）
 - 跨设备资料库同步：D1 保存收藏、最近播放与自建歌单（不保存音频、封面文件或 TuneHub Key）
+- Linux DO 月会员：Linux DO Credit 积分购买 30 天会员，价格由管理员在页面内调整
+- Linux DO 白名单管理员：只有 `ADMIN_LINUXDO_IDS` 中的账号能进入管理页；密码登录不具备管理权限
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - 备用源代理：`/api/proxy/backup`（GDStudio）
   - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
@@ -21,6 +23,12 @@
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `GET /api/auth/linuxdo-status`
+- `GET /api/membership`
+- `POST /api/billing/checkout`
+- `GET /api/billing/notify/linuxdo`
+- `GET /api/admin/overview`
+- `PUT /api/admin/settings/membership`
+- `GET /api/admin/members`
 - `GET /api/library`
 - `PUT /api/library`
 
@@ -33,7 +41,25 @@ wrangler secret put TUNEHUB_API_KEY
 wrangler secret put LINUXDO_CLIENT_ID
 wrangler secret put LINUXDO_CLIENT_SECRET
 wrangler secret put LINUXDO_REDIRECT_URI
+wrangler secret put LDC_CLIENT_ID
+wrangler secret put LDC_CLIENT_SECRET
+wrangler secret put LDC_ED25519_PRIVATE_KEY_PKCS8_BASE64
 ```
+
+## Linux DO 月会员配置
+
+1. 在 LINUX DO Credit 创建商户应用，并上传对应 Ed25519 公钥。
+2. 将**私钥的 PKCS#8 Base64**、Client ID、Client Secret 分别设置为上面的三个 Worker Secret；不要写入 `wrangler.toml` 或前端。
+3. 在 `wrangler.toml` 配置：
+
+```toml
+ADMIN_LINUXDO_IDS = "你的LinuxDO数字ID"
+LDC_NOTIFY_URL = "https://musicapi.621888.xyz/api/billing/notify/linuxdo"
+LDC_RETURN_URL = "https://music.621888.xyz/"
+MEMBERSHIP_REQUIRED = "true"
+```
+
+4. 执行最新 `schema.sql` 后再部署 Worker。普通 Linux DO 用户登录不再需要邀请码；支付回调会向 Credit 查询订单并核对金额后，才延长 30 天会员。密码登录和白名单管理员不受会员限制。
 
 ## 可选 Secret
 

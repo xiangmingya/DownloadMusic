@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-25">
+    <link rel="stylesheet" href="style.css?v=20260805-26">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -63,9 +63,11 @@
                 <button type="button" class="app-nav-item active" data-view-target="home">首页</button>
                 <button type="button" class="app-nav-item" data-view-target="search">探索</button>
                 <button type="button" class="app-nav-item" data-view-target="library">资料库</button>
+                <button type="button" class="app-nav-item" data-view-target="membership">会员</button>
             </nav>
             <div class="header-actions">
                 <span class="user-chip" id="userChip">用户</span>
+                <button type="button" class="header-admin-btn" id="adminViewBtn" data-view-target="admin" style="display:none;">管理</button>
                 <a class="logout-link" id="logoutBtn" href="#">退出</a>
             </div>
         </header>
@@ -159,6 +161,15 @@
                     <section class="library-card"><div class="section-heading"><div class="library-section-heading"><h2>最近播放</h2><span id="recentCount" class="count-pill">0</span></div><button type="button" class="text-link library-play-all" data-play-collection-all="recent">播放全部</button></div><div id="recentList" class="library-song-list"></div></section>
                     <section class="library-card library-playlists"><div class="section-heading"><h2>我的歌单</h2><span id="playlistCount" class="count-pill">0</span></div><div id="savedPlaylistList" class="saved-playlist-list"></div><div id="savedPlaylistDetail" class="saved-playlist-detail"></div></section>
                 </div>
+            </section>
+
+            <section class="app-view membership-view" id="membershipView" style="display:none;" aria-labelledby="membershipViewTitle">
+                <div class="membership-card"><p class="eyebrow">Linux DO Credit</p><h1 id="membershipViewTitle">月会员</h1><p id="membershipStatusText">正在读取会员状态…</p><strong id="membershipPrice">—</strong><small>积分 / 30 天</small><button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button><p id="membershipHint" class="membership-hint"></p></div>
+            </section>
+
+            <section class="app-view admin-view" id="adminView" style="display:none;" aria-labelledby="adminViewTitle">
+                <div class="view-title"><p class="eyebrow">管理员</p><h1 id="adminViewTitle">会员管理</h1><p>价格与会员状态由 Worker 和 D1 管理。</p></div>
+                <div class="admin-grid"><section class="admin-card"><h2>月会员价格</h2><div class="admin-price-form"><input id="adminMembershipPrice" type="number" min="0.01" step="0.01" inputmode="decimal" aria-label="月会员价格"><span>积分</span><button id="saveMembershipPriceBtn" type="button">保存</button></div><p id="adminOverviewText" class="admin-muted"></p></section><section class="admin-card"><h2>有效会员</h2><div id="adminMemberList" class="admin-member-list">正在读取…</div></section></div>
             </section>
         </main>
 
@@ -284,7 +295,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-25';
+        const APP_ASSET_VERSION = '20260805-26';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -370,7 +381,9 @@
                     name: String(user.name || '用户'),
                     linuxdo_id: String(user.linuxdo_id || ''),
                     avatar: String(user.avatar || '')
-                }
+                },
+                isAdmin: Boolean(meData.is_admin),
+                membership: meData.membership || {}
             };
 
             document.body.classList.remove('auth-body');
@@ -380,6 +393,7 @@
             document.getElementById('appContainer').style.display = '';
             document.getElementById('userChip').textContent =
                 `${window.APP_CONTEXT.user.name} · ${authType === 'password' ? '密码登录' : 'Linux DO'}`;
+            if (window.APP_CONTEXT.isAdmin) document.getElementById('adminViewBtn').style.display = '';
 
             if (!appScriptLoaded && !appScriptLoading) {
                 appScriptLoading = true;

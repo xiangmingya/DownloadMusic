@@ -1,5 +1,6 @@
 const API_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
 const LIBRARY_API_URL = API_BASE.replace(/\/proxy$/, '/library');
+const APP_API_ROOT = API_BASE.replace(/\/proxy$/, '');
 const API_ROUTES = {
     parse: `${API_BASE}/parse`,
     meta: `${API_BASE}/meta`,
@@ -2964,14 +2965,65 @@ function renderSavedPlaylistDetail() {
 }
 
 function setAppView(view) {
-    const valid = ['home', 'search', 'library'].includes(view) ? view : 'home';
+    const valid = ['home', 'search', 'library', 'membership', 'admin'].includes(view) ? view : 'home';
     document.getElementById('homeView').style.display = valid === 'home' ? '' : 'none';
     document.getElementById('searchView').style.display = valid === 'search' ? '' : 'none';
     document.getElementById('libraryView').style.display = valid === 'library' ? '' : 'none';
+    document.getElementById('membershipView').style.display = valid === 'membership' ? '' : 'none';
+    document.getElementById('adminView').style.display = valid === 'admin' && APP_CONTEXT.isAdmin ? '' : 'none';
     document.querySelectorAll('[data-view-target]').forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-view-target') === valid);
     });
     if (valid === 'library') renderLibrary();
+    if (valid === 'membership') void loadMembership();
+    if (valid === 'admin' && APP_CONTEXT.isAdmin) void loadAdminPanel();
+}
+
+async function getJson(url, init = {}) {
+    const response = await apiFetch(url, { ...init, timeoutMs: 15000 });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '请求失败');
+    return payload.data || {};
+}
+
+function renderMembership(data) {
+    const status = document.getElementById('membershipStatusText');
+    const price = document.getElementById('membershipPrice');
+    const button = document.getElementById('membershipCheckoutBtn');
+    const hint = document.getElementById('membershipHint');
+    if (!status || !price || !button || !hint) return;
+    price.textContent = String(data.monthly_price || '10.00');
+    if (data.source === 'admin') {
+        status.textContent = '管理员账号，无需购买会员。'; button.disabled = true; hint.textContent = ''; return;
+    }
+    status.textContent = data.active ? `有效至 ${new Date(data.expires_at).toLocaleString()}` : '当前未开通会员。';
+    button.disabled = !data.payment_configured;
+    hint.textContent = data.payment_configured ? '开通后立即获得 30 天使用时间。' : '积分支付正在配置中，请稍后再试。';
+}
+
+async function loadMembership() {
+    try { renderMembership(await getJson(`${APP_API_ROOT}/membership`)); } catch (error) { document.getElementById('membershipHint').textContent = error.message || '会员状态读取失败'; }
+}
+
+async function startMembershipCheckout() {
+    const button = document.getElementById('membershipCheckoutBtn');
+    button.disabled = true;
+    try {
+        const data = await getJson(`${APP_API_ROOT}/billing/checkout`, { method: 'POST' });
+        window.location.assign(data.checkout_url);
+    } catch (error) {
+        showToast(error.message || '创建订单失败', 'error');
+        await loadMembership();
+    }
+}
+
+async function loadAdminPanel() {
+    try {
+        const [overview, members] = await Promise.all([getJson(`${APP_API_ROOT}/admin/overview`), getJson(`${APP_API_ROOT}/admin/members`)]);
+        document.getElementById('adminMembershipPrice').value = overview.monthly_price;
+        document.getElementById('adminOverviewText').textContent = `当前有效会员 ${overview.active_members} 人 · 已支付订单 ${overview.paid_orders} 笔`;
+        document.getElementById('adminMemberList').innerHTML = members.members.length ? members.members.map(item => `<div><strong>${escapeHtml(item.name || item.linuxdo_id)}</strong><small>到期：${escapeHtml(item.expires_at || '—')}</small></div>`).join('') : '<p class="admin-muted">还没有会员。</p>';
+    } catch (error) { document.getElementById('adminMemberList').textContent = error.message || '读取失败'; }
 }
 
 const HOME_DIRECT_TOPLISTS = {
@@ -3206,6 +3258,11 @@ function initHomeInterface() {
         if (target === 'search') resetSearchViewMode();
         setAppView(target);
     }));
+    document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
+    document.getElementById('saveMembershipPriceBtn')?.addEventListener('click', async () => {
+        const price = document.getElementById('adminMembershipPrice').value;
+        try { await getJson(`${APP_API_ROOT}/admin/settings/membership`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_price: price }) }); showToast('月会员价格已保存', 'success'); await loadAdminPanel(); } catch (error) { showToast(error.message || '保存失败', 'error'); }
+    });
     document.getElementById('homeSearchForm')?.addEventListener('submit', event => {
         event.preventDefault();
         runHomeSearch(document.getElementById('homeSearchInput')?.value);
