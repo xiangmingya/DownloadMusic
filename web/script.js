@@ -2524,6 +2524,14 @@ function songRowMarkup(song, collection, index) {
     return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 28)}</button></div>`;
 }
 
+function setNowPlayingArt(art, cover) {
+    const url = getProxiedCoverUrl(cover || '');
+    art.style.backgroundImage = url ? `url("${url.replace(/"/g, '%22')}")` : '';
+    art.style.backgroundSize = 'cover';
+    art.style.backgroundPosition = 'center center';
+    art.style.backgroundRepeat = 'no-repeat';
+}
+
 function renderHomeNowPlaying() {
     const title = document.getElementById('homeNowPlayingTitle');
     const artist = document.getElementById('homeNowPlayingArtist');
@@ -2532,9 +2540,20 @@ function renderHomeNowPlaying() {
     const openBtn = document.getElementById('homeNowPlayingOpen');
     if (!title || !artist || !art || !btn || !openBtn) return;
     if (!currentPlayingSong) {
+        const standby = playlistSongs[0] || null;
+        if (standby) {
+            title.textContent = standby.name || '从播放列表继续';
+            artist.textContent = standby.artist || '';
+            setNowPlayingArt(art, standby.cover || '');
+            btn.disabled = false;
+            openBtn.disabled = false;
+            openBtn.setAttribute('aria-label', `继续播放：${standby.name || '播放列表'}`);
+            updateHomeNowPlayingControlState();
+            return;
+        }
         title.textContent = '还没有开始播放';
         artist.textContent = '选一首歌，让这里成为你的入口。';
-        art.style.backgroundImage = '';
+        setNowPlayingArt(art, '');
         btn.disabled = true;
         openBtn.disabled = true;
         updateHomeNowPlayingControlState();
@@ -2542,10 +2561,7 @@ function renderHomeNowPlaying() {
     }
     title.textContent = currentPlayingSong.name || '正在播放';
     artist.textContent = currentPlayingSong.artist || '';
-    const cover = getProxiedCoverUrl(currentPlayingSong.cover || '');
-    art.style.backgroundImage = cover ? `url("${cover.replace(/"/g, '%22')}")` : '';
-    art.style.backgroundSize = 'cover';
-    art.style.backgroundPosition = 'center';
+    setNowPlayingArt(art, currentPlayingSong.cover || '');
     btn.disabled = false;
     openBtn.disabled = false;
     openBtn.setAttribute('aria-label', `打开正在播放：${currentPlayingSong.name || '当前歌曲'}`);
@@ -2556,6 +2572,14 @@ function updateHomeNowPlayingControlState() {
     const btn = document.getElementById('homeNowPlayingBtn');
     if (!btn) return;
     const hasSong = Boolean(currentPlayingSong);
+    if (!hasSong) {
+        const hasStandby = playlistSongs.length > 0;
+        btn.disabled = !hasStandby;
+        btn.innerHTML = getIconSvg('play', 34);
+        btn.setAttribute('aria-label', hasStandby ? '继续播放播放列表' : '播放');
+        btn.setAttribute('title', hasStandby ? '继续播放播放列表' : '播放');
+        return;
+    }
     const canControl = Boolean(hasSong && audio.src);
     const paused = audio.paused;
     btn.disabled = !canControl;
@@ -2747,9 +2771,16 @@ function initHomeInterface() {
     document.getElementById('backToToplistsBtn')?.addEventListener('click', () => setAppView('home'));
     document.getElementById('homeNowPlayingOpen')?.addEventListener('click', () => {
         if (currentPlayingSong) setFullPlayerOpen(true);
+        else if (playlistSongs.length > 0) playSongFromPlaylist(0);
     });
     document.getElementById('homeNowPlayingBtn')?.addEventListener('click', async event => {
         event.stopPropagation();
+        if (!currentPlayingSong) {
+            if (playlistSongs.length > 0) {
+                await playSongFromPlaylist(0);
+            }
+            return;
+        }
         if (!currentPlayingSong || !audio.src) return;
         if (audio.paused) {
             try {
