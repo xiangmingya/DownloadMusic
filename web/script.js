@@ -200,20 +200,20 @@ function initStaticIcons() {
         playerFabBtn.innerHTML = buildTurntableFabIcon();
     }
 
-    setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 19);
+    setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 20);
 
     const closeIconEl = document.querySelector('#fullPlayerCloseBtn .top-btn-icon');
-    setIconHtml(closeIconEl, 'close', 18);
+    setIconHtml(closeIconEl, 'close', 20);
 
     const prevIconEl = document.querySelector('#fullPlayerPrevBtn .control-icon');
     const toggleIconEl = document.getElementById('fullPlayerToggleIcon');
     const nextIconEl = document.querySelector('#fullPlayerNextBtn .control-icon');
     const queueIconEl = document.querySelector('#fullPlayerQueueBtn .control-icon');
 
-    setIconHtml(prevIconEl, 'prev', 20);
-    setIconHtml(toggleIconEl, 'play', 20);
-    setIconHtml(nextIconEl, 'next', 20);
-    setIconHtml(queueIconEl, 'menu', 19);
+    setIconHtml(prevIconEl, 'prev', 22);
+    setIconHtml(toggleIconEl, 'play', 22);
+    setIconHtml(nextIconEl, 'next', 22);
+    setIconHtml(queueIconEl, 'menu', 22);
 }
 
 function buildMediaProxyUrl(rawUrl, options = {}) {
@@ -2099,10 +2099,10 @@ function renderLocalPage() {
                     </div>
                 </div>
                 <div>
-                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 16)}</button>
-                    <button class="favorite-song-btn" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${isFavoriteSong(song) ? '取消收藏' : '收藏'}">${getIconSvg('heart', 16)}</button>
-                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 16)}</button>
-                    <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 16)}</button>
+                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 20)}</button>
+                    <button class="favorite-song-btn" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${isFavoriteSong(song) ? '取消收藏' : '收藏'}">${getIconSvg('heart', 18)}</button>
+                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 18)}</button>
+                    <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 18)}</button>
                     <button onclick="downloadSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
                 </div>
             </div>
@@ -2336,14 +2336,14 @@ function resetInlinePlaybackUi(keepIndex = null) {
     const oldBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
     const oldPlayer = document.getElementById(`player-${currentPlayingIndex}`);
     const oldInlineLyrics = document.getElementById(`inline-lyrics-${currentPlayingIndex}`);
-    if (oldBtn) oldBtn.innerHTML = getIconSvg('play', 16);
+    if (oldBtn) oldBtn.innerHTML = getIconSvg('play', 20);
     if (oldPlayer) oldPlayer.style.display = 'none';
     if (oldInlineLyrics) oldInlineLyrics.textContent = '';
 }
 
 function syncInlinePlayButtonState() {
     document.querySelectorAll('.play-btn-item').forEach(btn => {
-        btn.innerHTML = getIconSvg('play', 16);
+        btn.innerHTML = getIconSvg('play', 20);
     });
     if (currentPlayingIndex !== null && !audio.paused) {
         const activeBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
@@ -2521,7 +2521,7 @@ function songRowMarkup(song, collection, index) {
     const image = cover
         ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
         : '<span class="mini-song-art" aria-hidden="true"></span>';
-    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 28)}</button></div>`;
+    return `<div class="mini-song-row">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 32)}</button></div>`;
 }
 
 function setNowPlayingArt(art, cover) {
@@ -3449,7 +3449,7 @@ function updateBrowserFullscreenButtonState() {
     const icon = document.getElementById('fullPlayerBrowserFullscreenIcon');
     if (!btn || !icon) return;
     const active = isBrowserFullscreenActive();
-    icon.innerHTML = getIconSvg(active ? 'fullscreen-exit' : 'fullscreen-enter', 19);
+    icon.innerHTML = getIconSvg(active ? 'fullscreen-exit' : 'fullscreen-enter', 20);
     const label = active ? '退出真全屏' : '进入真全屏';
     btn.title = label;
     btn.setAttribute('aria-label', label);
@@ -3483,7 +3483,7 @@ function updateFullPlayerControlState() {
     const playerFab = document.getElementById('playerFabBtn');
     const paused = audio.paused;
     if (toggleIcon) {
-        toggleIcon.innerHTML = getIconSvg(paused ? 'play' : 'pause', 20);
+        toggleIcon.innerHTML = getIconSvg(paused ? 'play' : 'pause', 22);
     }
     if (toggleBtn) {
         toggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
