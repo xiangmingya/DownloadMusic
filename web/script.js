@@ -88,6 +88,7 @@ let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
 let activeSavedPlaylistId = '';
+let pendingPlaylistSong = null;
 let cloudLibraryReady = false;
 let cloudLibrarySaveTimer = 0;
 let homeToplistRotation = Number(sessionStorage.getItem('downloadmusic_home_toplist_rotation') || new Date().getDay()) || 0;
@@ -2643,9 +2644,8 @@ async function restoreLibraryFromCloud() {
     }
 }
 
-function createSavedPlaylist(defaultName = '') {
-    const rawName = window.prompt('输入歌单名称', defaultName || '我的歌单');
-    const name = String(rawName || '').trim().slice(0, 40);
+function createSavedPlaylist(name) {
+    name = String(name || '').trim().slice(0, 40);
     if (!name) return null;
     const existing = savedPlaylists.find(item => item.name === name);
     if (existing) {
@@ -2671,23 +2671,81 @@ async function saveSongToCustomPlaylistByIndex(index) {
     }
     const song = toLibrarySong(rawSong);
     if (!song) return;
-    const suggested = savedPlaylists[0]?.name || '我的歌单';
-    const selectedName = String(window.prompt('输入要保存到的歌单名称（同名会加入已有歌单）', suggested) || '').trim().slice(0, 40);
-    if (!selectedName) return;
-    let playlist = savedPlaylists.find(item => item.name === selectedName);
-    if (!playlist) {
-        playlist = { id: crypto.randomUUID(), name: selectedName, songs: [] };
-        savedPlaylists.unshift(playlist);
-    }
+    openPlaylistPicker(song);
+}
+
+function addSongToSavedPlaylist(playlist, song) {
+    if (!playlist || !song) return false;
     if (playlist.songs.some(item => songIdentity(item) === songIdentity(song))) {
         showToast('这首歌已经在该歌单中', 'info');
-        return;
+        return false;
     }
     playlist.songs.push(song);
     saveSavedPlaylists();
     queueLibraryCloudSave();
     renderLibrary();
     showToast(`已加入「${playlist.name}」`, 'success');
+    return true;
+}
+
+function renderPlaylistPicker(filter = '') {
+    const picker = document.getElementById('playlistPicker');
+    const title = document.getElementById('playlistPickerTitle');
+    const song = document.getElementById('playlistPickerSong');
+    const input = document.getElementById('playlistPickerName');
+    const createButton = document.getElementById('playlistPickerCreateBtn');
+    const count = document.getElementById('playlistPickerCount');
+    const list = document.getElementById('playlistPickerList');
+    if (!picker || !title || !song || !input || !createButton || !count || !list) return;
+    const hasSong = Boolean(pendingPlaylistSong);
+    title.textContent = hasSong ? '保存到歌单' : '新建歌单';
+    song.textContent = hasSong
+        ? `${pendingPlaylistSong.name} · ${pendingPlaylistSong.artist}`
+        : '新建一个歌单，之后可从搜索结果直接添加歌曲。';
+    input.placeholder = hasSong ? '输入新歌单名称' : '例如：晚安循环';
+    createButton.textContent = hasSong ? '创建并加入' : '创建歌单';
+    const query = String(filter || '').trim().toLowerCase();
+    const playlists = savedPlaylists.filter(item => !query || item.name.toLowerCase().includes(query));
+    count.textContent = String(savedPlaylists.length);
+    list.innerHTML = playlists.length
+        ? playlists.map(item => {
+            const alreadyAdded = hasSong && item.songs.some(entry => songIdentity(entry) === songIdentity(pendingPlaylistSong));
+            const action = hasSong ? (alreadyAdded ? '已在此歌单' : '加入') : '查看';
+            return `<button type="button" class="playlist-picker-item" data-pick-saved-playlist="${escapeHtml(item.id)}"${alreadyAdded ? ' disabled' : ''}><span><strong>${escapeHtml(item.name)}</strong><small>${item.songs.length} 首歌曲</small></span><em>${action}</em></button>`;
+        }).join('')
+        : `<div class="playlist-picker-empty">${savedPlaylists.length ? '没有名称相近的歌单，可以直接创建。' : '还没有歌单，先在上方创建一个吧。'}</div>`;
+}
+
+function openPlaylistPicker(song = null) {
+    const picker = document.getElementById('playlistPicker');
+    if (!picker) return;
+    pendingPlaylistSong = song;
+    renderPlaylistPicker();
+    if (!picker.open) picker.showModal();
+    requestAnimationFrame(() => document.getElementById('playlistPickerName')?.focus());
+}
+
+function closePlaylistPicker() {
+    document.getElementById('playlistPicker')?.close();
+}
+
+function createPlaylistFromPicker() {
+    const input = document.getElementById('playlistPickerName');
+    const playlist = createSavedPlaylist(input?.value);
+    if (!playlist) return;
+    if (pendingPlaylistSong) addSongToSavedPlaylist(playlist, pendingPlaylistSong);
+    closePlaylistPicker();
+}
+
+function pickSavedPlaylist(playlistId) {
+    const playlist = savedPlaylists.find(item => item.id === playlistId);
+    if (!playlist) return;
+    if (pendingPlaylistSong) {
+        if (addSongToSavedPlaylist(playlist, pendingPlaylistSong)) closePlaylistPicker();
+        return;
+    }
+    closePlaylistPicker();
+    openSavedPlaylist(playlist.id);
 }
 
 function songRowMarkup(song, collection, index, allowFavoriteRemove = false) {
@@ -3158,7 +3216,22 @@ function initHomeInterface() {
         }
         updateHomeNowPlayingControlState();
     });
-    document.getElementById('createPlaylistBtn')?.addEventListener('click', () => createSavedPlaylist());
+    document.getElementById('createPlaylistBtn')?.addEventListener('click', () => openPlaylistPicker());
+    document.getElementById('playlistPickerCloseBtn')?.addEventListener('click', closePlaylistPicker);
+    document.getElementById('playlistPickerCreateForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        createPlaylistFromPicker();
+    });
+    document.getElementById('playlistPickerName')?.addEventListener('input', event => {
+        renderPlaylistPicker(event.target.value);
+    });
+    document.getElementById('playlistPickerList')?.addEventListener('click', event => {
+        const item = event.target.closest('[data-pick-saved-playlist]');
+        if (item && !item.disabled) pickSavedPlaylist(item.dataset.pickSavedPlaylist);
+    });
+    document.getElementById('playlistPicker')?.addEventListener('close', () => {
+        pendingPlaylistSong = null;
+    });
     document.getElementById('favoriteList')?.addEventListener('click', event => {
         const favoriteButton = event.target.closest('[data-remove-favorite]');
         if (favoriteButton) {

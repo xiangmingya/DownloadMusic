@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-17">
+    <link rel="stylesheet" href="style.css?v=20260805-18">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -244,13 +244,27 @@
                 <div id="playlistSheetList" class="playlist-sheet-list"></div>
             </div>
         </div>
+
+        <dialog id="playlistPicker" class="playlist-picker" aria-labelledby="playlistPickerTitle">
+            <button id="playlistPickerCloseBtn" class="playlist-picker-close" type="button" aria-label="关闭歌单选择">×</button>
+            <p class="eyebrow">收纳歌曲</p>
+            <h2 id="playlistPickerTitle">保存到歌单</h2>
+            <p id="playlistPickerSong" class="playlist-picker-song"></p>
+            <form id="playlistPickerCreateForm" class="playlist-picker-create">
+                <label class="sr-only" for="playlistPickerName">新歌单名称</label>
+                <input id="playlistPickerName" maxlength="40" autocomplete="off" placeholder="输入新歌单名称">
+                <button id="playlistPickerCreateBtn" type="submit">创建并加入</button>
+            </form>
+            <div class="playlist-picker-heading"><h3>已有歌单</h3><span id="playlistPickerCount" class="count-pill">0</span></div>
+            <div id="playlistPickerList" class="playlist-picker-list"></div>
+        </dialog>
     </div>
 
     <script>
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-17';
+        const APP_ASSET_VERSION = '20260805-18';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
