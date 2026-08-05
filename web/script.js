@@ -194,9 +194,12 @@ function setButtonIcon(buttonEl, iconName, size = 18) {
 
 function buildTurntableFabIcon() {
     return [
-        '<span class="turntable-icon" aria-hidden="true">',
-        '  <span class="turntable-disc">',
-        '    <span class="turntable-disc-label"></span>',
+        '<span class="player-fab-art" aria-hidden="true">',
+        '  <img id="playerFabCover" class="player-fab-cover" alt="">',
+        '  <span class="turntable-icon">',
+        '    <span class="turntable-disc">',
+        '      <span class="turntable-disc-label"></span>',
+        '    </span>',
         '  </span>',
         '</span>'
     ].join('');
@@ -208,6 +211,9 @@ function initStaticIcons() {
     if (playerFabBtn) {
         playerFabBtn.innerHTML = buildTurntableFabIcon();
     }
+    setButtonIcon(document.getElementById('playerFabPrevBtn'), 'prev', 20);
+    setButtonIcon(document.getElementById('playerFabToggleBtn'), 'play', 20);
+    setButtonIcon(document.getElementById('playerFabNextBtn'), 'next', 20);
 
     setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 20);
 
@@ -3950,6 +3956,7 @@ function updateFullPlayerMeta() {
         coverEl.src = '';
         document.getElementById('fullPlayerCurrentLyric').textContent = '点击歌曲开始播放';
         document.getElementById('fullPlayerNextLyric').textContent = '';
+        updatePlayerFabPreview();
         return;
     }
 
@@ -3957,19 +3964,48 @@ function updateFullPlayerMeta() {
     artistEl.textContent = currentPlayingSong.artist || '未知歌手';
     coverEl.src = getProxiedCoverUrl(currentPlayingSong.cover || '');
     updateFullPlayerLyric(audio.currentTime || 0);
+    updatePlayerFabPreview();
+}
+
+function updatePlayerFabPreview() {
+    const playerFab = document.getElementById('playerFabBtn');
+    const cover = document.getElementById('playerFabCover');
+    const title = document.getElementById('playerFabTrackName');
+    if (title) title.textContent = currentPlayingSong?.name || '还没有开始播放';
+    if (!playerFab || !cover) return;
+    playerFab.classList.remove('has-cover');
+    cover.removeAttribute('src');
+    const source = getProxiedCoverUrl(currentPlayingSong?.cover || '');
+    if (!source) return;
+    cover.onload = () => playerFab.classList.add('has-cover');
+    cover.onerror = () => playerFab.classList.remove('has-cover');
+    cover.src = source;
 }
 
 function updateFullPlayerControlState() {
     const toggleBtn = document.getElementById('fullPlayerToggleBtn');
     const toggleIcon = document.getElementById('fullPlayerToggleIcon');
     const playerFab = document.getElementById('playerFabBtn');
+    const quickToggleBtn = document.getElementById('playerFabToggleBtn');
+    const quickPrevBtn = document.getElementById('playerFabPrevBtn');
+    const quickNextBtn = document.getElementById('playerFabNextBtn');
     const paused = audio.paused;
+    const canControl = Boolean(currentPlayingSong && audio.src);
     if (toggleIcon) {
         toggleIcon.innerHTML = getIconSvg(paused ? 'play' : 'pause', 22);
     }
     if (toggleBtn) {
         toggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
     }
+    if (quickToggleBtn) {
+        quickToggleBtn.disabled = !canControl;
+        quickToggleBtn.innerHTML = getIconSvg(paused ? 'play' : 'pause', 20);
+        quickToggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
+        quickToggleBtn.setAttribute('title', paused ? '播放' : '暂停');
+    }
+    [quickPrevBtn, quickNextBtn].forEach(button => {
+        if (button) button.disabled = !canControl;
+    });
     if (playerFab) {
         playerFab.classList.toggle('is-spinning', !paused);
     }
@@ -4199,6 +4235,9 @@ function bindPlayerUiEvents() {
     const fullPlayerPrevBtn = document.getElementById('fullPlayerPrevBtn');
     const fullPlayerNextBtn = document.getElementById('fullPlayerNextBtn');
     const fullPlayerQueueBtn = document.getElementById('fullPlayerQueueBtn');
+    const playerFabPrevBtn = document.getElementById('playerFabPrevBtn');
+    const playerFabToggleBtn = document.getElementById('playerFabToggleBtn');
+    const playerFabNextBtn = document.getElementById('playerFabNextBtn');
     const fullProgressBar = document.getElementById('fullPlayerProgressBar');
     const fullPlayerOverlay = document.getElementById('fullPlayerOverlay');
 
@@ -4216,6 +4255,9 @@ function bindPlayerUiEvents() {
             setFullPlayerOpen(!isFullPlayerOpen);
         });
     }
+    if (playerFabPrevBtn) playerFabPrevBtn.addEventListener('click', () => fullPlayerPrevBtn?.click());
+    if (playerFabToggleBtn) playerFabToggleBtn.addEventListener('click', () => fullPlayerToggleBtn?.click());
+    if (playerFabNextBtn) playerFabNextBtn.addEventListener('click', () => fullPlayerNextBtn?.click());
     if (playlistBackdrop) {
         playlistBackdrop.addEventListener('click', () => setPlaylistSheetOpen(false));
     }
