@@ -2384,6 +2384,7 @@ function toLibrarySong(song) {
         source: String(song.platform || song.source || ''),
         cover: normalizeMediaUrl(song.cover || ''),
         dataSource: normalizeSongDataSource(song.dataSource),
+        lookupOnly: Boolean(song.lookupOnly),
         backup: song?.backup && typeof song.backup === 'object' ? song.backup : null,
         backup3: song?.backup3 && typeof song.backup3 === 'object' ? song.backup3 : null
     };
@@ -2986,7 +2987,24 @@ async function playSong(source, id, name, artist, index) {
     name = String(runtimeSong?.name || name);
     artist = String(runtimeSong?.artist || artist);
     const queueIndex = findPlaylistIndex(source, id);
-    currentPlaylistIndex = queueIndex;
+    if (queueIndex >= 0) {
+        currentPlaylistIndex = queueIndex;
+    } else {
+        // 从列表播放时把当前列表同步进播放队列，保证上一首/下一首可用。
+        const seen = new Set(playlistSongs.map(songIdentity));
+        allSongs.forEach(song => {
+            const item = toLibrarySong(song);
+            if (!item || seen.has(songIdentity(item))) return;
+            seen.add(songIdentity(item));
+            playlistSongs.push(item);
+        });
+        const resolvedItem = toLibrarySong(runtimeSong);
+        if (resolvedItem && !seen.has(songIdentity(resolvedItem))) {
+            playlistSongs.push(resolvedItem);
+        }
+        savePlaylistToStorage();
+        currentPlaylistIndex = findPlaylistIndex(source, id);
+    }
     renderPlaylistSheet();
     await playSongCore(source, id, name, artist, {
         inlineIndex: index,
@@ -3151,6 +3169,7 @@ function loadPlaylistFromStorage() {
                 source: String(item.platform || ''),
                 cover: normalizeMediaUrl(item.cover || ''),
                 dataSource: normalizeSongDataSource(item.dataSource),
+                lookupOnly: Boolean(item.lookupOnly),
                 backup: item?.backup && typeof item.backup === 'object'
                     ? {
                         source: String(item.backup.source || ''),
@@ -3511,6 +3530,7 @@ async function addSongToPlaylist(source, id, name, artist, album = '', cover = '
         source: platform,
         cover: normalizeMediaUrl(runtimeSong?.cover || cover || ''),
         dataSource: normalizeSongDataSource(runtimeSong?.dataSource),
+        lookupOnly: Boolean(runtimeSong?.lookupOnly),
         backup: runtimeSong?.backup && typeof runtimeSong.backup === 'object'
             ? {
                 source: String(runtimeSong.backup.source || ''),
@@ -3540,6 +3560,11 @@ async function playSongFromPlaylist(index) {
     if (!item) return;
     currentPlaylistIndex = index;
     renderPlaylistSheet();
+    const wasLookupOnly = Boolean(item.lookupOnly);
+    await resolveLookupOnlySong(item).catch(() => item);
+    if (wasLookupOnly && !item.lookupOnly) {
+        savePlaylistToStorage();
+    }
     await playSongCore(item.platform || item.source, item.id, item.name, item.artist, {
         inlineIndex: null,
         cover: item.cover,
