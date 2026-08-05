@@ -92,6 +92,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/proxy/toplist" && request.method === "GET") {
       return withCors(request, env, await handleToplist(request, env));
     }
+    if (url.pathname === "/api/proxy/playlists" && request.method === "GET") {
+      return withCors(request, env, await handlePlaylists(request, env));
+    }
     if (url.pathname === "/api/proxy/parse" && request.method === "POST") {
       return withCors(request, env, await handleParse(request, env));
     }
@@ -1384,6 +1387,88 @@ async function handleToplist(request, env) {
     return jsonResponse(200, { code: 0, message: "Success", data: await callToplist(platform, id) });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取榜单详情失败" });
+  }
+}
+
+function parseJsonpJson(text) {
+  try {
+    return JSON.parse(String(text || ""));
+  } catch {
+    const raw = String(text || "").trim();
+    const start = raw.indexOf("(");
+    const end = raw.lastIndexOf(")");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start + 1, end));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+async function callPlaylists(platform) {
+  if (platform === "netease") {
+    const endpoint = new URL("https://music.163.com/api/playlist/list");
+    endpoint.searchParams.set("cat", "全部");
+    endpoint.searchParams.set("order", "hot");
+    endpoint.searchParams.set("limit", "30");
+    endpoint.searchParams.set("offset", "0");
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: NETEASE_WEB_HEADERS,
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    const playlists = Array.isArray(json?.playlists) ? json.playlists : [];
+    return playlists.slice(0, 30).map((item) => ({
+      id: String(item?.id || ""),
+      name: String(item?.name || "热门歌单"),
+      cover: normalizeMediaUrl(item?.coverImgUrl || item?.picUrl || ""),
+      trackCount: Number(item?.trackCount || 0),
+      playCount: Number(item?.playCount || item?.subscribedCount || 0),
+    })).filter((item) => item.id);
+  }
+
+  if (platform === "qq") {
+    const endpoint = new URL("https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg");
+    endpoint.searchParams.set("new_format", "1");
+    endpoint.searchParams.set("picmid", "1");
+    endpoint.searchParams.set("rnd", String(Math.random()));
+    endpoint.searchParams.set("categoryId", "10000000");
+    endpoint.searchParams.set("sortId", "5");
+    endpoint.searchParams.set("sin", "0");
+    endpoint.searchParams.set("ein", "29");
+    const { status, text } = await upstreamJson(endpoint.toString(), {
+      headers: {
+        Origin: "https://y.qq.com",
+        Referer: "https://y.qq.com/",
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    if (status < 200 || status >= 300) throw new Error(`上游请求失败 (${status})`);
+    const json = parseJsonpJson(text);
+    const list = Array.isArray(json?.data?.list) ? json.data.list : [];
+    return list.slice(0, 30).map((item) => ({
+      id: String(item?.dissid || ""),
+      name: String(item?.dissname || "热门歌单"),
+      cover: normalizeMediaUrl(item?.imgurl || item?.picurl || ""),
+      trackCount: Number(item?.songnum || item?.song_cnt || 0),
+      playCount: Number(item?.listennum || 0),
+    })).filter((item) => item.id);
+  }
+
+  throw new Error("不支持的平台");
+}
+
+async function handlePlaylists(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const url = new URL(request.url);
+  const platform = String(url.searchParams.get("platform") || "netease").trim();
+  try {
+    return jsonResponse(200, { code: 0, message: "Success", data: { playlists: await callPlaylists(platform) } });
+  } catch (err) {
+    return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取歌单列表失败" });
   }
 }
 

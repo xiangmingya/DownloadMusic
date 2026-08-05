@@ -9,7 +9,8 @@ const API_ROUTES = {
     backup3: `${API_BASE}/backup3`,
     backup4: `${API_BASE}/backup4`,
     toplists: `${API_BASE}/toplists`,
-    toplist: `${API_BASE}/toplist`
+    toplist: `${API_BASE}/toplist`,
+    playlists: `${API_BASE}/playlists`
 };
 const PRIMARY_ALLOWED_PLATFORMS = ['netease', 'qq', 'kuwo'];
 const PLATFORM_ALL_VALUE = 'all';
@@ -2712,7 +2713,7 @@ function resetSearchViewMode() {
     if (backButton) backButton.style.display = 'none';
 }
 
-async function openToplistSongs(platform, id, name) {
+async function openToplistSongs(platform, id, name, options = {}) {
     const heading = document.getElementById('searchViewEyebrow');
     const title = document.getElementById('searchViewTitle');
     const description = document.getElementById('searchViewDescription');
@@ -2725,20 +2726,87 @@ async function openToplistSongs(platform, id, name) {
     if (backButton) backButton.style.display = '';
     setAppView('search');
     const results = document.getElementById('results');
-    results.innerHTML = '<div class="empty-state">正在加载榜单歌曲…</div>';
+    results.innerHTML = '<div class="empty-state">正在加载内容…</div>';
     resetKeywordPagingState();
     try {
-        const url = new URL(API_ROUTES.toplist, window.location.href);
-        url.searchParams.set('platform', platform);
-        url.searchParams.set('id', id);
-        const response = await apiFetch(url.toString(), { timeoutMs: 20000 });
-        const payload = await response.json();
-        if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单歌曲加载失败');
-        const songs = (Array.isArray(payload?.data?.songs) ? payload.data.songs : []).map(song => ({ ...song, platform }));
-        if (!songs.length) throw new Error('这张榜单暂时没有可播放歌曲');
+        let songs = [];
+        if (typeof options.loader === 'function') {
+            songs = await options.loader();
+        } else {
+            const url = new URL(API_ROUTES.toplist, window.location.href);
+            url.searchParams.set('platform', platform);
+            url.searchParams.set('id', id);
+            const response = await apiFetch(url.toString(), { timeoutMs: 20000 });
+            const payload = await response.json();
+            if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单歌曲加载失败');
+            songs = (Array.isArray(payload?.data?.songs) ? payload.data.songs : []).map(song => ({ ...song, platform }));
+        }
+        if (!Array.isArray(songs) || songs.length === 0) throw new Error('这里暂时没有可播放歌曲');
         displaySongsWithPagination(songs);
     } catch (error) {
-        results.innerHTML = `<div class="empty-state">${escapeHtml(localizeErrorMessage(error?.message, '榜单歌曲加载失败'))}</div>`;
+        results.innerHTML = `<div class="empty-state">${escapeHtml(localizeErrorMessage(error?.message, '内容加载失败'))}</div>`;
+    }
+}
+
+function formatPlayCount(count) {
+    const n = Number(count || 0);
+    if (n >= 100000000) return `${(n / 100000000).toFixed(1)}亿`;
+    if (n >= 10000) return `${(n / 10000).toFixed(1)}万`;
+    return String(n);
+}
+
+async function fetchHomePlaylistCards() {
+    const tasks = ['netease', 'qq'].map(async platform => {
+        const url = new URL(API_ROUTES.playlists, window.location.href);
+        url.searchParams.set('platform', platform);
+        const response = await apiFetch(url.toString(), { timeoutMs: 15000 });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0) throw new Error('歌单列表加载失败');
+        const list = Array.isArray(payload?.data?.playlists) ? payload.data.playlists : [];
+        return list.map(item => ({ ...item, platform }));
+    });
+    const settled = await Promise.allSettled(tasks);
+    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+}
+
+function renderHomePlaylistCards(cards) {
+    const grid = document.querySelector('.mood-grid');
+    if (!grid || cards.length === 0) return false;
+    const seen = new Set();
+    const picked = cards
+        .sort((a, b) => Number(b.playCount || 0) - Number(a.playCount || 0))
+        .filter(item => {
+            const key = `${item.platform}:${item.id}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .slice(0, 4);
+    if (picked.length === 0) return false;
+
+    grid.innerHTML = picked.map(item => `
+        <button class="mood-card playlist-mood-card" type="button" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}">
+            <img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover || ''))}" alt="" onerror="this.style.display='none'">
+            <span>${escapeHtml(platformDisplayName(item.platform))} 歌单</span>
+            <strong>${escapeHtml(item.name)}</strong>
+            <small>${Number(item.playCount || 0) > 0 ? `${formatPlayCount(item.playCount)} 次播放` : `${Number(item.trackCount || 0)} 首歌曲`}</small>
+        </button>`).join('');
+    grid.querySelectorAll('[data-playlist-id]').forEach(button => {
+        button.addEventListener('click', () => {
+            openToplistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, button.dataset.playlistName, {
+                loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId)
+            });
+        });
+    });
+    return true;
+}
+
+async function initHomePlaylists() {
+    try {
+        const cards = await fetchHomePlaylistCards();
+        renderHomePlaylistCards(cards);
+    } catch {
+        // 歌单列表不可用时保留原有关键词卡片。
     }
 }
 
@@ -2811,6 +2879,7 @@ function initHomeInterface() {
         if (card) playSavedPlaylist(card.dataset.playSavedPlaylist);
     });
     renderHomeToplistCards();
+    initHomePlaylists();
 }
 
 function bindSongMeta(song) {
