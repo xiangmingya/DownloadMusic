@@ -532,7 +532,7 @@ function membershipActive(record) {
 }
 
 async function getMembershipStatus(session, env) {
-  if (session?.type === "password" || isAdminSession(session, env)) {
+  if (session?.type === "password") {
     return { active: true, expires_at: null, source: "admin" };
   }
   const linuxdoId = getLinuxdoId(session);
@@ -1187,7 +1187,7 @@ async function signCreditPayload(params, cfg) {
 async function handleCheckout(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
-  if (auth.session.type !== "linuxdo" || isAdminSession(auth.session, env)) {
+  if (auth.session.type !== "linuxdo") {
     return inviteError("该账号无需购买会员", 400);
   }
   const db = getInviteDatabase(env);
