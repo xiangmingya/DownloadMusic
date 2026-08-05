@@ -3740,6 +3740,8 @@ function findPlaylistIndex(source, id) {
 function renderPlaylistSheet() {
     const listEl = document.getElementById('playlistSheetList');
     if (!listEl) return;
+    updatePlayerFabPreview();
+    updateFullPlayerControlState();
 
     if (playlistSongs.length === 0) {
         listEl.innerHTML = '<div class="playlist-empty">播放列表为空，搜索后点击“添加”按钮</div>';
@@ -3980,11 +3982,12 @@ function updatePlayerFabPreview() {
     const playerFab = document.getElementById('playerFabBtn');
     const cover = document.getElementById('playerFabCover');
     const title = document.getElementById('playerFabTrackName');
-    if (title) title.textContent = currentPlayingSong?.name || '还没有开始播放';
+    const previewSong = currentPlayingSong || playlistSongs[0] || null;
+    if (title) title.textContent = previewSong?.name || '还没有开始播放';
     if (!playerFab || !cover) return;
     playerFab.classList.remove('has-cover');
     cover.removeAttribute('src');
-    const source = getProxiedCoverUrl(currentPlayingSong?.cover || '');
+    const source = getProxiedCoverUrl(previewSong?.cover || '');
     if (!source) return;
     cover.onload = () => playerFab.classList.add('has-cover');
     cover.onerror = () => playerFab.classList.remove('has-cover');
@@ -4000,17 +4003,20 @@ function updateFullPlayerControlState() {
     const quickNextBtn = document.getElementById('playerFabNextBtn');
     const paused = audio.paused;
     const canControl = Boolean(currentPlayingSong && audio.src);
+    const canStartFromQueue = !currentPlayingSong && playlistSongs.length > 0;
+    const canToggle = canControl || canStartFromQueue;
     if (toggleIcon) {
         toggleIcon.innerHTML = getIconSvg(paused ? 'play' : 'pause', 22);
     }
     if (toggleBtn) {
-        toggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
+        toggleBtn.disabled = !canToggle;
+        toggleBtn.setAttribute('aria-label', canStartFromQueue ? '播放播放列表' : (paused ? '播放' : '暂停'));
     }
     if (quickToggleBtn) {
-        quickToggleBtn.disabled = !canControl;
+        quickToggleBtn.disabled = !canToggle;
         quickToggleBtn.innerHTML = getIconSvg(paused ? 'play' : 'pause', 20);
-        quickToggleBtn.setAttribute('aria-label', paused ? '播放' : '暂停');
-        quickToggleBtn.setAttribute('title', paused ? '播放' : '暂停');
+        quickToggleBtn.setAttribute('aria-label', canStartFromQueue ? '播放播放列表' : (paused ? '播放' : '暂停'));
+        quickToggleBtn.setAttribute('title', canStartFromQueue ? '播放播放列表' : (paused ? '播放' : '暂停'));
     }
     [quickPrevBtn, quickNextBtn].forEach(button => {
         if (button) button.disabled = !canControl;
@@ -4256,8 +4262,12 @@ function bindPlayerUiEvents() {
         });
     }
     if (playerFabBtn) {
-        playerFabBtn.addEventListener('click', () => {
+        playerFabBtn.addEventListener('click', async () => {
             if (!currentPlayingSong) {
+                if (playlistSongs.length) {
+                    await playSongFromPlaylist(0);
+                    return;
+                }
                 showToast('请先播放一首歌', 'info');
                 return;
             }
@@ -4326,7 +4336,10 @@ function bindPlayerUiEvents() {
     }
     if (fullPlayerToggleBtn) {
         fullPlayerToggleBtn.addEventListener('click', async () => {
-            if (!currentPlayingSong || !audio.src) return;
+            if (!currentPlayingSong || !audio.src) {
+                if (playlistSongs.length) await playSongFromPlaylist(0);
+                return;
+            }
             if (audio.paused) {
                 try {
                     await audio.play();
