@@ -81,15 +81,6 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/library" && request.method === "PUT") {
       return withCors(request, env, await handleLibraryPut(request, env));
     }
-    if (url.pathname === "/api/auth/invitation/complete" && request.method === "POST") {
-      return withCors(request, env, await handleInvitationComplete(request, env));
-    }
-    if (url.pathname === "/api/admin/invites" && request.method === "POST") {
-      return withCors(request, env, await handleAdminCreateInvites(request, env));
-    }
-    if (url.pathname === "/api/admin/invites" && request.method === "GET") {
-      return withCors(request, env, await handleAdminListInvites(request, env));
-    }
     if (url.pathname === "/api/admin/overview" && request.method === "GET") {
       return withCors(request, env, await handleAdminOverview(request, env));
     }
@@ -99,11 +90,6 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/members" && request.method === "GET") {
       return withCors(request, env, await handleAdminMembers(request, env));
     }
-    const revokeInviteMatch = url.pathname.match(/^\/api\/admin\/invites\/(\d+)\/revoke$/);
-    if (revokeInviteMatch && request.method === "POST") {
-      return withCors(request, env, await handleAdminRevokeInvite(request, env, revokeInviteMatch[1]));
-    }
-
     if (url.pathname.startsWith("/api/proxy/")) {
       const access = await requireMusicAccess(request, env);
       if (!access.ok) return withCors(request, env, access.response);
@@ -453,17 +439,6 @@ async function getSession(request, env) {
   if (!parsed || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) {
     return null;
   }
-  if (parsed.type === "linuxdo" && invitationLoginEnabled(env)) {
-    const db = getInviteDatabase(env);
-    if (!db) return null;
-    const linuxdoId = String(parsed?.user?.linuxdo_id || parsed?.user?.id || "").trim();
-    if (!linuxdoId) return null;
-    const user = await db
-      .prepare("SELECT disabled_at FROM linuxdo_users WHERE linuxdo_id = ?")
-      .bind(linuxdoId)
-      .first();
-    if (!user || user.disabled_at) return null;
-  }
   return parsed;
 }
 
@@ -475,11 +450,7 @@ async function requireSession(request, env) {
   return { ok: true, session };
 }
 
-function invitationLoginEnabled(env) {
-  return ["1", "true", "yes", "on"].includes(String(env.INVITE_LINUXDO_ENABLED || "").trim().toLowerCase());
-}
-
-function getInviteDatabase(env) {
+function getDatabase(env) {
   return env.DB && typeof env.DB.prepare === "function" ? env.DB : null;
 }
 
@@ -536,7 +507,7 @@ async function getMembershipStatus(session, env) {
     return { active: true, expires_at: null, source: "admin" };
   }
   const linuxdoId = getLinuxdoId(session);
-  const db = getInviteDatabase(env);
+  const db = getDatabase(env);
   if (!linuxdoId || !db) return { active: false, expires_at: null, source: "unavailable" };
   try {
     const record = await getMembershipRecord(db, linuxdoId);
@@ -562,10 +533,6 @@ function libraryOwnerKey(session) {
   return id ? `linuxdo:${id}` : "";
 }
 
-function getLibraryDatabase(env) {
-  return getInviteDatabase(env);
-}
-
 function libraryUnavailableResponse() {
   return jsonResponse(503, { code: 503, message: "资料库同步暂不可用" });
 }
@@ -588,7 +555,7 @@ function serializeLibraryDocument(value) {
 async function handleLibraryGet(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getLibraryDatabase(env);
+  const db = getDatabase(env);
   const ownerKey = libraryOwnerKey(auth.session);
   if (!db) return libraryUnavailableResponse();
   if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
@@ -610,7 +577,7 @@ async function handleLibraryGet(request, env) {
 async function handleLibraryPut(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getLibraryDatabase(env);
+  const db = getDatabase(env);
   const ownerKey = libraryOwnerKey(auth.session);
   if (!db) return libraryUnavailableResponse();
   if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
@@ -633,11 +600,6 @@ function sqlNow() {
   return new Date().toISOString();
 }
 
-function toSqlDate(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
-}
-
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(value || "")));
   return Array.from(new Uint8Array(digest))
@@ -645,61 +607,8 @@ async function sha256Hex(value) {
     .join("");
 }
 
-function randomInviteCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(20));
-  const groups = [];
-  for (let start = 0; start < bytes.length; start += 5) {
-    let group = "";
-    for (let i = start; i < start + 5; i += 1) {
-      group += alphabet[bytes[i] % alphabet.length];
-    }
-    groups.push(group);
-  }
-  return `DM-${groups.join("-")}`;
-}
-
-function randomTicket() {
-  return b64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
-}
-
-function normalizeInviteCode(value) {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "")
-    .replace(/[^A-Z0-9-]/g, "");
-}
-
-function inviteError(message, status = 400) {
+function apiError(message, status = 400) {
   return jsonResponse(status, { code: -1, message });
-}
-
-function getBearerToken(request) {
-  const header = String(request.headers.get("Authorization") || "");
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : "";
-}
-
-function sanitizeInviteRecord(record) {
-  return {
-    id: Number(record.id),
-    prefix: String(record.prefix || ""),
-    max_uses: Number(record.max_uses || 0),
-    used_count: Number(record.used_count || 0),
-    expires_at: record.expires_at || null,
-    revoked_at: record.revoked_at || null,
-    created_at: record.created_at || null,
-  };
-}
-
-async function findLinuxdoUser(db, linuxdoId) {
-  return db
-    .prepare(
-      "SELECT id, linuxdo_id, name, avatar, disabled_at, created_at, last_login_at FROM linuxdo_users WHERE linuxdo_id = ?",
-    )
-    .bind(linuxdoId)
-    .first();
 }
 
 async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
@@ -905,193 +814,20 @@ async function handleLinuxdoLoginCallback(request, env) {
   const userName = pickLinuxdoName(payload, linuxdoId);
   const avatar = pickLinuxdoAvatar(payload);
   const redirectTo = safeRedirectUrl(statePayload.redirect, env, request.url);
-
-  // 默认保持旧行为，方便先部署数据库和管理接口；启用后仅 Linux DO 新用户需要邀请码。
-  if (!invitationLoginEnabled(env)) {
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: redirectTo,
-        "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
-      },
-    });
-  }
-
-  const db = getInviteDatabase(env);
-  if (!db) {
-    return Response.redirect(`${redirectTo}?login=invite_unavailable`, 302);
-  }
-
-  const knownUser = await findLinuxdoUser(db, linuxdoId);
-  if (knownUser?.disabled_at) {
-    return Response.redirect(`${redirectTo}?login=disabled`, 302);
-  }
-  if (knownUser) {
-    await db
-      .prepare("UPDATE linuxdo_users SET name = ?, avatar = ?, last_login_at = ? WHERE id = ?")
-      .bind(userName, avatar, sqlNow(), knownUser.id)
-      .run();
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: redirectTo,
-        "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
-      },
-    });
-  }
-
-  const ticket = randomTicket();
-  const ticketHash = await sha256Hex(ticket);
-  const createdAt = sqlNow();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  await db
-    .prepare(
-      "INSERT INTO pending_linuxdo_registrations (ticket_hash, linuxdo_id, name, avatar, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET ticket_hash = excluded.ticket_hash, name = excluded.name, avatar = excluded.avatar, expires_at = excluded.expires_at, created_at = excluded.created_at",
-    )
-    .bind(ticketHash, linuxdoId, userName, avatar, expiresAt, createdAt)
-    .run();
-
-  const inviteUrl = new URL(redirectTo);
-  inviteUrl.searchParams.set("login", "invite");
-  inviteUrl.searchParams.set("ticket", ticket);
   return new Response(null, {
     status: 302,
     headers: {
-      Location: inviteUrl.toString(),
+      Location: redirectTo,
+      "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
     },
   });
-}
-
-async function handleInvitationComplete(request, env) {
-  if (!invitationLoginEnabled(env)) return inviteError("邀请码注册尚未启用", 403);
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("邀请码数据库未配置", 503);
-
-  const body = await parseJsonBody(request);
-  const ticket = String(body.ticket || "").trim();
-  const inviteCode = normalizeInviteCode(body.invite_code);
-  if (!ticket || !inviteCode) return inviteError("请输入邀请码", 400);
-
-  const pending = await db
-    .prepare(
-      "SELECT ticket_hash, linuxdo_id, name, avatar, expires_at FROM pending_linuxdo_registrations WHERE ticket_hash = ?",
-    )
-    .bind(await sha256Hex(ticket))
-    .first();
-  if (!pending || Date.parse(pending.expires_at) <= Date.now()) {
-    return inviteError("邀请码验证已过期，请重新使用 Linux DO 登录", 410);
-  }
-
-  const existing = await findLinuxdoUser(db, pending.linuxdo_id);
-  if (existing?.disabled_at) return inviteError("此账号已被停用", 403);
-  if (existing) {
-    await db.prepare("DELETE FROM pending_linuxdo_registrations WHERE ticket_hash = ?").bind(pending.ticket_hash).run();
-    return jsonResponse(
-      200,
-      { code: 0, message: "Success" },
-      { "Set-Cookie": await createLinuxdoSession(pending.linuxdo_id, existing.name, existing.avatar, env) },
-    );
-  }
-
-  const codeHash = await sha256Hex(inviteCode);
-  const now = sqlNow();
-  // 此 UPDATE 同时判断有效期、撤销状态和余量，避免并发兑换超过邀请码额度。
-  const consume = await db
-    .prepare(
-      "UPDATE invite_codes SET used_count = used_count + 1 WHERE code_hash = ? AND revoked_at IS NULL AND used_count < max_uses AND (expires_at IS NULL OR expires_at > ?)",
-    )
-    .bind(codeHash, now)
-    .run();
-  if (Number(consume.meta?.changes || 0) !== 1) {
-    return inviteError("邀请码无效、已用完、已撤销或已过期", 400);
-  }
-
-  const invite = await db.prepare("SELECT id FROM invite_codes WHERE code_hash = ?").bind(codeHash).first();
-  try {
-    await db
-      .prepare(
-        "INSERT INTO linuxdo_users (linuxdo_id, name, avatar, invite_code_id, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .bind(pending.linuxdo_id, pending.name, pending.avatar, invite.id, now, now)
-      .run();
-  } catch (err) {
-    // 极少数并发重复提交时尽量归还一次额度，随后让用户重新登录获取最新状态。
-    await db.prepare("UPDATE invite_codes SET used_count = MAX(used_count - 1, 0) WHERE id = ?").bind(invite?.id || 0).run();
-    return inviteError("注册状态已变化，请重新使用 Linux DO 登录", 409);
-  }
-  await db.prepare("DELETE FROM pending_linuxdo_registrations WHERE ticket_hash = ?").bind(pending.ticket_hash).run();
-
-  return jsonResponse(
-    200,
-    { code: 0, message: "Success" },
-    { "Set-Cookie": await createLinuxdoSession(pending.linuxdo_id, pending.name, pending.avatar, env) },
-  );
-}
-
-async function handleAdminCreateInvites(request, env) {
-  const auth = await requireAdminSession(request, env);
-  if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("邀请码数据库未配置", 503);
-
-  const body = await parseJsonBody(request);
-  const count = Math.max(1, Math.min(20, Number.parseInt(body.count, 10) || 1));
-  const maxUses = Math.max(1, Math.min(100, Number.parseInt(body.max_uses, 10) || 1));
-  let expiresAt = null;
-  if (body.expires_at) {
-    expiresAt = toSqlDate(body.expires_at);
-    if (!expiresAt || Date.parse(expiresAt) <= Date.now()) return inviteError("expires_at 必须是未来的有效时间", 400);
-  }
-
-  const createdAt = sqlNow();
-  const generated = [];
-  for (let i = 0; i < count; i += 1) {
-    const code = randomInviteCode();
-    const codeHash = await sha256Hex(code);
-    const result = await db
-      .prepare(
-        "INSERT INTO invite_codes (code_hash, prefix, max_uses, used_count, expires_at, created_at) VALUES (?, ?, ?, 0, ?, ?)",
-      )
-      .bind(codeHash, code.slice(0, 8), maxUses, expiresAt, createdAt)
-      .run();
-    generated.push({ id: Number(result.meta?.last_row_id || 0), code, max_uses: maxUses, expires_at: expiresAt });
-  }
-  return jsonResponse(200, { code: 0, message: "Success", data: { invites: generated } });
-}
-
-async function handleAdminListInvites(request, env) {
-  const auth = await requireAdminSession(request, env);
-  if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("邀请码数据库未配置", 503);
-
-  const rows = await db
-    .prepare(
-      "SELECT id, prefix, max_uses, used_count, expires_at, revoked_at, created_at FROM invite_codes ORDER BY id DESC LIMIT 200",
-    )
-    .all();
-  return jsonResponse(200, { code: 0, message: "Success", data: { invites: (rows.results || []).map(sanitizeInviteRecord) } });
-}
-
-async function handleAdminRevokeInvite(request, env, inviteId) {
-  const auth = await requireAdminSession(request, env);
-  if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("邀请码数据库未配置", 503);
-
-  const result = await db
-    .prepare("UPDATE invite_codes SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?")
-    .bind(sqlNow(), Number(inviteId))
-    .run();
-  if (Number(result.meta?.changes || 0) !== 1) return inviteError("邀请码不存在", 404);
-  return jsonResponse(200, { code: 0, message: "Success" });
 }
 
 async function handleAdminOverview(request, env) {
   const auth = await requireAdminSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("D1 数据库未配置", 503);
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
   const price = await getMembershipPrice(db);
   const members = await db.prepare("SELECT COUNT(*) AS count FROM memberships WHERE expires_at > ?").bind(sqlNow()).first();
   const orders = await db.prepare("SELECT COUNT(*) AS count FROM billing_orders WHERE status = 'paid'").first();
@@ -1105,10 +841,10 @@ async function handleAdminOverview(request, env) {
 async function handleAdminMembershipSettings(request, env) {
   const auth = await requireAdminSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("D1 数据库未配置", 503);
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
   const price = parseMembershipPrice((await parseJsonBody(request)).monthly_price);
-  if (!price) return inviteError("月会员价格必须是大于 0、最多两位小数的积分数", 400);
+  if (!price) return apiError("月会员价格必须是大于 0、最多两位小数的积分数", 400);
   await db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('monthly_membership_price', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(price, sqlNow()).run();
   return jsonResponse(200, { code: 0, message: "Success", data: { monthly_price: price } });
 }
@@ -1116,9 +852,9 @@ async function handleAdminMembershipSettings(request, env) {
 async function handleAdminMembers(request, env) {
   const auth = await requireAdminSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("D1 数据库未配置", 503);
-  const rows = await db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id ORDER BY m.expires_at DESC LIMIT 200").all();
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const rows = await db.prepare("SELECT linuxdo_id, expires_at, updated_at FROM memberships ORDER BY expires_at DESC LIMIT 200").all();
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""), name: String(row.name || ""), avatar: String(row.avatar || ""), expires_at: row.expires_at || null, updated_at: row.updated_at || null,
   })) } });
@@ -1127,7 +863,7 @@ async function handleAdminMembers(request, env) {
 async function handleMembership(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
-  const db = getInviteDatabase(env);
+  const db = getDatabase(env);
   const membership = await getMembershipStatus(auth.session, env);
   const price = db ? await getMembershipPrice(db) : "10.00";
   return jsonResponse(200, { code: 0, message: "Success", data: {
@@ -1217,11 +953,11 @@ async function handleCheckout(request, env) {
   const auth = await requireSession(request, env);
   if (!auth.ok) return auth.response;
   if (auth.session.type !== "linuxdo") {
-    return inviteError("该账号无需购买会员", 400);
+    return apiError("该账号无需购买会员", 400);
   }
-  const db = getInviteDatabase(env);
-  if (!db) return inviteError("D1 数据库未配置", 503);
-  if (!creditConfigured(env)) return inviteError("积分支付尚未配置", 503);
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  if (!creditConfigured(env)) return apiError("积分支付尚未配置", 503);
   const cfg = getCreditConfig(env);
   const linuxdoId = getLinuxdoId(auth.session);
   const amount = await getMembershipPrice(db);
@@ -1255,7 +991,7 @@ async function handleCheckout(request, env) {
     return jsonResponse(200, { code: 0, message: "Success", data: { out_trade_no: outTradeNo, checkout_url: checkoutUrl, amount } });
   } catch (err) {
     await db.prepare("UPDATE billing_orders SET status = 'failed' WHERE out_trade_no = ? AND status = 'pending'").bind(outTradeNo).run();
-    return inviteError(err instanceof Error ? err.message : "创建积分订单失败", 502);
+    return apiError(err instanceof Error ? err.message : "创建积分订单失败", 502);
   }
 }
 
@@ -1273,7 +1009,7 @@ async function queryCreditOrder(outTradeNo, cfg) {
 async function handleBillingNotify(request, env) {
   const cfg = getCreditConfig(env);
   const outTradeNo = String(new URL(request.url).searchParams.get("out_trade_no") || "").trim();
-  const db = getInviteDatabase(env);
+  const db = getDatabase(env);
   if (!db || !creditConfigured(env) || !outTradeNo) return new Response("failure", { status: 400 });
   const order = await db.prepare("SELECT out_trade_no, linuxdo_id, amount, status FROM billing_orders WHERE out_trade_no = ?").bind(outTradeNo).first();
   if (!order) return new Response("failure", { status: 404 });
@@ -2251,6 +1987,20 @@ function backup4ExtractLinkFromMessage(message) {
   return normalizeMediaUrl(matched?.[1] || "");
 }
 
+async function backup4Json(url, { headers, timeoutMs = BACKUP4_TIMEOUT_MS } = {}) {
+  const result = await upstreamJson(url, {
+    method: "GET",
+    headers: headers || { Accept: "application/json, text/plain, */*" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return {
+    ...result,
+    ok: result.status >= 200 && result.status < 300,
+    json: result.json || {},
+  };
+}
+
 async function backup4TryGdstudio(platform, id, quality) {
   if (platform !== "netease" && platform !== "kuwo") return null;
 
@@ -2261,14 +2011,8 @@ async function backup4TryGdstudio(platform, id, quality) {
   endpoint.searchParams.set("id", id);
   endpoint.searchParams.set("br", String(backup4BrFromQuality(quality)));
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || "");
   if (response.ok && url) {
     return { url, provider: "gdstudio" };
@@ -2281,18 +2025,14 @@ async function backup4TryOnrender(platform, id, quality) {
   if (!source) return null;
 
   const endpoint = `${BACKUP4_LXMUSIC_ONRENDER_URL}/url/${source}/${encodeURIComponent(id)}/${backup4NormalizeQuality(quality)}`;
-  const response = await fetch(endpoint, {
-    method: "GET",
+  const response = await backup4Json(endpoint, {
     headers: {
       "Content-Type": "application/json",
       "X-Request-Key": BACKUP4_LXMUSIC_ONRENDER_KEY,
       "User-Agent": "Mozilla/5.0",
     },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
   });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || "");
   if (response.ok && Number(parsed?.code) === 0 && url) {
     return { url, provider: "onrender" };
@@ -2309,18 +2049,14 @@ async function backup4TryLxmusicSigned(platform, id, quality) {
   const sign = await sha256Hex(`${requestPath}${BACKUP4_LXMUSIC_SCRIPT_MD5}${BACKUP4_LXMUSIC_SECRET_KEY}`);
   const endpoint = `${BACKUP4_LXMUSIC_SIGNED_URL}${requestPath}?sign=${sign}`;
 
-  const response = await fetch(endpoint, {
-    method: "GET",
+  const response = await backup4Json(endpoint, {
     headers: {
       Accept: "application/json",
       "x-request-key": "lxmusic",
       "user-agent": "lx-music-mobile/2.0.0",
     },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
   });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.data || "");
   if (response.ok && Number(parsed?.code) === 0 && url) {
     return { url, provider: "lxmusic_signed" };
@@ -2334,14 +2070,8 @@ async function backup4TryOiapiMusic163(platform, id) {
   const endpoint = new URL(BACKUP4_OIAPI_MUSIC163_URL);
   endpoint.searchParams.set("id", id);
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const first = Array.isArray(parsed?.data) ? parsed.data[0] : null;
   const url = normalizeMediaUrl(first?.url || "");
   if (response.ok && Number(parsed?.code) === 0 && url) {
@@ -2357,14 +2087,8 @@ async function backup4TryChkszMusic163(platform, id, quality) {
   endpoint.searchParams.set("id", id);
   endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.data?.url || "");
   if (response.ok && Number(parsed?.code) === 200 && url) {
     return { url, provider: "chksz_163" };
@@ -2383,14 +2107,8 @@ async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   endpoint.searchParams.set("n", "1");
   endpoint.searchParams.set("br", backup4NormalizeQuality(quality) === "128k" ? "7" : "5");
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.data?.url || backup4ExtractLinkFromMessage(parsed?.message || ""));
   if (response.ok && Number(parsed?.code) === 1 && url) {
     return { url, provider: "oiapi_kuwo" };
@@ -2413,14 +2131,10 @@ async function backup4TryQqmp3(platform, id) {
     endpoint.searchParams.set("lrc", "true");
 
     try {
-      const response = await fetch(endpoint.toString(), {
-        method: "GET",
-        headers: { Accept: "application/json, text/plain, */*" },
-        redirect: "follow",
-        signal: AbortSignal.timeout(BACKUP4_QQMP3_TIMEOUT_MS),
+      const response = await backup4Json(endpoint.toString(), {
+        timeoutMs: BACKUP4_QQMP3_TIMEOUT_MS,
       });
-      const text = await response.text();
-      const parsed = parseJsonText(text);
+      const parsed = response.json;
       const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || parsed?.data?.play_url || "");
       const code = Number(parsed?.code);
       if (response.ok && (Number.isNaN(code) || code === 0 || code === 200) && url) {
@@ -2454,14 +2168,8 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
   endpoint.searchParams.set("apiKey", apiKey);
   endpoint.searchParams.set("name", keyword);
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.music_url || parsed?.data?.music_url || parsed?.data?.url || "");
   if (response.ok && Number(parsed?.code) === 1 && url) {
     return { url, provider: "jkapi" };
@@ -2519,14 +2227,8 @@ async function backup4SearchViaGdstudio(platform, keyword, page, limit) {
   endpoint.searchParams.set("count", String(limit));
   endpoint.searchParams.set("pages", String(page));
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const list = mapBackup4SearchItems(parsed);
   if (response.ok && list.length > 0) {
     return { list, provider: "gdstudio_search" };
@@ -2542,14 +2244,8 @@ async function backup4SearchViaChkszMusic163(platform, keyword, page, limit) {
   endpoint.searchParams.set("limit", String(limit));
   endpoint.searchParams.set("offset", String(Math.max(0, (page - 1) * limit)));
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { Accept: "application/json, text/plain, */*" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(BACKUP4_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  const parsed = parseJsonText(text);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
   const list = (Array.isArray(parsed?.data?.songs) ? parsed.data.songs : [])
     .map((item) => {
       const id = String(item?.id || "").trim();

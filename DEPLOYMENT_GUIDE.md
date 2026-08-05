@@ -117,32 +117,7 @@ wrangler secret put LINUXDO_REDIRECT_URI
 - `LINUXDO_CLIENT_SECRET`：Linux DO 应用 Client Secret
 - `LINUXDO_REDIRECT_URI`：`https://你的API域名/api/auth/callback/linuxdo`
 
-### 6.4 可选：启用 Linux DO 邀请码
-
-密码登录始终保留、不要求邀请码，适合家人共用。邀请码只会拦住 **Linux DO 首次登录** 的新用户；已注册的 Linux DO 用户可直接登录。
-
-```bash
-# 在 worker/ 目录执行
-wrangler d1 create downloadmusic-auth
-wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
-wrangler secret put ADMIN_INVITE_TOKEN
-```
-
-把 `wrangler d1 create` 输出的 ID 填进 `wrangler.toml`：
-
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "downloadmusic-auth"
-database_id = "这里填 D1 的 database_id"
-
-[vars]
-INVITE_LINUXDO_ENABLED = "true"
-```
-
-`ADMIN_INVITE_TOKEN` 是邀请码管理令牌，必须和家人使用的 `ADMIN_PASSWORD` 分开保存，不能放到前端。创建、查看和撤销邀请码的命令见 [worker/README.md](worker/README.md)。
-
-### 6.5 发布 Worker
+### 6.4 发布 Worker
 
 ```bash
 wrangler deploy
@@ -150,7 +125,7 @@ wrangler deploy
 
 发布成功后会得到一个 `*.workers.dev` 域名。
 
-### 6.6 绑定自定义 API 域名（建议）
+### 6.5 绑定自定义 API 域名（建议）
 
 建议使用自定义域名，例如：`musicapi.621888.xyz`。
 
@@ -287,7 +262,6 @@ wrangler deploy
 - `LINUXDO_CLIENT_ID`
 - `LINUXDO_CLIENT_SECRET`
 - `LINUXDO_REDIRECT_URI`
-- `ADMIN_INVITE_TOKEN`（启用 Linux DO 邀请码时必填；不要与家人共用）
 
 ### 可选 Secrets
 

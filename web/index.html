@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260805-28">
+    <link rel="stylesheet" href="style.css?v=20260805-29">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -28,12 +28,6 @@
                 <label for="passwordInput">访问密码</label>
                 <input id="passwordInput" name="password" type="password" placeholder="输入密码" autocomplete="current-password" required>
                 <button type="submit">登录</button>
-            </form>
-
-            <form id="inviteRedeemForm" class="login-form" style="display:none;">
-                <label for="inviteCodeInput">邀请码</label>
-                <input id="inviteCodeInput" name="inviteCode" type="text" placeholder="输入邀请码" autocomplete="one-time-code" spellcheck="false" required>
-                <button type="submit">完成注册</button>
             </form>
 
             <div class="login-divider" id="linuxdoDivider">OR</div>
@@ -300,7 +294,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260805-28';
+        const APP_ASSET_VERSION = '20260805-29';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -456,17 +450,6 @@
             }
         }
 
-        async function redeemInvitation(ticket, inviteCode) {
-            const { response, data } = await authFetch('/invitation/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticket: ticket, invite_code: inviteCode })
-            });
-            if (!response.ok || Number(data.code) !== 0) {
-                throw new Error(data.message || '邀请码验证失败');
-            }
-        }
-
         async function doLogout() {
             await authFetch('/logout', {
                 method: 'POST'
@@ -493,19 +476,6 @@
             }
         });
 
-        let invitationTicket = '';
-        document.getElementById('inviteRedeemForm').addEventListener('submit', async function (e) {
-            e.preventDefault();
-            const input = document.getElementById('inviteCodeInput');
-            try {
-                await redeemInvitation(invitationTicket, String(input.value || ''));
-                invitationTicket = '';
-                await checkLoginAndStart();
-            } catch (err) {
-                setLoginTip(err.message || '邀请码验证失败，请重试。', true);
-            }
-        });
-
         document.getElementById('logoutBtn').addEventListener('click', async function (e) {
             e.preventDefault();
             await doLogout();
@@ -513,33 +483,11 @@
 
         const query = new URLSearchParams(window.location.search);
         const loginState = query.get('login');
-        const inviteTicket = query.get('ticket');
         if (loginState && loginState.startsWith('failed')) {
             setLoginTip('Linux DO 登录失败，请稍后重试。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
-        if (loginState === 'invite' && inviteTicket) {
-            revealLogin();
-            invitationTicket = inviteTicket;
-            document.getElementById('showPasswordLoginBtn').style.display = 'none';
-            document.getElementById('passwordLoginForm').style.display = 'none';
-            document.getElementById('linuxdoDivider').style.display = 'none';
-            document.getElementById('linuxdoLoginBtn').style.display = 'none';
-            document.getElementById('linuxdoLoginHint').style.display = 'none';
-            document.getElementById('inviteRedeemForm').style.display = 'flex';
-            setLoginTip('Linux DO 已验证，请填写邀请码完成注册。', false);
-            history.replaceState(null, '', window.location.origin + window.location.pathname);
-            document.getElementById('inviteCodeInput').focus();
-        } else if (loginState === 'invite_unavailable') {
-            setLoginTip('邀请码服务暂未配置完成，请联系管理员。', true);
-            history.replaceState(null, '', window.location.origin + window.location.pathname);
-        } else if (loginState === 'disabled') {
-            setLoginTip('此 Linux DO 账号已被停用。', true);
-            history.replaceState(null, '', window.location.origin + window.location.pathname);
-        }
-
         (async function init() {
-            if (invitationTicket) return;
             const loggedIn = await checkLoginAndStart();
             if (loggedIn) return;
             revealLogin();

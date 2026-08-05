@@ -2322,31 +2322,6 @@ async function downloadSong(source, id, name, artist, index = null, songObj = nu
     }
 }
 
-// 下载歌单
-async function downloadPlaylist(source, id, name) {
-    try {
-        const songs = await fetchPlaylistSongs(source, id, { silentFallback: true });
-        if (songs.length === 0) {
-            showToast('获取歌单失败或为空', 'error');
-            return;
-        }
-
-        const total = songs.length;
-        showToast(`开始下载歌单，共${total}首`, 'info');
-
-        for (let i = 0; i < songs.length; i++) {
-            const song = songs[i];
-            showToast(`正在下载 ${i + 1}/${total}: ${song.name}`, 'info');
-            await downloadSong(source, song.id, song.name, song.artist, null, song);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-        }
-
-        showToast('歌单下载完成', 'success');
-    } catch (error) {
-        showToast(`下载歌单失败: ${error.message || '未知错误'}`, 'error');
-    }
-}
-
 function resetInlinePlaybackUi(keepIndex = null) {
     if (currentPlayingIndex === null) return;
     if (keepIndex !== null && currentPlayingIndex === keepIndex) return;
@@ -2381,6 +2356,28 @@ function normalizeSongDataSource(raw) {
     return (value === 'backup' || value === 'backup3' || value === 'backup4') ? value : 'primary';
 }
 
+function cloneBackupMeta(value) {
+    if (!value || typeof value !== 'object') return null;
+    return {
+        source: String(value.source || ''),
+        trackId: String(value.trackId || ''),
+        urlId: String(value.urlId || ''),
+        lyricId: String(value.lyricId || ''),
+        picId: String(value.picId || '')
+    };
+}
+
+function cloneBackup3Meta(value) {
+    if (!value || typeof value !== 'object') return null;
+    return {
+        source: String(value.source || ''),
+        trackId: String(value.trackId || ''),
+        streamUrl: String(value.streamUrl || ''),
+        lyric: String(value.lyric || ''),
+        link: String(value.link || '')
+    };
+}
+
 function escapeHtml(text) {
     return String(text || '')
         .replace(/&/g, '&amp;')
@@ -2402,8 +2399,8 @@ function toLibrarySong(song) {
         cover: normalizeMediaUrl(song.cover || ''),
         dataSource: normalizeSongDataSource(song.dataSource),
         lookupOnly: Boolean(song.lookupOnly),
-        backup: song?.backup && typeof song.backup === 'object' ? song.backup : null,
-        backup3: song?.backup3 && typeof song.backup3 === 'object' ? song.backup3 : null
+        backup: cloneBackupMeta(song?.backup),
+        backup3: cloneBackup3Meta(song?.backup3)
     };
 }
 
@@ -2478,17 +2475,6 @@ async function toggleFavoriteByIndex(index) {
     renderHomeCollection();
     renderLibrary();
     renderLocalPage();
-}
-
-function rememberRecentSong(song) {
-    const item = toLibrarySong(song);
-    if (!item) return;
-    recentSongs = [item, ...recentSongs.filter(entry => songIdentity(entry) !== songIdentity(item))].slice(0, 24);
-    saveLocalSongList(recentStorageKey, recentSongs);
-    queueLibraryCloudSave();
-    renderHomeNowPlaying();
-    renderHomeCollection();
-    renderLibrary();
 }
 
 function loadSavedPlaylists() {
@@ -3417,24 +3403,8 @@ function bindSongMeta(song) {
         lyricsRaw: String(song.lyricsRaw || ''),
         lyrics: Array.isArray(song.lyrics) ? song.lyrics : [],
         dataSource,
-        backup: song?.backup && typeof song.backup === 'object'
-            ? {
-                source: String(song.backup.source || ''),
-                trackId: String(song.backup.trackId || ''),
-                urlId: String(song.backup.urlId || ''),
-                lyricId: String(song.backup.lyricId || ''),
-                picId: String(song.backup.picId || '')
-            }
-            : null,
-        backup3: song?.backup3 && typeof song.backup3 === 'object'
-            ? {
-                source: String(song.backup3.source || ''),
-                trackId: String(song.backup3.trackId || ''),
-                streamUrl: String(song.backup3.streamUrl || ''),
-                lyric: String(song.backup3.lyric || ''),
-                link: String(song.backup3.link || '')
-            }
-            : null
+        backup: cloneBackupMeta(song?.backup),
+        backup3: cloneBackup3Meta(song?.backup3)
     };
     currentLyrics = currentPlayingSong.lyrics;
     updateFullPlayerMeta();
@@ -3794,24 +3764,8 @@ function loadPlaylistFromStorage() {
                 cover: normalizeMediaUrl(item.cover || ''),
                 dataSource: normalizeSongDataSource(item.dataSource),
                 lookupOnly: Boolean(item.lookupOnly),
-                backup: item?.backup && typeof item.backup === 'object'
-                    ? {
-                        source: String(item.backup.source || ''),
-                        trackId: String(item.backup.trackId || ''),
-                        urlId: String(item.backup.urlId || ''),
-                        lyricId: String(item.backup.lyricId || ''),
-                        picId: String(item.backup.picId || '')
-                    }
-                    : null,
-                backup3: item?.backup3 && typeof item.backup3 === 'object'
-                    ? {
-                        source: String(item.backup3.source || ''),
-                        trackId: String(item.backup3.trackId || ''),
-                        streamUrl: String(item.backup3.streamUrl || ''),
-                        lyric: String(item.backup3.lyric || ''),
-                        link: String(item.backup3.link || '')
-                    }
-                    : null
+                backup: cloneBackupMeta(item?.backup),
+                backup3: cloneBackup3Meta(item?.backup3)
             }));
     } catch {
         return [];
@@ -4191,24 +4145,8 @@ async function addSongToPlaylist(source, id, name, artist, album = '', cover = '
         cover: normalizeMediaUrl(runtimeSong?.cover || cover || ''),
         dataSource: normalizeSongDataSource(runtimeSong?.dataSource),
         lookupOnly: Boolean(runtimeSong?.lookupOnly),
-        backup: runtimeSong?.backup && typeof runtimeSong.backup === 'object'
-            ? {
-                source: String(runtimeSong.backup.source || ''),
-                trackId: String(runtimeSong.backup.trackId || ''),
-                urlId: String(runtimeSong.backup.urlId || ''),
-                lyricId: String(runtimeSong.backup.lyricId || ''),
-                picId: String(runtimeSong.backup.picId || '')
-            }
-            : null,
-        backup3: runtimeSong?.backup3 && typeof runtimeSong.backup3 === 'object'
-            ? {
-                source: String(runtimeSong.backup3.source || ''),
-                trackId: String(runtimeSong.backup3.trackId || ''),
-                streamUrl: String(runtimeSong.backup3.streamUrl || ''),
-                lyric: String(runtimeSong.backup3.lyric || ''),
-                link: String(runtimeSong.backup3.link || '')
-            }
-            : null
+        backup: cloneBackupMeta(runtimeSong?.backup),
+        backup3: cloneBackup3Meta(runtimeSong?.backup3)
     });
     savePlaylistToStorage();
     renderPlaylistSheet();
@@ -4242,23 +4180,6 @@ function removeSongFromPlaylist(index) {
     }
     savePlaylistToStorage();
     renderPlaylistSheet();
-}
-
-async function playNextInPlaylist(step) {
-    if (!playlistSongs.length) {
-        showToast('播放列表为空', 'info');
-        return;
-    }
-    if (currentPlaylistIndex < 0) {
-        showToast('当前歌曲不在播放列表中', 'info');
-        return;
-    }
-    const nextIndex = currentPlaylistIndex + step;
-    if (nextIndex < 0 || nextIndex >= playlistSongs.length) {
-        showToast('已经到边界了', 'info');
-        return;
-    }
-    await playSongFromPlaylist(nextIndex);
 }
 
 function resolveCurrentPlaylistIndex() {
