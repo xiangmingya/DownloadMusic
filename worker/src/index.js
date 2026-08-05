@@ -1214,7 +1214,7 @@ async function handleCheckout(request, env) {
     const sign = await signCreditPayload(params, cfg);
     const response = await fetch("https://credit.linux.do/epay/pay/submit.php", {
       method: "POST",
-      redirect: "follow",
+      redirect: "manual",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: new URLSearchParams({ ...params, sign }),
       signal: AbortSignal.timeout(15000),
@@ -1222,7 +1222,8 @@ async function handleCheckout(request, env) {
     const location = response.headers.get("Location");
     const body = await response.text();
     const payload = parseJsonText(body);
-    const checkoutUrl = location || String(payload?.data?.pay_url || payload?.data?.url || payload?.pay_url || (response.url.includes("/epay/pay/submit.php") ? "" : response.url));
+    const paymentLink = String(body || "").replace(/\\\//g, "/").match(/https:\/\/credit\.linux\.do\/paying\/online\?token=[A-Za-z0-9_-]+/i)?.[0] || "";
+    const checkoutUrl = location || String(payload?.data?.pay_url || payload?.data?.url || payload?.pay_url || paymentLink);
     if (!response.ok || !checkoutUrl) throw new Error(String(payload?.error_msg || payload?.message || `积分服务未返回付款链接（HTTP ${response.status}）`));
     return jsonResponse(200, { code: 0, message: "Success", data: { out_trade_no: outTradeNo, checkout_url: checkoutUrl, amount } });
   } catch (err) {
