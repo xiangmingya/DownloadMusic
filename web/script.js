@@ -2421,8 +2421,18 @@ function songIdentity(song) {
     return `${String(song?.platform || song?.source || '')}:${String(song?.id || '')}`;
 }
 
+function songTitleArtistIdentity(song) {
+    const normalize = value => String(value || '').toLowerCase().replace(/[\s·・,，、()（）\-_.]/g, '');
+    return `${normalize(song?.name)}:${normalize(song?.artist)}`;
+}
+
+function isSameFavoriteSong(left, right) {
+    return songIdentity(left) === songIdentity(right)
+        || (songTitleArtistIdentity(left) === songTitleArtistIdentity(right) && songTitleArtistIdentity(left) !== ':');
+}
+
 function isFavoriteSong(song) {
-    return favoriteSongs.some(item => songIdentity(item) === songIdentity(song));
+    return favoriteSongs.some(item => isSameFavoriteSong(item, song));
 }
 
 function removeFavoriteSong(index) {
@@ -2445,7 +2455,7 @@ async function toggleFavoriteByIndex(index) {
     }
     const song = toLibrarySong(rawSong);
     if (!song) return;
-    const existingIndex = favoriteSongs.findIndex(item => songIdentity(item) === songIdentity(song));
+    const existingIndex = favoriteSongs.findIndex(item => isSameFavoriteSong(item, song));
     if (existingIndex >= 0) {
         removeFavoriteSong(existingIndex);
         return;
@@ -2535,6 +2545,7 @@ function applyLibraryDocument(document) {
     saveSavedPlaylists();
     renderHomeCollection();
     renderLibrary();
+    renderLocalPage();
     return true;
 }
 
