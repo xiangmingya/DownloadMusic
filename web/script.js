@@ -121,8 +121,12 @@ function showToast(message, type = 'info') {
 
 function escapeForSingleQuote(text) {
     return String(text || '')
+        .replace(/&/g, '&amp;')
         .replace(/\\/g, '\\\\')
-        .replace(/'/g, "\\'");
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
 function normalizeMediaUrl(url) {
@@ -2071,13 +2075,18 @@ function renderLocalPage() {
     resultsDiv.innerHTML = pageSongs.map((song, index) => {
         const globalIndex = start + index;
         const platform = song.platform || song.source;
+        const displayName = escapeHtml(song.name);
+        const displayArtist = escapeHtml(song.artist);
+        const displayPlatform = escapeHtml(platformNames[platform] || platform);
+        const displaySource = escapeHtml(sourceDisplayNameBySong(song));
+        const safePlatform = escapeForSingleQuote(platform);
+        const safeId = escapeForSingleQuote(song.id);
         const safeName = escapeForSingleQuote(song.name);
         const safeArtist = escapeForSingleQuote(song.artist);
         const safeAlbum = escapeForSingleQuote(song.album || '');
         const safeCover = escapeForSingleQuote(song.cover || '');
         const coverUrl = getProxiedCoverUrl(song.cover || '');
         const coverStyle = coverUrl ? 'display:block' : 'display:none';
-        const sourceName = sourceDisplayNameBySong(song);
 
         return `
         <div class="result-item" id="song-${globalIndex}">
@@ -2085,16 +2094,16 @@ function renderLocalPage() {
                 <div>
                     <img class="song-cover" id="cover-${globalIndex}" src="${coverUrl}" style="${coverStyle}" alt="" onerror="this.style.display='none'" onload="if(this.src){this.style.display='block'}">
                     <div class="song-info">
-                        <h3>${song.name}<span class="platform-badge">${platformNames[platform] || platform}</span><span class="source-badge">${sourceName}</span></h3>
-                        <p>${song.artist}</p>
+                        <h3>${displayName}<span class="platform-badge">${displayPlatform}</span><span class="source-badge">${displaySource}</span></h3>
+                        <p>${displayArtist}</p>
                     </div>
                 </div>
                 <div>
-                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 16)}</button>
+                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 16)}</button>
                     <button class="favorite-song-btn" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${isFavoriteSong(song) ? '取消收藏' : '收藏'}">${getIconSvg('heart', 16)}</button>
-                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${platform}', '${song.id}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 16)}</button>
+                    <button class="add-playlist-btn" onclick="addSongToPlaylist('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 16)}</button>
                     <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 16)}</button>
-                    <button onclick="downloadSong('${platform}', '${song.id}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
+                    <button onclick="downloadSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">下载</button>
                 </div>
             </div>
             <div class="inline-lyrics" id="inline-lyrics-${globalIndex}"></div>
@@ -2692,6 +2701,7 @@ async function openToplistSongs(platform, id, name) {
     setAppView('search');
     const results = document.getElementById('results');
     results.innerHTML = '<div class="empty-state">正在加载榜单歌曲…</div>';
+    resetKeywordPagingState();
     try {
         const url = new URL(API_ROUTES.toplist, window.location.href);
         url.searchParams.set('platform', platform);
@@ -3195,10 +3205,10 @@ function renderPlaylistSheet() {
         const platform = platformDisplayName(song.platform || song.source);
         return `
             <div class="playlist-item${active}" data-index="${index}">
-                <img class="playlist-item-cover" src="${cover}" alt="" onerror="this.style.visibility='hidden'">
+                <img class="playlist-item-cover" src="${escapeHtml(cover)}" alt="" onerror="this.style.visibility='hidden'">
                 <div class="playlist-item-meta">
-                    <h4>${song.name}</h4>
-                    <p>${song.artist} · ${platform}</p>
+                    <h4>${escapeHtml(song.name)}</h4>
+                    <p>${escapeHtml(song.artist)} · ${escapeHtml(platform)}</p>
                 </div>
                 <div class="playlist-item-actions">
                     <button type="button" data-action="play" data-index="${index}">播放</button>
@@ -3678,6 +3688,8 @@ function bindPlayerUiEvents() {
         playlistSearchBtn.addEventListener('click', () => {
             setPlaylistSheetOpen(false);
             setFullPlayerOpen(false);
+            resetSearchViewMode();
+            setAppView('search');
             window.scrollTo({ top: 0, behavior: 'smooth' });
             const searchInput = document.getElementById('searchInput');
             if (searchInput) searchInput.focus();

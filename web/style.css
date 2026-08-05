@@ -282,12 +282,14 @@ main {
 
 .ghost-btn {
     background: transparent;
-    border: 1px solid #635055;
-    color: #ccbcbc;
+    border: 1px solid var(--app-line);
+    color: var(--app-muted);
 }
 
 .ghost-btn:hover {
-    background: rgba(95, 70, 74, 0.35);
+    background: rgba(111, 99, 255, 0.14);
+    color: var(--app-text);
+    border-color: rgba(151, 143, 255, 0.58);
 }
 
 .key-status {
@@ -321,13 +323,13 @@ main {
 }
 
 #searchMode:hover {
-    border-color: #6a4b4f;
-    background: rgba(52, 38, 42, 0.85);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.62);
 }
 
 #searchMode:focus {
-    border-color: #8a6060;
-    background: rgba(52, 38, 42, 0.92);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.7);
 }
 
 #searchInput {
@@ -342,7 +344,7 @@ main {
 }
 
 #searchInput:focus {
-    border-color: #8a6060;
+    border-color: rgba(151, 143, 255, 0.68);
 }
 
 button {
@@ -399,8 +401,8 @@ button .icon-park {
 }
 
 .type-btn:hover {
-    border-color: #6a4b4f;
-    color: #d3c4c4;
+    border-color: rgba(151, 143, 255, 0.68);
+    color: var(--app-text);
 }
 
 .type-btn.active {
@@ -441,13 +443,13 @@ button .icon-park {
 }
 
 #platform:hover {
-    border-color: #6a4b4f;
-    background: rgba(52, 38, 42, 0.85);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.62);
 }
 
 #platform:focus {
-    border-color: #8a6060;
-    background: rgba(52, 38, 42, 0.92);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.7);
 }
 
 .quality-selector {
@@ -470,32 +472,32 @@ button .icon-park {
 }
 
 #quality:hover {
-    border-color: #6a4b4f;
-    background: rgba(52, 38, 42, 0.85);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.62);
 }
 
 #quality:focus {
-    border-color: #8a6060;
-    background: rgba(52, 38, 42, 0.92);
+    border-color: rgba(151, 143, 255, 0.68);
+    background: rgba(7, 7, 26, 0.7);
 }
 
 .platform-badge {
     display: inline-block;
     padding: 2px 8px;
-    background: rgba(80, 56, 60, 0.7);
-    color: #d6c6c6;
+    background: rgba(111, 99, 255, 0.2);
+    color: #cfcaff;
     font-size: 11px;
-    border-radius: 2px;
+    border-radius: 999px;
     margin-left: 8px;
 }
 
 .source-badge {
     display: inline-block;
     padding: 2px 8px;
-    background: rgba(128, 96, 63, 0.55);
-    color: #e7d7c8;
+    background: rgba(67, 209, 122, 0.16);
+    color: #8fe6ad;
     font-size: 11px;
-    border-radius: 2px;
+    border-radius: 999px;
     margin-left: 6px;
 }
 
@@ -512,7 +514,7 @@ button .icon-park {
 }
 
 .result-item:hover {
-    border-color: #725256;
+    border-color: rgba(151, 143, 255, 0.58);
 }
 
 .song-info h3 {
@@ -524,7 +526,7 @@ button .icon-park {
 
 .song-info p {
     font-size: 13px;
-    color: var(--jp-muted);
+    color: var(--app-muted);
 }
 
 .result-item {
@@ -550,7 +552,7 @@ button .icon-park {
 .inline-lyrics {
     flex: 1;
     font-size: 13px;
-    color: var(--jp-muted);
+    color: var(--app-muted);
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -624,21 +626,21 @@ button .icon-park {
 .progress-bar {
     flex: 1;
     height: 4px;
-    background: #5a464b;
+    background: rgba(160, 164, 255, 0.2);
     position: relative;
     cursor: pointer;
 }
 
 .progress-fill {
     height: 100%;
-    background: #f0d7d7;
+    background: var(--app-primary-strong);
     width: 0;
     transition: width 0.1s;
 }
 
 .time {
     font-size: 11px;
-    color: var(--jp-muted);
+    color: var(--app-muted);
     min-width: 80px;
     text-align: right;
 }
@@ -688,7 +690,7 @@ footer {
 }
 
 .loading {
-    color: var(--jp-muted);
+    color: var(--app-muted);
 }
 
 .online {
@@ -702,9 +704,9 @@ footer {
 .empty-state {
     text-align: center;
     padding: 60px 20px;
-    color: #9b8d8d;
+    color: var(--app-muted);
     font-size: 14px;
-    letter-spacing: 2px;
+    letter-spacing: 0;
 }
 
 .pagination {
@@ -719,16 +721,20 @@ footer {
 .pagination button {
     padding: 8px 20px;
     font-size: 13px;
+    background: var(--app-primary);
+    color: #fff;
+    border-radius: 10px;
+    letter-spacing: 0;
 }
 
 .pagination button:disabled {
-    background: #4b3b40;
-    color: #a79292;
+    background: rgba(160, 164, 255, 0.14);
+    color: var(--app-muted);
     cursor: not-allowed;
 }
 
 .pagination span {
-    color: var(--jp-muted);
+    color: var(--app-muted);
     font-size: 13px;
 }
 
@@ -737,16 +743,17 @@ footer {
     top: 80px;
     left: 50%;
     transform: translateX(-50%) translateY(-100px);
-    background: #333;
+    background: rgba(29, 28, 63, 0.96);
     color: #fff;
     padding: 12px 24px;
-    border-radius: 4px;
+    border: 1px solid var(--app-line);
+    border-radius: 12px;
     font-size: 14px;
     opacity: 0;
     transition: all 0.3s ease;
     pointer-events: none;
     z-index: 9999;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
 }
 
 .toast.show {
@@ -755,25 +762,25 @@ footer {
 }
 
 .toast.error {
-    background: #f44336;
+    background: rgba(154, 47, 62, 0.96);
 }
 
 .toast.success {
-    background: #4caf50;
+    background: rgba(21, 92, 62, 0.96);
 }
 
 .toast.info {
-    background: #7b5a3a;
+    background: rgba(111, 99, 255, 0.94);
 }
 
 .auth-body {
     min-height: 100vh;
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
     background:
-        radial-gradient(circle at 20% 0%, rgba(170, 48, 48, 0.26), transparent 40%),
-        radial-gradient(circle at 80% 100%, rgba(255, 225, 200, 0.08), transparent 50%),
-        linear-gradient(120deg, #120f10 0%, #191517 40%, #131214 100%);
-    color: #ede6df;
+        radial-gradient(circle at 20% 0%, rgba(85, 70, 255, 0.24), transparent 42%),
+        radial-gradient(circle at 80% 100%, rgba(67, 209, 122, 0.1), transparent 50%),
+        linear-gradient(120deg, #0d0d22 0%, #141334 40%, #10182b 100%);
+    color: var(--app-text);
 }
 
 .login-shell {
@@ -788,9 +795,9 @@ footer {
     width: 100%;
     max-width: 460px;
     padding: 44px 34px 34px;
-    border: 1px solid #513535;
+    border: 1px solid var(--app-line);
     background:
-        linear-gradient(rgba(39, 28, 31, 0.85), rgba(29, 23, 26, 0.92)),
+        linear-gradient(rgba(25, 24, 54, 0.9), rgba(17, 17, 38, 0.94)),
         repeating-linear-gradient(
             0deg,
             rgba(255, 255, 255, 0.012) 0,
@@ -802,7 +809,7 @@ footer {
 }
 
 .login-kicker {
-    color: #b38f8f;
+    color: var(--app-accent);
     letter-spacing: 4px;
     font-size: 12px;
     text-align: center;
@@ -815,14 +822,14 @@ footer {
     text-align: center;
     letter-spacing: 10px;
     margin: 0;
-    color: #f6eeeb;
+    color: var(--app-text);
 }
 
 .login-subtitle {
     text-align: center;
     margin-top: 10px;
     margin-bottom: 24px;
-    color: #a99999;
+    color: var(--app-muted);
     letter-spacing: 3px;
     font-size: 11px;
 }
@@ -832,14 +839,14 @@ footer {
     width: 100%;
     padding: 12px 14px;
     margin-bottom: 12px;
-    border: 1px solid #7b3131;
-    background: #7b3131;
-    color: #f5eeee;
+    border: 1px solid var(--app-primary);
+    background: var(--app-primary);
+    color: #fff;
     letter-spacing: 2px;
 }
 
 .password-login-entry-btn:hover {
-    background: #965050;
+    background: var(--app-primary-strong);
 }
 
 .login-form {
@@ -849,39 +856,40 @@ footer {
 }
 
 .login-form label {
-    color: #ad9a9a;
+    color: var(--app-muted);
     font-size: 13px;
     letter-spacing: 2px;
 }
 
 .login-form input {
     padding: 12px 14px;
-    background: #231f21;
-    border: 1px solid #46383b;
-    color: #ece5df;
+    background: rgba(7, 7, 26, 0.42);
+    border: 1px solid var(--app-line);
+    color: var(--app-text);
     outline: none;
     transition: border-color 0.25s ease;
 }
 
 .login-form input:focus {
-    border-color: #8f6464;
+    border-color: rgba(151, 143, 255, 0.68);
 }
 
 .login-form button {
     margin-top: 8px;
-    background: #7b3131;
-    color: #f5eeee;
+    background: var(--app-accent);
+    color: #082013;
     letter-spacing: 3px;
+    font-weight: 700;
 }
 
 .login-form button:hover {
-    background: #965050;
+    background: #71e49a;
 }
 
 .login-divider {
     margin: 20px 0 14px;
     text-align: center;
-    color: #8f7f7f;
+    color: var(--app-muted);
     font-size: 11px;
     letter-spacing: 3px;
 }
@@ -892,16 +900,16 @@ footer {
     justify-content: center;
     gap: 10px;
     padding: 12px 14px;
-    color: #f5eeee;
-    background: #654a2f;
+    color: var(--app-text);
+    background: rgba(111, 99, 255, 0.14);
     text-decoration: none;
     letter-spacing: 2px;
-    border: 1px solid #7b5a34;
+    border: 1px solid var(--app-primary);
     transition: background 0.25s ease;
 }
 
 .linuxdo-btn:hover {
-    background: #7a5a3a;
+    background: rgba(111, 99, 255, 0.26);
 }
 
 .linuxdo-logo {
@@ -949,7 +957,7 @@ footer {
 
 .login-tip {
     margin-top: 14px;
-    color: #8f8686;
+    color: var(--app-muted);
     font-size: 12px;
     text-align: center;
     letter-spacing: 1px;
@@ -957,7 +965,7 @@ footer {
 
 .login-tip.login-tip-subtle {
     margin-top: 10px;
-    color: #9f9292;
+    color: var(--app-muted);
 }
 
 .login-tip.warn {
@@ -1120,7 +1128,7 @@ footer {
 .full-player-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(11, 8, 9, 0.62);
+    background: rgba(6, 6, 20, 0.68);
     backdrop-filter: blur(3px);
 }
 
@@ -1148,10 +1156,10 @@ footer {
     bottom: 0;
     width: min(900px, calc(100% - 24px));
     max-height: 68vh;
-    border-top: 1px solid #5f484a;
-    background: linear-gradient(180deg, rgba(42, 31, 34, 0.98), rgba(26, 20, 23, 0.98));
-    border-left: 1px solid #4f3c40;
-    border-right: 1px solid #4f3c40;
+    border-top: 1px solid var(--app-line);
+    background: linear-gradient(180deg, rgba(24, 23, 52, 0.98), rgba(17, 17, 38, 0.98));
+    border-left: 1px solid rgba(160, 164, 255, 0.14);
+    border-right: 1px solid rgba(160, 164, 255, 0.14);
     box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
     transform: translateX(-50%) translateY(100%);
     opacity: 0.98;
@@ -1167,7 +1175,7 @@ footer {
 
 .playlist-sheet-header {
     padding: 14px 18px;
-    border-bottom: 1px solid #4e3a3d;
+    border-bottom: 1px solid var(--app-line);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1177,7 +1185,7 @@ footer {
 .playlist-sheet-header h3 {
     font-size: 16px;
     font-weight: 500;
-    color: #f2e8df;
+    color: var(--app-text);
 }
 
 .playlist-sheet-actions {
@@ -1189,6 +1197,9 @@ footer {
     padding: 7px 12px;
     font-size: 12px;
     letter-spacing: 1px;
+    background: rgba(111, 99, 255, 0.18);
+    color: #e8e6ff;
+    border-radius: 10px;
 }
 
 .playlist-sheet-list {
@@ -1198,7 +1209,7 @@ footer {
 
 .playlist-empty {
     text-align: center;
-    color: #a99898;
+    color: var(--app-muted);
     font-size: 13px;
     padding: 28px 10px;
 }
@@ -1209,32 +1220,32 @@ footer {
     align-items: center;
     gap: 12px;
     padding: 10px;
-    border: 1px solid #4a383b;
-    background: rgba(58, 43, 47, 0.45);
+    border: 1px solid var(--app-line);
+    background: rgba(255, 255, 255, 0.03);
     margin-bottom: 10px;
 }
 
 .playlist-item.active {
-    border-color: #8d5b5b;
-    background: rgba(94, 55, 59, 0.44);
+    border-color: var(--app-primary-strong);
+    background: rgba(111, 99, 255, 0.16);
 }
 
 .playlist-item-cover {
     width: 46px;
     height: 46px;
     object-fit: cover;
-    border-radius: 2px;
+    border-radius: 10px;
 }
 
 .playlist-item-meta h4 {
     font-size: 14px;
-    color: #efe6df;
+    color: var(--app-text);
     margin-bottom: 3px;
 }
 
 .playlist-item-meta p {
     font-size: 12px;
-    color: #b9abab;
+    color: var(--app-muted);
 }
 
 .playlist-item-actions {
@@ -1246,6 +1257,9 @@ footer {
     padding: 6px 10px;
     font-size: 12px;
     letter-spacing: 1px;
+    background: rgba(111, 99, 255, 0.18);
+    color: #e8e6ff;
+    border-radius: 10px;
 }
 
 .full-player-shell {
@@ -1256,11 +1270,11 @@ footer {
     justify-content: center;
     gap: 24px;
     padding: 26px clamp(16px, 5vw, 42px);
-    font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
+    font-family: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
     background:
-        radial-gradient(circle at 18% 0%, rgba(170, 48, 48, 0.24), transparent 42%),
-        radial-gradient(circle at 100% 100%, rgba(255, 226, 202, 0.1), transparent 45%),
-        linear-gradient(120deg, rgba(20, 16, 17, 0.95), rgba(30, 23, 26, 0.96) 42%, rgba(20, 17, 19, 0.96));
+        radial-gradient(circle at 18% 0%, rgba(85, 70, 255, 0.24), transparent 42%),
+        radial-gradient(circle at 100% 100%, rgba(67, 209, 122, 0.1), transparent 45%),
+        linear-gradient(120deg, rgba(15, 15, 35, 0.96), rgba(23, 22, 52, 0.97) 42%, rgba(17, 22, 38, 0.97));
     transform-origin: var(--fp-origin-x) var(--fp-origin-y);
     transform: scale(0.06);
     opacity: 0;
@@ -1292,9 +1306,9 @@ footer {
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    border: 1px solid rgba(242, 220, 210, 0.28);
-    background: rgba(78, 47, 51, 0.35);
-    color: #f4e8df;
+    border: 1px solid var(--app-line);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--app-text);
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -1303,8 +1317,8 @@ footer {
 }
 
 .full-player-top-btn:hover {
-    background: rgba(112, 62, 62, 0.5);
-    border-color: rgba(242, 220, 210, 0.45);
+    background: rgba(111, 99, 255, 0.22);
+    border-color: rgba(151, 143, 255, 0.58);
 }
 
 .top-btn-icon {
@@ -1335,31 +1349,31 @@ footer {
     width: min(340px, 100%);
     aspect-ratio: 1 / 1;
     object-fit: cover;
-    border-radius: 6px;
+    border-radius: 14px;
     box-shadow: 0 26px 50px rgba(0, 0, 0, 0.42);
-    border: 1px solid rgba(233, 211, 200, 0.2);
+    border: 1px solid var(--app-line);
 }
 
 .full-player-title {
     margin-top: 16px;
     font-size: clamp(24px, 3vw, 34px);
-    color: #f6ece4;
+    color: var(--app-text);
     font-weight: 600;
 }
 
 .full-player-artist {
     margin-top: 6px;
-    color: #d6c3c0;
+    color: var(--app-muted);
     font-size: 15px;
 }
 
 .full-player-lyric-wrap {
-    color: #f2e8df;
+    color: var(--app-text);
     min-height: 220px;
 }
 
 .full-player-kicker {
-    color: #bda6a6;
+    color: var(--app-accent);
     letter-spacing: 3px;
     text-transform: uppercase;
     font-size: 11px;
@@ -1376,7 +1390,7 @@ footer {
 .full-player-next-lyric {
     margin-top: 18px;
     font-size: clamp(16px, 2vw, 24px);
-    color: #beaead;
+    color: var(--app-muted);
 }
 
 .full-player-progress-row {
@@ -1384,7 +1398,7 @@ footer {
     grid-template-columns: 56px 1fr 56px;
     align-items: center;
     gap: 12px;
-    color: #c6b8b7;
+    color: var(--app-muted);
     transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
@@ -1394,14 +1408,14 @@ footer {
 
 .full-player-progress-bar {
     height: 6px;
-    background: rgba(201, 176, 166, 0.24);
+    background: rgba(160, 164, 255, 0.2);
     cursor: pointer;
 }
 
 .full-player-progress-fill {
     height: 100%;
     width: 0;
-    background: #f1dfd2;
+    background: linear-gradient(90deg, var(--app-primary-strong), var(--app-accent));
 }
 
 .full-player-controls {
@@ -1432,9 +1446,9 @@ footer {
     min-width: 56px;
     padding: 0;
     border-radius: 50%;
-    border: 1px solid rgba(226, 198, 185, 0.32);
-    background: rgba(78, 48, 52, 0.42);
-    color: #f5e8df;
+    border: 1px solid var(--app-line);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--app-text);
     letter-spacing: 0;
     display: inline-flex;
     align-items: center;
@@ -1455,7 +1469,7 @@ footer {
 }
 
 .full-player-controls button:hover {
-    background: rgba(112, 62, 62, 0.5);
+    background: rgba(111, 99, 255, 0.22);
 }
 
 @media (max-width: 768px) {

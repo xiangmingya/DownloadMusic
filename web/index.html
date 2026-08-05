@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260804-08">
+    <link rel="stylesheet" href="style.css?v=20260805-01">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -146,8 +146,6 @@
             </div>
 
             <div id="results" class="results"></div>
-            <audio id="audio"></audio>
-            <div id="toast" class="toast" role="status" aria-live="polite"></div>
             </section>
 
             <section class="app-view library-view" id="libraryView" style="display:none;" aria-labelledby="libraryViewTitle">
@@ -159,6 +157,9 @@
                 </div>
             </section>
         </main>
+
+        <audio id="audio"></audio>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
         <footer>
             <div class="footer-meta">
@@ -245,7 +246,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260804-08';
+        const APP_ASSET_VERSION = '20260805-01';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
