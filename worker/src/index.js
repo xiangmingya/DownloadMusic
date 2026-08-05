@@ -1062,9 +1062,15 @@ function parsePlaylistKuwo(resp) {
   };
 }
 
-async function upstreamJson(url, init = {}) {
+async function upstreamJson(url, init = {}, encoding = "utf-8") {
   const resp = await fetch(url, init);
-  const text = await resp.text();
+  const bytes = await resp.arrayBuffer();
+  let text = "";
+  try {
+    text = new TextDecoder(encoding).decode(bytes);
+  } catch {
+    text = new TextDecoder().decode(bytes);
+  }
   let json = null;
   try {
     json = JSON.parse(text);
@@ -1438,13 +1444,14 @@ async function callPlaylists(platform) {
     endpoint.searchParams.set("sortId", "5");
     endpoint.searchParams.set("sin", "0");
     endpoint.searchParams.set("ein", "29");
+    // 此接口仍会以 GBK/GB18030 回传中文；默认 UTF-8 解码会产生 � 字符。
     const { status, text } = await upstreamJson(endpoint.toString(), {
       headers: {
         Origin: "https://y.qq.com",
         Referer: "https://y.qq.com/",
         "User-Agent": "Mozilla/5.0",
       },
-    });
+    }, "gb18030");
     if (status < 200 || status >= 300) throw new Error(`上游请求失败 (${status})`);
     const json = parseJsonpJson(text);
     const list = Array.isArray(json?.data?.list) ? json.data.list : [];
