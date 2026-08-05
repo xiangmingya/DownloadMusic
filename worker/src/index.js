@@ -1173,7 +1173,7 @@ function createBillingOrderNo(linuxdoId) {
 function creditCanonicalPayload(params, clientSecret) {
   return Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (a < b ? -1 : (a > b ? 1 : 0)))
     .map(([key, value]) => `${key}=${value}`)
     .join("&") + clientSecret;
 }
@@ -1223,7 +1223,7 @@ async function handleCheckout(request, env) {
     const body = await response.text();
     const payload = parseJsonText(body);
     const checkoutUrl = location || String(payload?.data?.pay_url || payload?.data?.url || payload?.pay_url || "");
-    if (!response.ok || !checkoutUrl) throw new Error(String(payload?.error_msg || payload?.message || "创建积分订单失败"));
+    if (!response.ok || !checkoutUrl) throw new Error(String(payload?.error_msg || payload?.message || `积分服务未返回付款链接（HTTP ${response.status}）`));
     return jsonResponse(200, { code: 0, message: "Success", data: { out_trade_no: outTradeNo, checkout_url: checkoutUrl, amount } });
   } catch (err) {
     await db.prepare("UPDATE billing_orders SET status = 'failed' WHERE out_trade_no = ? AND status = 'pending'").bind(outTradeNo).run();
