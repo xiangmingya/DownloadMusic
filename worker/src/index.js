@@ -10,6 +10,7 @@ const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_a
 const BACKUP_TIMEOUT_MS = 18000;
 const QQ_BACKUP3_SEARCH_URL = "https://yutangxiaowu.cn:3015/api/qmusic/search";
 const QQ_BACKUP3_PARSE_URL = "https://api.yutangxiaowu.cn/api/v1/qqmusic/music";
+const YUTANG_API_ROOT = "https://api.yutangxiaowu.cn";
 const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
 const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
@@ -2510,6 +2511,35 @@ async function backup4TryQqBackup3(platform, id) {
   throw new Error(String(result?.parsed?.errMsg || "qq backup3 parse failed"));
 }
 
+async function backup4TryYutangNetease(platform, id, quality) {
+  if (platform !== "netease") return null;
+  const endpoint = new URL(`${YUTANG_API_ROOT}/api/music/Song_V1`);
+  endpoint.searchParams.set("url", `https://music.163.com/song?id=${encodeURIComponent(id)}`);
+  endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
+  endpoint.searchParams.set("type", "json");
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
+  const url = normalizeMediaUrl(parsed?.url || "");
+  if (response.ok && Number(parsed?.status || response.status) === 200 && url) {
+    return { url, provider: "yutang_netease", cover: parsed?.pic || "", lyrics: parsed?.lyric || "" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `yutang netease failed (${response.status})`));
+}
+
+async function backup4TryYutangKuwo(platform, id) {
+  if (platform !== "kuwo") return null;
+  const endpoint = new URL(`${YUTANG_API_ROOT}/api/music/kuwo`);
+  endpoint.searchParams.set("url", `https://www.kuwo.cn/play_detail/${encodeURIComponent(id)}`);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
+  const data = parsed?.data || {};
+  const url = normalizeMediaUrl(data?.music_url || "");
+  if (response.ok && Number(parsed?.code) === 200 && url) {
+    return { url, provider: "yutang_kuwo", cover: data?.pic || data?.albumpic || "", lyrics: data?.lyrics_url || "" };
+  }
+  throw new Error(String(parsed?.msg || parsed?.message || `yutang kuwo failed (${response.status})`));
+}
+
 function mapBackup4SearchItems(items) {
   const list = Array.isArray(items) ? items : [];
   return list
@@ -2663,6 +2693,7 @@ function getBackup4ProviderChain(platform, env) {
   if (platform === "netease") {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
+      { source: "yutang_netease", run: backup4TryYutangNetease },
       { source: "onrender", run: backup4TryOnrender },
       { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
@@ -2673,6 +2704,7 @@ function getBackup4ProviderChain(platform, env) {
   if (platform === "kuwo") {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
+      { source: "yutang_kuwo", run: backup4TryYutangKuwo },
       { source: "onrender", run: backup4TryOnrender },
       { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
       { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
