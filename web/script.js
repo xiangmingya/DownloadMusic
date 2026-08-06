@@ -3728,7 +3728,14 @@ function bindSongMeta(song) {
         backup3: cloneBackup3Meta(song?.backup3)
     };
     currentLyrics = currentPlayingSong.lyrics;
+    syncNowPlayingViews();
+}
+
+function syncNowPlayingViews() {
     updateFullPlayerMeta();
+    renderHomeNowPlaying();
+    updateFullPlayerControlState();
+    updateHomeNowPlayingControlState();
 }
 
 async function playSongCore(source, id, name, artist, options = {}) {
@@ -3878,7 +3885,6 @@ async function playSongCore(source, id, name, artist, options = {}) {
         await audio.play();
         bindSongMeta(songMeta);
         syncInlinePlayButtonState();
-        updateFullPlayerControlState();
         scheduleNextTrackPreload();
     } catch (error) {
         if (playRequestId === activePlayRequestId) {
