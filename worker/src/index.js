@@ -18,10 +18,7 @@ const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
 const BACKUP4_TIMEOUT_MS = 6500;
 const BACKUP4_QQMP3_TIMEOUT_MS = 8000;
 const BACKUP4_LXMUSIC_ONRENDER_URL = "https://lxmusicapi.onrender.com";
-const BACKUP4_LXMUSIC_ONRENDER_KEY = "share-v3";
 const BACKUP4_LXMUSIC_SIGNED_URL = "https://88.lxmusic.xn--fiqs8s";
-const BACKUP4_LXMUSIC_SCRIPT_MD5 = "1888f9865338afe6d5534b35171c61a4";
-const BACKUP4_LXMUSIC_SECRET_KEY = "JaJ?a7Nwk_Fgj?2o:znAkst";
 const BACKUP4_OIAPI_MUSIC163_URL = "https://oiapi.net/api/Music_163";
 const BACKUP4_OIAPI_KUWO_URL = "https://oiapi.net/api/Kuwo";
 const BACKUP4_QQMP3_ENDPOINTS = [
@@ -38,18 +35,21 @@ const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MONITORING_SERVICE_CATALOG = [
-  { source: "gdstudio", category: "resolve", order: 20 },
-  { source: "onrender", category: "resolve", order: 30 },
-  { source: "lxmusic_signed", category: "resolve", order: 40 },
-  { source: "qq_backup3", category: "resolve", order: 50 },
-  { source: "jkapi", category: "resolve", order: 60 },
-  { source: "oiapi_music163", category: "resolve", order: 70 },
-  { source: "oiapi_kuwo", category: "resolve", order: 80 },
-  { source: "chksz_163", category: "resolve", order: 90 },
-  { source: "qqmp3", category: "resolve", order: 100 },
-  { source: "netease", category: "data", order: 10 },
-  { source: "qq", category: "data", order: 20 },
-  { source: "kuwo", category: "data", order: 30 },
+  { source: "gdstudio", category: "resolve", order: 20, name: "GDStudio", detail: "备用解析服务 · 网易云 / 酷我 / QQ 音乐", endpoint: "music-api.gdstudio.xyz" },
+  { source: "onrender", category: "resolve", order: 30, name: "LXMusic Onrender", detail: "多平台备用 · 网易云 / 酷我 / QQ 音乐", endpoint: "lxmusicapi.onrender.com" },
+  { source: "lxmusic_signed", category: "resolve", order: 40, name: "LXMusic 签名源", detail: "多平台备用 · 网易云 / 酷我 / QQ 音乐", endpoint: "88.lxmusic.xn--fiqs8s" },
+  { source: "qq_backup3", category: "resolve", order: 50, name: "雨糖小屋 QQ 接口", detail: "QQ 音乐专用接口 · 搜索与播放链接解析", endpoint: "api.yutangxiaowu.cn" },
+  { source: "yutang_netease", category: "resolve", order: 51, name: "雨糖小屋 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "api.yutangxiaowu.cn" },
+  { source: "yutang_kuwo", category: "resolve", order: 52, name: "雨糖小屋 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "api.yutangxiaowu.cn" },
+  { source: "jkapi", category: "resolve", order: 60, name: "JKAPI 音乐接口", detail: "网易云 / QQ 音乐接口 · 播放链接解析", endpoint: "d-hk-01.aaapi.top/api/music" },
+  { source: "oiapi_music163", category: "resolve", order: 70, name: "OIAPI 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
+  { source: "oiapi_kuwo", category: "resolve", order: 80, name: "OIAPI 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
+  { source: "chksz_163", category: "resolve", order: 90, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
+  { source: "chksz_qq", category: "resolve", order: 91, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
+  { source: "qqmp3", category: "resolve", order: 100, name: "QQMP3 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "qqmp3.vip" },
+  { source: "netease", category: "data", order: 10, name: "网易云音乐", detail: "网易云音乐平台接口 · 搜索 / 歌单", endpoint: "music.163.com" },
+  { source: "qq", category: "data", order: 20, name: "QQ 音乐", detail: "QQ 音乐平台接口 · 搜索 / 歌单", endpoint: "y.qq.com" },
+  { source: "kuwo", category: "data", order: 30, name: "酷我音乐", detail: "酷我音乐平台接口 · 搜索 / 歌单", endpoint: "kuwo.cn" },
 ];
 const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
   netease: ["gdstudio", "onrender", "lxmusic_signed", "jkapi", "oiapi_music163", "chksz_163"],
@@ -1146,6 +1146,9 @@ async function handleAdminMonitoring(request, env) {
         source: String(catalog.source || "unknown"),
         category: catalog.category,
         catalog_order: catalog.order,
+        name: String(catalog.name || "未分类接口"),
+        detail: String(catalog.detail || "运行时发现的内部服务"),
+        endpoint: String(catalog.endpoint || "仅管理员可见"),
         requests,
         successes,
         failures,
@@ -1172,6 +1175,7 @@ async function handleAdminMonitoring(request, env) {
     });
     const finalSources = (finalResult.results || []).map((row) => ({
       source: String(row.source || "unknown"),
+      name: String(catalogBySource.get(String(row.source || "unknown"))?.name || "未分类接口"),
       hits: Number(row.hits || 0),
     }));
     return jsonResponse(200, { code: 0, message: "Success", data: {
@@ -2406,15 +2410,17 @@ async function backup4TryGdstudio(platform, id, quality) {
   throw new Error(String(parsed?.detail || parsed?.message || `gdstudio failed (${response.status})`));
 }
 
-async function backup4TryOnrender(platform, id, quality) {
+async function backup4TryOnrender(platform, id, quality, env) {
   const source = backup4PlatformCode(platform);
   if (!source) return null;
+  const requestKey = String(env.BACKUP4_LXMUSIC_ONRENDER_KEY || "").trim();
+  if (!requestKey) throw new Error("Onrender signing secret is not configured");
 
   const endpoint = `${BACKUP4_LXMUSIC_ONRENDER_URL}/url/${source}/${encodeURIComponent(id)}/${backup4NormalizeQuality(quality)}`;
   const response = await backup4Json(endpoint, {
     headers: {
       "Content-Type": "application/json",
-      "X-Request-Key": BACKUP4_LXMUSIC_ONRENDER_KEY,
+      "X-Request-Key": requestKey,
       "User-Agent": "Mozilla/5.0",
     },
   });
@@ -2426,13 +2432,16 @@ async function backup4TryOnrender(platform, id, quality) {
   throw new Error(String(parsed?.msg || parsed?.message || `onrender failed (${response.status})`));
 }
 
-async function backup4TryLxmusicSigned(platform, id, quality) {
+async function backup4TryLxmusicSigned(platform, id, quality, env) {
   const source = backup4PlatformCode(platform);
   if (!source) return null;
+  const scriptMd5 = String(env.BACKUP4_LXMUSIC_SCRIPT_MD5 || "").trim();
+  const secretKey = String(env.BACKUP4_LXMUSIC_SECRET_KEY || "").trim();
+  if (!scriptMd5 || !secretKey) throw new Error("LXMusic signing secrets are not configured");
 
   const q = backup4NormalizeQuality(quality);
   const requestPath = `/lxmusicv4/url/${source}/${id}/${q}`;
-  const sign = await sha256Hex(`${requestPath}${BACKUP4_LXMUSIC_SCRIPT_MD5}${BACKUP4_LXMUSIC_SECRET_KEY}`);
+  const sign = await sha256Hex(`${requestPath}${scriptMd5}${secretKey}`);
   const endpoint = `${BACKUP4_LXMUSIC_SIGNED_URL}${requestPath}?sign=${sign}`;
 
   const response = await backup4Json(endpoint, {
@@ -2749,8 +2758,8 @@ async function backup4Search(platform, keyword, page, limit, env) {
 function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
     return [
-      { source: "onrender", run: backup4TryOnrender },
-      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
+      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
@@ -2760,8 +2769,8 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
       { source: "yutang_netease", run: backup4TryYutangNetease },
-      { source: "onrender", run: backup4TryOnrender },
-      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
+      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
       { source: "chksz_163", run: (p, id, quality) => backup4TryChkszMusic163(p, id, quality, env) },
@@ -2771,8 +2780,8 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
       { source: "yutang_kuwo", run: backup4TryYutangKuwo },
-      { source: "onrender", run: backup4TryOnrender },
-      { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
+      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
       { source: "qqmp3", run: backup4TryQqmp3 },
     ];
