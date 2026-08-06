@@ -32,6 +32,8 @@ const KUWO_TOPLIST_ENDPOINTS = [
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
+const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
+const BACKUP4_PAUGRAM_NETEASE_URL = "https://api.paugram.com/netease/";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MONITORING_SERVICE_CATALOG = [
@@ -46,14 +48,16 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "oiapi_kuwo", category: "resolve", order: 80, name: "OIAPI 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
   { source: "chksz_163", category: "resolve", order: 90, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
   { source: "chksz_qq", category: "resolve", order: 91, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
+  { source: "bugpk", category: "resolve", order: 95, name: "BugPK 音乐解析聚合", detail: "QQ / 网易云音乐接口 · 播放链接解析", endpoint: "api.bugpk.com" },
+  { source: "paugram_netease", category: "resolve", order: 96, name: "Paugram 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "api.paugram.com" },
   { source: "qqmp3", category: "resolve", order: 100, name: "QQMP3 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "qqmp3.vip" },
   { source: "netease", category: "data", order: 10, name: "网易云音乐", detail: "网易云音乐平台接口 · 搜索 / 歌单", endpoint: "music.163.com" },
   { source: "qq", category: "data", order: 20, name: "QQ 音乐", detail: "QQ 音乐平台接口 · 搜索 / 歌单", endpoint: "y.qq.com" },
   { source: "kuwo", category: "data", order: 30, name: "酷我音乐", detail: "酷我音乐平台接口 · 搜索 / 歌单", endpoint: "kuwo.cn" },
 ];
 const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
-  netease: ["gdstudio", "onrender", "lxmusic_signed", "jkapi", "oiapi_music163", "chksz_163"],
-  qq: ["gdstudio", "onrender", "lxmusic_signed", "qq_backup3", "jkapi", "chksz_163"],
+  netease: ["gdstudio", "onrender", "lxmusic_signed", "jkapi", "oiapi_music163", "chksz_163", "bugpk", "paugram_netease"],
+  qq: ["gdstudio", "onrender", "lxmusic_signed", "qq_backup3", "jkapi", "chksz_163", "bugpk"],
   kuwo: ["gdstudio", "onrender", "lxmusic_signed", "oiapi_kuwo", "qqmp3"],
 };
 let lastServiceMetricsCleanupAt = 0;
@@ -2494,6 +2498,52 @@ async function backup4TryChkszMusic163(platform, id, quality, env) {
   throw new Error(String(parsed?.msg || parsed?.message || `chksz music163 failed (${response.status})`));
 }
 
+async function backup4TryBugpk(platform, id) {
+  const media = platform === "qq" ? "tencent" : platform === "netease" ? "netease" : "";
+  if (!media) return null;
+
+  const endpoint = new URL(BACKUP4_BUGPK_API_URL);
+  endpoint.searchParams.set("id", id);
+  endpoint.searchParams.set("media", media);
+  endpoint.searchParams.set("type", "url");
+
+  const response = await backup4Json(endpoint.toString(), {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  const parsed = response.json;
+  const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
+  if (response.ok && url) {
+    return { url, provider: "bugpk" };
+  }
+  const error = new Error(String(parsed?.message || parsed?.msg || `bugpk failed (${response.status})`));
+  error.status = response.status;
+  throw error;
+}
+
+async function backup4TryPaugramNetease(platform, id) {
+  if (platform !== "netease") return null;
+
+  const endpoint = new URL(BACKUP4_PAUGRAM_NETEASE_URL);
+  endpoint.searchParams.set("id", id);
+  const response = await backup4Json(endpoint.toString(), {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  const parsed = response.json;
+  const url = normalizeMediaUrl(parsed?.link || parsed?.url || "");
+  if (response.ok && url) {
+    return { url, provider: "paugram_netease" };
+  }
+  const error = new Error(String(parsed?.message || parsed?.msg || `paugram netease failed (${response.status})`));
+  error.status = response.status;
+  throw error;
+}
+
 async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   if (platform !== "kuwo") return null;
 
@@ -2761,6 +2811,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
       { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
+      { source: "bugpk", run: backup4TryBugpk },
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
     ];
@@ -2774,6 +2825,8 @@ function getBackup4ProviderChain(platform, env) {
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
       { source: "chksz_163", run: (p, id, quality) => backup4TryChkszMusic163(p, id, quality, env) },
+      { source: "bugpk", run: backup4TryBugpk },
+      { source: "paugram_netease", run: backup4TryPaugramNetease },
     ];
   }
   if (platform === "kuwo") {
