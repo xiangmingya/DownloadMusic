@@ -169,7 +169,7 @@
             <section class="app-view admin-view" id="adminView" style="display:none;" aria-labelledby="adminViewTitle">
                 <div class="view-title"><p class="eyebrow">管理员</p><h1 id="adminViewTitle">管理中心</h1><p>会员价格、状态和上游服务健康度都只在这里可见。</p></div>
                 <div class="admin-grid">
-                    <section class="admin-card"><h2>月会员价格</h2><div class="admin-price-form"><input id="adminMembershipPrice" type="number" min="0.01" step="0.01" inputmode="decimal" aria-label="月会员价格"><span>积分</span><button id="saveMembershipPriceBtn" type="button">保存</button></div><p id="adminOverviewText" class="admin-muted"></p></section>
+                    <section class="admin-card admin-pricing-card"><div class="admin-card-heading"><div><p class="eyebrow">会员定价</p><h2>月会员价格</h2></div><span class="admin-duration-badge">30 天</span></div><div class="admin-price-form"><input id="adminMembershipPrice" type="number" min="0.01" step="0.01" inputmode="decimal" aria-label="月会员价格"><span>积分</span><button id="saveMembershipPriceBtn" type="button">保存</button></div><div class="admin-price-presets" aria-label="常用会员价格"><span>常用价格</span><button type="button" data-membership-price="5">5</button><button type="button" data-membership-price="10">10</button><button type="button" data-membership-price="15">15</button><button type="button" data-membership-price="20">20</button></div><div class="admin-membership-stats" aria-live="polite"><div><small>当前有效会员</small><strong id="adminActiveMembers">—</strong><span>人</span></div><div><small>已支付订单</small><strong id="adminPaidOrders">—</strong><span>笔</span></div></div><p id="adminOverviewText" class="admin-muted">价格更新后，新订单立即按最新价格计算。</p></section>
                     <section class="admin-card admin-gift-card" aria-labelledby="grantMembershipTitle"><p class="eyebrow">会员管理</p><h2 id="grantMembershipTitle">赠送会员</h2><p class="admin-muted">按 Linux DO ID 或完整昵称赠送会员，保存后立即生效。</p><form id="grantMembershipForm" class="grant-membership-form"><label><span>赠送对象</span><input id="grantMemberTarget" type="text" required placeholder="Linux DO ID 或完整昵称"></label><label><span>赠送天数</span><input id="grantMemberDays" type="number" min="1" max="3650" value="30" required></label><label class="grant-note-field"><span>备注（可选）</span><input id="grantMemberNote" type="text" maxlength="240" placeholder="例如：活动赠送"></label><button type="submit">赠送会员</button></form></section>
                 </div>
                 <div class="admin-tabs" role="tablist" aria-label="管理中心内容">
@@ -308,7 +308,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-06';
+        const APP_ASSET_VERSION = '20260806-07';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

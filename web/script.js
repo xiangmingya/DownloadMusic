@@ -3078,7 +3078,9 @@ async function loadAdminPanel() {
     try {
         const overview = await getJson(`${APP_API_ROOT}/admin/overview`);
         document.getElementById('adminMembershipPrice').value = overview.monthly_price;
-        document.getElementById('adminOverviewText').textContent = `当前有效会员 ${overview.active_members} 人 · 已支付订单 ${overview.paid_orders} 笔`;
+        document.getElementById('adminActiveMembers').textContent = overview.active_members ?? '—';
+        document.getElementById('adminPaidOrders').textContent = overview.paid_orders ?? '—';
+        document.getElementById('adminOverviewText').textContent = '价格更新后，新订单立即按最新价格计算。';
         await loadAdminMembers();
     } catch (error) { document.getElementById('adminMemberList').textContent = error.message || '读取失败'; }
     await loadAdminMonitoring();
@@ -3500,6 +3502,14 @@ function initHomeInterface() {
     document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
     document.querySelectorAll('[data-admin-tab]').forEach(button => {
         button.addEventListener('click', () => setAdminTab(button.getAttribute('data-admin-tab')));
+    });
+    document.querySelectorAll('[data-membership-price]').forEach(button => {
+        button.addEventListener('click', () => {
+            const input = document.getElementById('adminMembershipPrice');
+            if (!input) return;
+            input.value = button.getAttribute('data-membership-price') || '';
+            input.focus();
+        });
     });
     document.getElementById('saveMembershipPriceBtn')?.addEventListener('click', async () => {
         const price = document.getElementById('adminMembershipPrice').value;
