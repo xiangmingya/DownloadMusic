@@ -1007,6 +1007,7 @@ async function handleAdminMembers(request, env) {
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""),
     name: String(row.name || row.linuxdo_id || ""),
+    is_admin: getAdminLinuxdoIds(env).has(String(row.linuxdo_id || "")),
     avatar: String(row.avatar || ""),
     registered_at: row.registered_at || null,
     last_login_at: row.last_login_at || null,
