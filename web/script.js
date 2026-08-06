@@ -3062,15 +3062,15 @@ const MONITOR_SOURCE_INFO = {
     kuwo: { name: '酷我音乐', detail: '酷我音乐平台接口 · 搜索 / 歌单', endpoint: 'kuwo.cn' },
     tunehub: { name: 'TuneHub', detail: '主解析服务 · 统一搜索与播放链接解析', endpoint: 'tunehub.sayqz.com' },
     gdstudio: { name: 'GDStudio', detail: '备用解析服务 · 网易云 / 酷我 / QQ 音乐', endpoint: 'music-api.gdstudio.xyz' },
-    qq_backup3: { name: 'QQ 音乐备用', detail: 'QQ 音乐专用备用 · 搜索与解析', endpoint: 'yutangxiaowu.cn' },
-    qq_backup3_parse: { name: 'QQ 音乐备用', detail: 'QQ 音乐专用备用 · 播放链接解析', endpoint: 'yutangxiaowu.cn' },
+    qq_backup3: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 搜索与解析', endpoint: 'yutangxiaowu.cn' },
+    qq_backup3_parse: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 播放链接解析', endpoint: 'yutangxiaowu.cn' },
     onrender: { name: 'LXMusic Onrender', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: 'lxmusicapi.onrender.com' },
     lxmusic_signed: { name: 'LXMusic 签名源', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: '88.lxmusic.xn--fiqs8s' },
-    oiapi_music163: { name: '网易云音乐备用', detail: '网易云音乐专用备用 · 播放链接解析', endpoint: 'oiapi.net' },
-    oiapi_kuwo: { name: '酷我音乐备用', detail: '酷我音乐专用备用 · 播放链接解析', endpoint: 'oiapi.net' },
-    chksz_163: { name: '网易云音乐备用', detail: '网易云音乐专用备用 · 播放链接解析', endpoint: 'api.chksz.com' },
+    oiapi_music163: { name: 'OIAPI 网易云接口', detail: '网易云音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
+    oiapi_kuwo: { name: 'OIAPI 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
+    chksz_163: { name: 'CHKSZ 网易云接口', detail: '网易云音乐专用接口 · 播放链接解析', endpoint: 'api.chksz.com' },
     jkapi: { name: 'JKAPI', detail: '多平台备用 · 网易云 / QQ 音乐', endpoint: '管理员配置的 JKAPI' },
-    qqmp3: { name: '酷我音乐备用', detail: '酷我音乐专用备用 · 播放链接解析', endpoint: 'qqmp3.cn' },
+    qqmp3: { name: 'QQMP3 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'qqmp3.cn' },
 };
 
 function monitorSourceLabel(source) {
@@ -3088,7 +3088,7 @@ function monitoringCategory(item) {
 }
 
 function monitoringHealthOrder(health) {
-    return ({ down: 0, unstable: 1, healthy: 2, unknown: 3 })[String(health || '')] ?? 4;
+    return ({ healthy: 0, unstable: 1, unknown: 2, down: 3 })[String(health || '')] ?? 4;
 }
 
 function renderMonitoringServiceRow(item) {
@@ -3145,12 +3145,12 @@ function renderAdminMonitoring(data) {
         }).join('')
         : '<p class="monitoring-empty">暂无成功解析记录。</p>';
 
-    const resolveServices = services.filter(item => monitoringCategory(item) === 'resolve').sort((a, b) => monitoringHealthOrder(a.health) - monitoringHealthOrder(b.health) || Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
+    const resolveServices = services.filter(item => monitoringCategory(item) === 'resolve').sort((a, b) => monitoringHealthOrder(a.health) - monitoringHealthOrder(b.health) || Number(b.success_rate ?? -1) - Number(a.success_rate ?? -1) || Number(a.average_duration_ms || Number.MAX_SAFE_INTEGER) - Number(b.average_duration_ms || Number.MAX_SAFE_INTEGER) || Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
     const dataServices = services.filter(item => monitoringCategory(item) === 'data').sort((a, b) => Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
     const otherServices = services.filter(item => !['resolve', 'data'].includes(monitoringCategory(item)));
     const renderGroup = (title, note, items) => `<section class="monitoring-service-group"><div class="monitoring-service-group-heading"><strong>${title}</strong><span>${note}</span></div>${items.length ? items.map(renderMonitoringServiceRow).join('') : '<p class="monitoring-empty">暂无接口。</p>'}</section>`;
     document.getElementById('monitoringServiceList').innerHTML = services.length
-        ? `${renderGroup('播放 / 下载链接解析', '不可用接口优先显示', resolveServices)}${renderGroup('歌曲 / 歌单原始数据', '提供搜索、歌单与榜单数据', dataServices)}${otherServices.length ? renderGroup('其他接口', '运行时发现的接口', otherServices) : ''}`
+        ? `${renderGroup('播放 / 下载链接解析', '健康、稳定接口优先；失效较多的自动靠后', resolveServices)}${renderGroup('歌曲 / 歌单原始数据', '提供搜索、歌单与榜单数据', dataServices)}${otherServices.length ? renderGroup('其他接口', '运行时发现的接口', otherServices) : ''}`
         : '<p class="monitoring-empty">暂无调用记录。</p>';
 }
 
