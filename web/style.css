@@ -485,6 +485,9 @@ button .icon-park {
     margin-top: 30px;
 }
 
+.results-batch-actions { display: flex; justify-content: flex-end; margin: 0 0 12px; }
+.results-batch-actions .primary-btn { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 15px; }
+
 .result-item {
     padding: 20px;
     background: var(--jp-panel-bg);

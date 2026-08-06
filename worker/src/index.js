@@ -1334,6 +1334,15 @@ function normalizeMediaUrl(url) {
   const value = String(url || "").trim();
   if (!value) return "";
   if (value.startsWith("//")) return `https:${value}`;
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname === "y.qq.com" && parsed.pathname.startsWith("/music/photo_new/")) {
+      parsed.hostname = "y.gtimg.cn";
+      return parsed.toString();
+    }
+  } catch {
+    // Let the caller reject malformed upstream URLs as before.
+  }
   return value;
 }
 
@@ -2074,13 +2083,13 @@ async function callQqBackup3Search({ keyword, page, limit }) {
   return { response, text, parsed: parseJsonText(text) };
 }
 
-async function callQqBackup3ParseBySongmid(songmid) {
+async function callQqBackup3ParseBySongmid(songmid, timeoutMs = QQ_BACKUP3_TIMEOUT_MS) {
   const endpoint = new URL(QQ_BACKUP3_PARSE_URL);
   endpoint.searchParams.set("songmid", String(songmid || ""));
   const response = await fetch(endpoint.toString(), {
     method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(QQ_BACKUP3_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0",
@@ -2491,7 +2500,7 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
 async function backup4TryQqBackup3(platform, id) {
   if (platform !== "qq") return null;
 
-  const result = await callQqBackup3ParseBySongmid(id);
+  const result = await callQqBackup3ParseBySongmid(id, 6000);
   const url = normalizeMediaUrl(result?.parsed?.url || "");
   if (result?.response?.ok && result?.parsed?.success && url) {
     return { url, provider: "qq_backup3_parse" };
@@ -2826,7 +2835,7 @@ function resolveTunehubKey(session, request, env) {
 }
 
 function getMediaAllowedHosts(env) {
-  return splitCsvValues(env.MEDIA_PROXY_ALLOWED_HOSTS || "")
+  return [...splitCsvValues(env.MEDIA_PROXY_ALLOWED_HOSTS || ""), ".y.gtimg.cn"]
     .map((item) => item.toLowerCase())
     .filter(Boolean);
 }

@@ -143,6 +143,15 @@ function normalizeMediaUrl(url) {
     const u = String(url || '').trim();
     if (!u) return '';
     if (u.startsWith('//')) return `https:${u}`;
+    try {
+        const parsed = new URL(u);
+        if (parsed.hostname === 'y.qq.com' && parsed.pathname.startsWith('/music/photo_new/')) {
+            parsed.hostname = 'y.gtimg.cn';
+            return parsed.toString();
+        }
+    } catch {
+        // Invalid upstream URLs keep the existing empty/error handling path.
+    }
     return u;
 }
 
@@ -2088,7 +2097,10 @@ function renderLocalPage() {
     const totalPages = Math.ceil(allSongs.length / pageSize);
 
     const resultsDiv = document.getElementById('results');
-    resultsDiv.innerHTML = pageSongs.map((song, index) => {
+    const batchActions = allSongs.length > 1
+        ? `<div class="results-batch-actions"><button class="primary-btn" type="button" onclick="playAllResultSongs()">${getIconSvg('play', 17)} 全部播放（${allSongs.length} 首）</button></div>`
+        : '';
+    resultsDiv.innerHTML = batchActions + pageSongs.map((song, index) => {
         const globalIndex = start + index;
         const platform = song.platform || song.source;
         const displayName = escapeHtml(song.name);
@@ -2155,6 +2167,36 @@ function renderLocalPage() {
     // 某些平台搜索接口不返回封面，当前页按需补全。
     hydrateMissingCovers(pageSongs, start);
     syncInlinePlayButtonState();
+}
+
+async function playAllResultSongs() {
+    if (!Array.isArray(allSongs) || allSongs.length === 0) return;
+    let firstSong;
+    try {
+        firstSong = await resolveLookupOnlySong(allSongs[0]);
+    } catch (error) {
+        showToast(`全部播放失败: ${error.message || '无法准备第一首歌曲'}`, 'error');
+        return;
+    }
+    const queue = [];
+    const seen = new Set();
+    allSongs.forEach(song => {
+        const item = toLibrarySong(song);
+        if (!item || seen.has(songIdentity(item))) return;
+        seen.add(songIdentity(item));
+        queue.push(item);
+    });
+    playlistSongs = queue;
+    savePlaylistToStorage();
+    const source = String(firstSong?.platform || firstSong?.source || '');
+    const id = String(firstSong?.id || '');
+    currentPlaylistIndex = findPlaylistIndex(source, id);
+    renderPlaylistSheet();
+    showToast(`已加入 ${queue.length} 首歌曲，正在播放第一首`, 'info');
+    await playSongCore(source, id, String(firstSong?.name || ''), String(firstSong?.artist || ''), {
+        inlineIndex: 0,
+        song: firstSong
+    });
 }
 
 async function changeLocalPage(page) {
@@ -3093,7 +3135,7 @@ function monitoringHealthOrder(health) {
 
 function renderMonitoringServiceRow(item) {
     const info = monitorSourceInfo(item.source);
-    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)} · ${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
+    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
 }
 
 function monitorPercent(value) {
