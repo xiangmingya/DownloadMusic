@@ -308,7 +308,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-14';
+        const APP_ASSET_VERSION = '20260806-15';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -510,10 +510,10 @@
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
         (async function init() {
-            const loggedIn = await checkLoginAndStart();
-            if (loggedIn) return;
             mountApp({ auth_type: 'guest', user: { id: '', name: '游客', linuxdo_id: '', avatar: '' }, membership: {} });
             void checkLinuxdoStatus();
+            const loggedIn = await checkLoginAndStart();
+            if (loggedIn) window.location.reload();
         })();
     })();
     </script>
