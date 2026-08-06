@@ -51,6 +51,11 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "qq", category: "data", order: 20 },
   { source: "kuwo", category: "data", order: 30 },
 ];
+const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
+  netease: ["gdstudio", "onrender", "lxmusic_signed", "jkapi", "oiapi_music163", "chksz_163"],
+  qq: ["gdstudio", "onrender", "lxmusic_signed", "qq_backup3", "jkapi", "chksz_163"],
+  kuwo: ["gdstudio", "onrender", "lxmusic_signed", "oiapi_kuwo", "qqmp3"],
+};
 let lastServiceMetricsCleanupAt = 0;
 
 export default {
@@ -1004,6 +1009,19 @@ function publicPlatformHealth(row, now) {
   return { state: "healthy", label: "正常", last_updated_at: lastUpdatedAt };
 }
 
+function aggregatePublicPlatformHealth(platform, platformRows, resolveRows, now) {
+  const direct = platformRows.get(`platform_${platform}`);
+  if (Number(direct?.requests || 0) > 0) return publicPlatformHealth(direct, now);
+  const candidates = (PUBLIC_PLATFORM_RESOLVE_SOURCES[platform] || []).map((source) => resolveRows.get(source)).filter(Boolean);
+  const latest = candidates.map((row) => row.last_updated_at).filter(Boolean).sort().at(-1) || null;
+  if (!candidates.length) return { state: "unknown", label: "检测中", last_updated_at: latest };
+  const healths = candidates.map((row) => publicPlatformHealth(row, now));
+  if (healths.some((item) => item.state === "healthy")) return { state: "healthy", label: "正常", last_updated_at: latest };
+  if (healths.some((item) => item.state === "unstable")) return { state: "unstable", label: "波动", last_updated_at: latest };
+  if (healths.some((item) => item.state === "down")) return { state: "down", label: "维护中", last_updated_at: latest };
+  return { state: "unknown", label: "检测中", last_updated_at: latest };
+}
+
 async function handlePublicServiceStatus(env) {
   const db = getDatabase(env);
   const generatedAt = sqlNow();
@@ -1012,9 +1030,13 @@ async function handlePublicServiceStatus(env) {
 
   try {
     const since = metricHour(Date.now() - 24 * 60 * 60 * 1000);
-    const result = await db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'platform_parse' GROUP BY source").bind(since).all();
-    const rows = new Map((result.results || []).map((row) => [String(row.source || ""), row]));
-    const platformStates = platforms.map((platform) => ({ platform, ...publicPlatformHealth(rows.get(`platform_${platform}`), Date.now()) }));
+    const [platformResult, resolveResult] = await Promise.all([
+      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'platform_parse' GROUP BY source").bind(since).all(),
+      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'parse' GROUP BY source").bind(since).all(),
+    ]);
+    const platformRows = new Map((platformResult.results || []).map((row) => [String(row.source || ""), row]));
+    const resolveRows = new Map((resolveResult.results || []).map((row) => [String(row.source || ""), row]));
+    const platformStates = platforms.map((platform) => ({ platform, ...aggregatePublicPlatformHealth(platform, platformRows, resolveRows, Date.now()) }));
     const states = platformStates.map((item) => item.state);
     const overall = states.every((state) => state === "healthy") ? "healthy" : states.every((state) => state === "down") ? "down" : states.some((state) => state === "down") ? "unstable" : states.some((state) => state === "unstable") ? "unstable" : "unknown";
     const overallLabel = overall === "healthy" ? "正常运行" : overall === "down" ? "服务维护中" : overall === "unstable" ? "部分服务波动" : "检测中";
