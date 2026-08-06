@@ -93,6 +93,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/members" && request.method === "GET") {
       return withCors(request, env, await handleAdminMembers(request, env));
     }
+    if (url.pathname === "/api/admin/members/grant" && request.method === "POST") {
+      return withCors(request, env, await handleAdminMemberGrant(request, env));
+    }
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
@@ -742,6 +745,15 @@ async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
   return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
 }
 
+async function recordMemberLogin(linuxdoId, userName, avatar, env) {
+  const db = getDatabase(env);
+  if (!db || !linuxdoId) return;
+  const now = sqlNow();
+  await db.prepare("INSERT INTO member_profiles (linuxdo_id, name, avatar, registered_at, last_login_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, last_login_at = excluded.last_login_at")
+    .bind(String(linuxdoId), String(userName || linuxdoId), String(avatar || ""), now, now)
+    .run();
+}
+
 async function handlePasswordLogin(request, env) {
   const body = await parseJsonBody(request);
   const password = String(body.password || "");
@@ -928,6 +940,7 @@ async function handleLinuxdoLoginCallback(request, env) {
 
   const userName = pickLinuxdoName(payload, linuxdoId);
   const avatar = pickLinuxdoAvatar(payload);
+  await recordMemberLogin(linuxdoId, userName, avatar, env).catch(() => {});
   const redirectTo = safeRedirectUrl(statePayload.redirect, env, request.url);
   return new Response(null, {
     status: 302,
@@ -969,10 +982,51 @@ async function handleAdminMembers(request, env) {
   if (!auth.ok) return auth.response;
   const db = getDatabase(env);
   if (!db) return apiError("D1 数据库未配置", 503);
-  const rows = await db.prepare("SELECT linuxdo_id, expires_at, updated_at FROM memberships ORDER BY expires_at DESC LIMIT 200").all();
+  const keyword = String(new URL(request.url).searchParams.get("q") || "").trim().slice(0, 80);
+  const now = sqlNow();
+  const statement = keyword
+    ? db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, p.name, p.avatar, p.registered_at, p.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN member_profiles p ON p.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR p.name LIKE ?) ORDER BY m.expires_at ASC LIMIT 500").bind(now, `%${keyword}%`, `%${keyword}%`)
+    : db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, p.name, p.avatar, p.registered_at, p.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN member_profiles p ON p.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? ORDER BY m.expires_at ASC LIMIT 500").bind(now);
+  const rows = await statement.all();
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
-    linuxdo_id: String(row.linuxdo_id || ""), name: String(row.name || ""), avatar: String(row.avatar || ""), expires_at: row.expires_at || null, updated_at: row.updated_at || null,
+    linuxdo_id: String(row.linuxdo_id || ""),
+    name: String(row.name || row.linuxdo_id || ""),
+    avatar: String(row.avatar || ""),
+    registered_at: row.registered_at || null,
+    last_login_at: row.last_login_at || null,
+    membership_started_at: row.membership_started_at || row.updated_at || null,
+    expires_at: row.expires_at || null,
+    updated_at: row.updated_at || null,
   })) } });
+}
+
+async function handleAdminMemberGrant(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+
+  const body = await parseJsonBody(request);
+  const target = String(body.target || "").trim().slice(0, 160);
+  const days = Number(body.days);
+  const note = String(body.note || "").trim().slice(0, 240);
+  if (!target) return apiError("请输入 Linux DO ID 或完整昵称", 400);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) return apiError("赠送天数须为 1 到 3650 天之间的整数", 400);
+
+  const matches = await db.prepare("SELECT linuxdo_id, name FROM member_profiles WHERE linuxdo_id = ? OR name = ? COLLATE NOCASE LIMIT 2").bind(target, target).all();
+  if (!matches.results?.length) return apiError("未找到该用户；对方需先使用 Linux DO 登录一次", 404);
+  if (matches.results.length > 1) return apiError("昵称不唯一，请改用 Linux DO ID", 409);
+
+  const member = matches.results[0];
+  const current = await db.prepare("SELECT expires_at FROM memberships WHERE linuxdo_id = ?").bind(member.linuxdo_id).first();
+  const baseTime = membershipActive(current) ? Date.parse(current.expires_at) : Date.now();
+  const now = sqlNow();
+  const expiresAt = new Date(baseTime + days * 24 * 60 * 60 * 1000).toISOString();
+  await db.batch([
+    db.prepare("INSERT INTO memberships (linuxdo_id, expires_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(member.linuxdo_id, expiresAt, now),
+    db.prepare("INSERT INTO membership_grants (linuxdo_id, days, source, granted_by, granted_at, expires_at, note) VALUES (?, ?, 'admin_gift', ?, ?, ?, ?)").bind(member.linuxdo_id, days, String(auth.session?.user?.linuxdo_id || "admin"), now, expiresAt, note || null),
+  ]);
+  return jsonResponse(200, { code: 0, message: "Success", data: { linuxdo_id: member.linuxdo_id, name: member.name, days, expires_at: expiresAt } });
 }
 
 async function handleAdminMonitoring(request, env) {
@@ -1210,7 +1264,10 @@ async function handleBillingNotify(request, env) {
       const current = await getMembershipRecord(db, String(order.linuxdo_id));
       const start = membershipActive(current) ? Date.parse(current.expires_at) : Date.now();
       const nextExpiry = new Date(start + 30 * 24 * 60 * 60 * 1000).toISOString();
-      await db.prepare("INSERT INTO memberships (linuxdo_id, expires_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(String(order.linuxdo_id), nextExpiry, now).run();
+      await db.batch([
+        db.prepare("INSERT INTO memberships (linuxdo_id, expires_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(String(order.linuxdo_id), nextExpiry, now),
+        db.prepare("INSERT INTO membership_grants (linuxdo_id, days, source, granted_by, granted_at, expires_at, note) VALUES (?, 30, 'purchase', NULL, ?, ?, 'Linux DO Credit 支付')").bind(String(order.linuxdo_id), now, nextExpiry),
+      ]);
     }
     return new Response("success");
   } catch {

@@ -3022,33 +3022,64 @@ async function startMembershipCheckout() {
 
 async function loadAdminPanel() {
     try {
-        const [overview, members] = await Promise.all([getJson(`${APP_API_ROOT}/admin/overview`), getJson(`${APP_API_ROOT}/admin/members`)]);
+        const overview = await getJson(`${APP_API_ROOT}/admin/overview`);
         document.getElementById('adminMembershipPrice').value = overview.monthly_price;
         document.getElementById('adminOverviewText').textContent = `当前有效会员 ${overview.active_members} 人 · 已支付订单 ${overview.paid_orders} 笔`;
-        document.getElementById('adminMemberList').innerHTML = members.members.length ? members.members.map(item => `<div><strong>${escapeHtml(item.name || item.linuxdo_id)}</strong><small>到期：${escapeHtml(item.expires_at || '—')}</small></div>`).join('') : '<p class="admin-muted">还没有会员。</p>';
+        await loadAdminMembers();
     } catch (error) { document.getElementById('adminMemberList').textContent = error.message || '读取失败'; }
     await loadAdminMonitoring();
 }
 
-const MONITOR_SOURCE_LABELS = {
-    netease: '网易云音乐',
-    qq: 'QQ 音乐',
-    kuwo: '酷我音乐',
-    tunehub: 'TuneHub',
-    gdstudio: 'GDStudio',
-    qq_backup3: 'QQ 备用解析',
-    qq_backup3_parse: 'QQ 备用解析',
-    onrender: 'LXMusic Onrender',
-    lxmusic_signed: 'LXMusic 签名源',
-    oiapi_music163: 'OIAPI 网易',
-    oiapi_kuwo: 'OIAPI 酷我',
-    chksz_163: 'ChKSz 网易',
-    jkapi: 'JKAPI',
-    qqmp3: 'QQMP3 酷我',
+function memberTime(value) {
+    return value ? monitorTime(value) : '—';
+}
+
+function renderAdminMembers(members) {
+    const list = document.getElementById('adminMemberList');
+    if (!list) return;
+    list.innerHTML = members.length ? `<div class="admin-member-table" role="table"><div class="admin-member-table-head" role="row"><span>会员</span><span>Linux DO ID</span><span>注册时间</span><span>最近登录</span><span>会员开通</span><span>到期时间</span></div>${members.map(item => `<article class="admin-member-row" role="row"><div class="admin-member-identity"><strong>${escapeHtml(item.name || item.linuxdo_id)}</strong></div><span class="admin-member-id">${escapeHtml(item.linuxdo_id)}</span><time>${escapeHtml(memberTime(item.registered_at))}</time><time>${escapeHtml(memberTime(item.last_login_at))}</time><time>${escapeHtml(memberTime(item.membership_started_at))}</time><time class="admin-member-expiry">${escapeHtml(memberTime(item.expires_at))}</time></article>`).join('')}</div>` : '<p class="admin-muted admin-members-empty">没有找到有效会员。</p>';
+}
+
+async function loadAdminMembers(keyword = '') {
+    const list = document.getElementById('adminMemberList');
+    const search = document.getElementById('adminMemberSearch');
+    if (!list) return;
+    const query = String(keyword || search?.value || '').trim();
+    list.setAttribute('aria-busy', 'true');
+    try {
+        const data = await getJson(`${APP_API_ROOT}/admin/members${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+        renderAdminMembers(Array.isArray(data.members) ? data.members : []);
+    } catch (error) {
+        list.textContent = error.message || '读取失败';
+    } finally {
+        list.removeAttribute('aria-busy');
+    }
+}
+
+const MONITOR_SOURCE_INFO = {
+    netease: { name: '网易云音乐', detail: '网易云音乐平台接口 · 搜索 / 歌单', endpoint: 'music.163.com' },
+    qq: { name: 'QQ 音乐', detail: 'QQ 音乐平台接口 · 搜索 / 歌单', endpoint: 'y.qq.com' },
+    kuwo: { name: '酷我音乐', detail: '酷我音乐平台接口 · 搜索 / 歌单', endpoint: 'kuwo.cn' },
+    tunehub: { name: 'TuneHub', detail: '主解析服务 · 统一搜索与播放链接解析', endpoint: 'tunehub.sayqz.com' },
+    gdstudio: { name: 'GDStudio', detail: '备用解析服务 · 网易云 / 酷我 / QQ 音乐', endpoint: 'music-api.gdstudio.xyz' },
+    qq_backup3: { name: 'QQ 音乐备用', detail: 'QQ 音乐专用备用 · 搜索与解析', endpoint: 'yutangxiaowu.cn' },
+    qq_backup3_parse: { name: 'QQ 音乐备用', detail: 'QQ 音乐专用备用 · 播放链接解析', endpoint: 'yutangxiaowu.cn' },
+    onrender: { name: 'LXMusic Onrender', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: 'lxmusicapi.onrender.com' },
+    lxmusic_signed: { name: 'LXMusic 签名源', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: '88.lxmusic.xn--fiqs8s' },
+    oiapi_music163: { name: '网易云音乐备用', detail: '网易云音乐专用备用 · 播放链接解析', endpoint: 'oiapi.net' },
+    oiapi_kuwo: { name: '酷我音乐备用', detail: '酷我音乐专用备用 · 播放链接解析', endpoint: 'oiapi.net' },
+    chksz_163: { name: '网易云音乐备用', detail: '网易云音乐专用备用 · 播放链接解析', endpoint: 'api.chksz.com' },
+    jkapi: { name: 'JKAPI', detail: '多平台备用 · 网易云 / QQ 音乐', endpoint: '管理员配置的 JKAPI' },
+    qqmp3: { name: '酷我音乐备用', detail: '酷我音乐专用备用 · 播放链接解析', endpoint: 'qqmp3.cn' },
 };
 
 function monitorSourceLabel(source) {
-    return MONITOR_SOURCE_LABELS[String(source || '')] || String(source || '未知来源');
+    return monitorSourceInfo(source).name;
+}
+
+function monitorSourceInfo(source) {
+    const raw = String(source || '');
+    return MONITOR_SOURCE_INFO[raw] || { name: raw || '未知来源', detail: '内部服务来源', endpoint: raw || '—' };
 }
 
 function monitorPercent(value) {
@@ -3101,7 +3132,7 @@ function renderAdminMonitoring(data) {
         : '<p class="monitoring-empty">暂无成功解析记录。</p>';
 
     document.getElementById('monitoringServiceList').innerHTML = services.length
-        ? services.map(item => `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(monitorSourceLabel(item.source))}</strong><small>${escapeHtml(item.source)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : '尚未记录失败'}</p></article>`).join('')
+        ? services.map(item => { const info = monitorSourceInfo(item.source); return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)} · ${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : `接口标识：${escapeHtml(item.source)}`}</p></article>`; }).join('')
         : '<p class="monitoring-empty">暂无调用记录。</p>';
 }
 
@@ -3380,6 +3411,24 @@ function initHomeInterface() {
     document.getElementById('saveMembershipPriceBtn')?.addEventListener('click', async () => {
         const price = document.getElementById('adminMembershipPrice').value;
         try { await getJson(`${APP_API_ROOT}/admin/settings/membership`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_price: price }) }); showToast('月会员价格已保存', 'success'); await loadAdminPanel(); } catch (error) { showToast(error.message || '保存失败', 'error'); }
+    });
+    document.getElementById('refreshMembersBtn')?.addEventListener('click', () => void loadAdminMembers());
+    document.getElementById('adminMemberSearch')?.addEventListener('search', () => void loadAdminMembers());
+    document.getElementById('adminMemberSearch')?.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); void loadAdminMembers(); }
+    });
+    document.getElementById('grantMembershipForm')?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const target = String(document.getElementById('grantMemberTarget')?.value || '').trim();
+        const days = Number(document.getElementById('grantMemberDays')?.value || 0);
+        const note = String(document.getElementById('grantMemberNote')?.value || '').trim();
+        try {
+            const result = await getJson(`${APP_API_ROOT}/admin/members/grant`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, days, note }) });
+            showToast(`已向 ${result.name || result.linuxdo_id} 赠送 ${result.days} 天会员`, 'success');
+            document.getElementById('grantMembershipForm').reset();
+            document.getElementById('grantMemberDays').value = '30';
+            await loadAdminPanel();
+        } catch (error) { showToast(error.message || '赠送失败', 'error'); }
     });
     document.getElementById('monitoringRange')?.addEventListener('change', () => void loadAdminMonitoring());
     document.getElementById('refreshMonitoringBtn')?.addEventListener('click', () => void loadAdminMonitoring());
