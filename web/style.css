@@ -761,6 +761,8 @@ footer {
     color: var(--app-text);
 }
 
+.auth-body #appContainer { display: none !important; }
+
 .login-shell {
     min-height: 100vh;
     display: flex;

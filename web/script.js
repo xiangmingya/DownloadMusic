@@ -284,6 +284,7 @@ const API_ERROR_CODE_CN = {
     [-2]: '账户积分不足',
     [-1]: '通用错误',
     401: 'API Key 无效或未提供',
+    402: '需要有效会员才能播放或下载',
     403: '账户被封禁或 Key 已禁用',
     404: '请求的资源不存在',
     500: '服务器内部错误'
@@ -294,6 +295,7 @@ const API_ERROR_MESSAGE_CN = {
     'error': '通用错误',
     'insufficient credits': '账户积分不足',
     'unauthorized': 'API Key 无效或未提供',
+    '需要有效的月会员': '需要有效会员才能播放或下载',
     'forbidden': '账户被封禁或 Key 已禁用',
     'not found': '请求的资源不存在',
     'server error': '服务器内部错误'
