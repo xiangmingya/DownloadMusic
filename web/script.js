@@ -3004,6 +3004,19 @@ function setAppView(view) {
     if (valid === 'admin' && APP_CONTEXT.isAdmin) void loadAdminPanel();
 }
 
+function setAdminTab(tabName) {
+    const active = tabName === 'monitoring' ? 'monitoring' : 'members';
+    document.querySelectorAll('[data-admin-tab]').forEach(button => {
+        const selected = button.getAttribute('data-admin-tab') === active;
+        button.classList.toggle('is-active', selected);
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+    });
+    document.querySelectorAll('[data-admin-tab-panel]').forEach(panel => {
+        panel.hidden = panel.getAttribute('data-admin-tab-panel') !== active;
+    });
+}
+
 async function getJson(url, init = {}) {
     const response = await apiFetch(url, { ...init, timeoutMs: 15000 });
     const payload = await response.json().catch(() => ({}));
@@ -3485,6 +3498,9 @@ function initHomeInterface() {
         }
     });
     document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
+    document.querySelectorAll('[data-admin-tab]').forEach(button => {
+        button.addEventListener('click', () => setAdminTab(button.getAttribute('data-admin-tab')));
+    });
     document.getElementById('saveMembershipPriceBtn')?.addEventListener('click', async () => {
         const price = document.getElementById('adminMembershipPrice').value;
         try { await getJson(`${APP_API_ROOT}/admin/settings/membership`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_price: price }) }); showToast('月会员价格已保存', 'success'); await loadAdminPanel(); } catch (error) { showToast(error.message || '保存失败', 'error'); }
