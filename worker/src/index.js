@@ -886,11 +886,17 @@ function pickLinuxdoUserId(payload) {
 }
 
 function pickLinuxdoName(payload, fallbackId) {
-  for (const key of ["username", "name", "login", "nickname"]) {
-    const value = String(payload?.[key] ?? "").trim();
-    if (value) return value;
+  let idLikeName = "";
+  const profiles = [payload, payload?.user].filter((value) => value && typeof value === "object");
+  for (const profile of profiles) {
+    for (const key of ["name", "nickname", "username", "login"]) {
+      const value = String(profile?.[key] ?? "").trim();
+      if (!value) continue;
+      if (value !== String(fallbackId)) return value;
+      idLikeName = value;
+    }
   }
-  return `linuxdo_${fallbackId}`;
+  return idLikeName || `linuxdo_${fallbackId}`;
 }
 
 function pickLinuxdoAvatar(payload) {
