@@ -85,6 +85,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoStatus(env));
     }
+    if (url.pathname === "/api/public/service-status" && request.method === "GET") {
+      return withCors(request, env, await handlePublicServiceStatus(env));
+    }
     if (url.pathname === "/api/membership" && request.method === "GET") {
       return withCors(request, env, await handleMembership(request, env));
     }
@@ -988,6 +991,39 @@ async function handleAdminOverview(request, env) {
   } });
 }
 
+function publicPlatformHealth(row, now) {
+  const requests = Number(row?.requests || 0);
+  const successes = Number(row?.successes || 0);
+  const failures = Number(row?.failures || 0);
+  const lastUpdatedAt = row?.last_updated_at || null;
+  if (!requests) return { state: "unknown", label: "检测中", last_updated_at: lastUpdatedAt };
+  if (!successes) return { state: "down", label: "维护中", last_updated_at: lastUpdatedAt };
+  const successRate = successes / requests;
+  const stale = lastUpdatedAt && (now - Date.parse(lastUpdatedAt)) > 6 * 60 * 60 * 1000;
+  if (stale || failures > 0 || successRate < 0.8) return { state: "unstable", label: "波动", last_updated_at: lastUpdatedAt };
+  return { state: "healthy", label: "正常", last_updated_at: lastUpdatedAt };
+}
+
+async function handlePublicServiceStatus(env) {
+  const db = getDatabase(env);
+  const generatedAt = sqlNow();
+  const platforms = ["netease", "qq", "kuwo"];
+  if (!db) return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall: "unknown", overall_label: "检测中", platforms: platforms.map((platform) => ({ platform, state: "unknown", label: "检测中", last_updated_at: null })) } }, { "Cache-Control": "no-store" });
+
+  try {
+    const since = metricHour(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'platform_parse' GROUP BY source").bind(since).all();
+    const rows = new Map((result.results || []).map((row) => [String(row.source || ""), row]));
+    const platformStates = platforms.map((platform) => ({ platform, ...publicPlatformHealth(rows.get(`platform_${platform}`), Date.now()) }));
+    const states = platformStates.map((item) => item.state);
+    const overall = states.every((state) => state === "healthy") ? "healthy" : states.every((state) => state === "down") ? "down" : states.some((state) => state === "down") ? "unstable" : states.some((state) => state === "unstable") ? "unstable" : "unknown";
+    const overallLabel = overall === "healthy" ? "正常运行" : overall === "down" ? "服务维护中" : overall === "unstable" ? "部分服务波动" : "检测中";
+    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall, overall_label: overallLabel, platforms: platformStates } }, { "Cache-Control": "no-store" });
+  } catch {
+    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall: "unknown", overall_label: "检测中", platforms: platforms.map((platform) => ({ platform, state: "unknown", label: "检测中", last_updated_at: null })) } }, { "Cache-Control": "no-store" });
+  }
+}
+
 async function handleAdminMembershipSettings(request, env) {
   const auth = await requireAdminSession(request, env);
   if (!auth.ok) return auth.response;
@@ -1065,9 +1101,9 @@ async function handleAdminMonitoring(request, env) {
   const trendCutoff = metricHour(now - 24 * 60 * 60 * 1000);
   try {
     const [summaryResult, latestResult, trendResult, finalResult] = await Promise.all([
-      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, SUM(total_duration_ms) AS total_duration_ms, MAX(last_success_at) AS last_success_at, MAX(last_failure_at) AS last_failure_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' GROUP BY source ORDER BY requests DESC, source ASC").bind(cutoff).all(),
-      db.prepare("SELECT source, last_status, last_error, bucket_hour FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' ORDER BY bucket_hour DESC").bind(cutoff).all(),
-      db.prepare("SELECT bucket_hour, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation != 'final_parse' GROUP BY bucket_hour ORDER BY bucket_hour ASC").bind(trendCutoff).all(),
+      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, SUM(total_duration_ms) AS total_duration_ms, MAX(last_success_at) AS last_success_at, MAX(last_failure_at) AS last_failure_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') GROUP BY source ORDER BY requests DESC, source ASC").bind(cutoff).all(),
+      db.prepare("SELECT source, last_status, last_error, bucket_hour FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') ORDER BY bucket_hour DESC").bind(cutoff).all(),
+      db.prepare("SELECT bucket_hour, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') GROUP BY bucket_hour ORDER BY bucket_hour ASC").bind(trendCutoff).all(),
       db.prepare("SELECT source, SUM(successes) AS hits FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'final_parse' GROUP BY source ORDER BY hits DESC, source ASC").bind(cutoff).all(),
     ]);
     const latestBySource = new Map();
@@ -2835,6 +2871,7 @@ async function handleBackup4(request, env) {
       const result = await runner.run(platform, id, quality, name, artist);
       if (result?.url) {
         await recordServiceMetric(env, { source: runner.source, operation: "parse", success: true, status: 200, durationMs: Date.now() - startedAt });
+        await recordServiceMetric(env, { source: `platform_${platform}`, operation: "platform_parse", success: true, status: 200, durationMs: Date.now() - startedAt });
         await recordFinalParseHit(env, result.provider || runner.source, Date.now() - startedAt);
         return jsonResponse(200, {
           code: 0,
@@ -2857,6 +2894,8 @@ async function handleBackup4(request, env) {
       errors.push(message);
     }
   }
+
+  await recordServiceMetric(env, { source: `platform_${platform}`, operation: "platform_parse", success: false, status: 502, durationMs: 0, error: "所有解析接口均未返回可播放链接" });
 
   return jsonResponse(502, {
     code: -1,
