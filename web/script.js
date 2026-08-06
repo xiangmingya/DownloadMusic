@@ -555,6 +555,8 @@ function toSongFromParsedItem(platform, item) {
 }
 
 async function ensureParsedSong(platform, id, quality) {
+    // TuneHub has been retired; playback goes straight to the managed resolver chain.
+    throw new Error('主解析服务未启用');
     const cacheKey = parsedCacheKey(platform, id, quality);
     if (parseCache.has(cacheKey)) {
         return parseCache.get(cacheKey);
@@ -3102,7 +3104,6 @@ const MONITOR_SOURCE_INFO = {
     netease: { name: '网易云音乐', detail: '网易云音乐平台接口 · 搜索 / 歌单', endpoint: 'music.163.com' },
     qq: { name: 'QQ 音乐', detail: 'QQ 音乐平台接口 · 搜索 / 歌单', endpoint: 'y.qq.com' },
     kuwo: { name: '酷我音乐', detail: '酷我音乐平台接口 · 搜索 / 歌单', endpoint: 'kuwo.cn' },
-    tunehub: { name: 'TuneHub', detail: '主解析服务 · 统一搜索与播放链接解析', endpoint: 'tunehub.sayqz.com' },
     gdstudio: { name: 'GDStudio', detail: '备用解析服务 · 网易云 / 酷我 / QQ 音乐', endpoint: 'music-api.gdstudio.xyz' },
     qq_backup3: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 搜索与解析', endpoint: 'yutangxiaowu.cn' },
     qq_backup3_parse: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 播放链接解析', endpoint: 'yutangxiaowu.cn' },

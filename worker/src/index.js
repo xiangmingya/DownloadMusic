@@ -9,7 +9,7 @@ const BACKUP_ALLOWED_PARAMS = new Set(["types", "source", "id", "name", "count",
 const BACKUP_ALLOWED_SOURCES = new Set(["netease", "kuwo", "tencent", "netease_album", "kuwo_album", "tencent_album"]);
 const BACKUP_TIMEOUT_MS = 18000;
 const QQ_BACKUP3_SEARCH_URL = "https://yutangxiaowu.cn:3015/api/qmusic/search";
-const QQ_BACKUP3_PARSE_URL = "https://yutangxiaowu.cn:3015/api/parseqmusic";
+const QQ_BACKUP3_PARSE_URL = "https://api.yutangxiaowu.cn/api/v1/qqmusic/music";
 const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
 const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
@@ -36,7 +36,6 @@ const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MONITORING_SERVICE_CATALOG = [
-  { source: "tunehub", category: "resolve", order: 10 },
   { source: "gdstudio", category: "resolve", order: 20 },
   { source: "onrender", category: "resolve", order: 30 },
   { source: "lxmusic_signed", category: "resolve", order: 40 },
@@ -2504,7 +2503,7 @@ async function backup4TryQqBackup3(platform, id) {
   if (platform !== "qq") return null;
 
   const result = await callQqBackup3ParseBySongmid(id, 6000);
-  const url = normalizeMediaUrl(result?.parsed?.url || "");
+  const url = normalizeMediaUrl(result?.parsed?.url?.url || result?.parsed?.url || "");
   if (result?.response?.ok && result?.parsed?.success && url) {
     return { url, provider: "qq_backup3_parse" };
   }
@@ -2656,7 +2655,7 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "onrender", run: backup4TryOnrender },
       { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
-      { source: "chksz_qq", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
+      { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
     ];
