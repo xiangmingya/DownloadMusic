@@ -31,8 +31,8 @@ const KUWO_TOPLIST_ENDPOINTS = [
   "https://bb.qqmp3.vip/api/songs.php",
 ];
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
-// ChKSz 提供公开网易云接口；仅作为已有网易云备用链路的最后一层。
-const BACKUP4_CHKSZ_API_URL = "https://api.chksz.top/api";
+// ChKSz 网易云接口；密钥只从 Worker Secret 读取。
+const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MONITORING_SERVICE_CATALOG = [
@@ -2400,12 +2400,15 @@ async function backup4TryOiapiMusic163(platform, id) {
   throw new Error(String(parsed?.message || `oiapi music163 failed (${response.status})`));
 }
 
-async function backup4TryChkszMusic163(platform, id, quality) {
+async function backup4TryChkszMusic163(platform, id, quality, env) {
   if (platform !== "netease") return null;
+  const apiKey = String(env.CHKSZ_API_KEY || "").trim();
+  if (!apiKey) return null;
 
   const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_music`);
   endpoint.searchParams.set("id", id);
   endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
+  endpoint.searchParams.set("apikey", apiKey);
 
   const response = await backup4Json(endpoint.toString());
   const parsed = response.json;
@@ -2556,13 +2559,16 @@ async function backup4SearchViaGdstudio(platform, keyword, page, limit) {
   throw new Error(String(parsed?.detail || parsed?.message || `gdstudio search failed (${response.status})`));
 }
 
-async function backup4SearchViaChkszMusic163(platform, keyword, page, limit) {
+async function backup4SearchViaChkszMusic163(platform, keyword, page, limit, env) {
   if (platform !== "netease") return null;
+  const apiKey = String(env.CHKSZ_API_KEY || "").trim();
+  if (!apiKey) return null;
 
   const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_search`);
   endpoint.searchParams.set("keyword", keyword);
   endpoint.searchParams.set("limit", String(limit));
   endpoint.searchParams.set("offset", String(Math.max(0, (page - 1) * limit)));
+  endpoint.searchParams.set("apikey", apiKey);
 
   const response = await backup4Json(endpoint.toString());
   const parsed = response.json;
@@ -2616,7 +2622,7 @@ function getBackup4SearchChain(platform) {
     return [
       { source: "gdstudio", run: (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit) },
       { source: "netease", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
-      { source: "chksz_163", run: (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit) },
+      { source: "chksz_163", run: (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit, env) },
     ];
   }
   return [
@@ -2650,6 +2656,7 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "onrender", run: backup4TryOnrender },
       { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
+      { source: "chksz_qq", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
     ];
@@ -2661,7 +2668,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "lxmusic_signed", run: backup4TryLxmusicSigned },
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
-      { source: "chksz_163", run: backup4TryChkszMusic163 },
+      { source: "chksz_163", run: (p, id, quality) => backup4TryChkszMusic163(p, id, quality, env) },
     ];
   }
   if (platform === "kuwo") {
@@ -2838,6 +2845,21 @@ function getMediaAllowedHosts(env) {
   return [...splitCsvValues(env.MEDIA_PROXY_ALLOWED_HOSTS || ""), ".y.gtimg.cn"]
     .map((item) => item.toLowerCase())
     .filter(Boolean);
+}
+
+async function backup4TryChkszQq(platform, id, quality, name, artist, env) {
+  if (platform !== "qq") return null;
+  const apiKey = String(env.CHKSZ_API_KEY || "").trim();
+  if (!apiKey) return null;
+  const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/qq_music`);
+  endpoint.searchParams.set("mid", id);
+  endpoint.searchParams.set("type", "json");
+  endpoint.searchParams.set("apikey", apiKey);
+  const response = await backup4Json(endpoint.toString());
+  const parsed = response.json;
+  const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
+  if (response.ok && url) return { url, provider: "chksz_qq" };
+  throw new Error(String(parsed?.msg || parsed?.message || `chksz qq failed (${response.status})`));
 }
 
 function hostMatchesRule(hostname, rule) {

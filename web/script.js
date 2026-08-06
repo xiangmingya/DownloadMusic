@@ -3110,7 +3110,8 @@ const MONITOR_SOURCE_INFO = {
     lxmusic_signed: { name: 'LXMusic 签名源', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: '88.lxmusic.xn--fiqs8s' },
     oiapi_music163: { name: 'OIAPI 网易云接口', detail: '网易云音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
     oiapi_kuwo: { name: 'OIAPI 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
-    chksz_163: { name: 'CHKSZ 网易云接口', detail: '网易云音乐专用接口 · 播放链接解析', endpoint: 'api.chksz.com' },
+    chksz_163: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
+    chksz_qq: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
     jkapi: { name: 'JKAPI', detail: '多平台备用 · 网易云 / QQ 音乐', endpoint: '管理员配置的 JKAPI' },
     qqmp3: { name: 'QQMP3 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'qqmp3.cn' },
 };
