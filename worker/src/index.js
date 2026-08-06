@@ -2618,7 +2618,7 @@ function getBackup4SearchChain(platform) {
 
 async function backup4Search(platform, keyword, page, limit, env) {
   const errors = [];
-  const chain = getBackup4SearchChain(platform);
+  const chain = await prioritizeBackupChain(env, getBackup4SearchChain(platform), "search", `${platform}:${keyword}:${page}`);
   for (const runner of chain) {
     const startedAt = Date.now();
     try {
@@ -2665,6 +2665,61 @@ function getBackup4ProviderChain(platform, env) {
     ];
   }
   return [];
+}
+
+function backup4RoutingHash(value) {
+  let hash = 0;
+  for (const char of String(value || "")) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+// Use the last 24 hours of real service metrics to keep unreliable providers
+// at the end of the fallback chain and distribute traffic across healthy ones.
+async function prioritizeBackupChain(env, chain, operation, routingKey) {
+  if (!Array.isArray(chain) || chain.length < 2) return chain;
+  const db = getDatabase(env);
+  if (!db) return chain;
+
+  const sources = [...new Set(chain.map((item) => item.source).filter(Boolean))];
+  if (!sources.length) return chain;
+  const placeholders = sources.map(() => "?").join(", ");
+  const since = metricHour(Date.now() - 24 * 60 * 60 * 1000);
+  try {
+    const result = await db.prepare(
+      `SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(total_duration_ms) AS total_duration_ms
+       FROM service_metrics_hourly
+       WHERE operation = ? AND bucket_hour >= ? AND source IN (${placeholders})
+       GROUP BY source`,
+    ).bind(operation, since, ...sources).all();
+    const metrics = new Map((result.results || []).map((row) => [String(row.source), {
+      requests: Number(row.requests || 0),
+      successes: Number(row.successes || 0),
+      totalDurationMs: Number(row.total_duration_ms || 0),
+    }]));
+    const ranked = chain.map((runner, index) => {
+      const metric = metrics.get(runner.source) || { requests: 0, successes: 0, totalDurationMs: 0 };
+      const successRate = metric.requests ? metric.successes / metric.requests : null;
+      // Healthy sources receive traffic first. Unknown sources are sampled before
+      // known-bad sources so a recovered service can rejoin the pool.
+      const tier = metric.requests < 3 ? 1 : successRate < 0.5 ? 4 : successRate < 0.85 ? 3 : 0;
+      const averageDuration = metric.requests ? metric.totalDurationMs / metric.requests : 0;
+      return { runner, index, tier, averageDuration };
+    }).sort((a, b) => a.tier - b.tier || a.averageDuration - b.averageDuration || a.index - b.index);
+
+    const healthy = ranked.filter((item) => item.tier === 0);
+    if (healthy.length > 1) {
+      const offset = backup4RoutingHash(routingKey) % healthy.length;
+      const distributed = [...healthy.slice(offset), ...healthy.slice(0, offset)];
+      const rest = ranked.filter((item) => item.tier !== 0);
+      return [...distributed, ...rest].map((item) => item.runner);
+    }
+    return ranked.map((item) => item.runner);
+  } catch (error) {
+    // Metrics must not block music parsing when D1 is temporarily unavailable.
+    return chain;
+  }
 }
 
 async function handleBackup4(request, env) {
@@ -2718,7 +2773,7 @@ async function handleBackup4(request, env) {
   }
 
   const errors = [];
-  const chain = getBackup4ProviderChain(platform, env);
+  const chain = await prioritizeBackupChain(env, getBackup4ProviderChain(platform, env), "parse", `${platform}:${id}:${quality}`);
   for (const runner of chain) {
     const startedAt = Date.now();
     try {
