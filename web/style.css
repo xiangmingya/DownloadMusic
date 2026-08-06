@@ -677,13 +677,7 @@ footer {
     color: var(--app-muted);
 }
 
-.online {
-    color: #4caf50;
-}
-
-.offline {
-    color: #f44336;
-}
+.online, .status-healthy { color: #4caf50; }.offline, .status-down { color: #ff879a; }.status-unstable { color: #ffd17b; }.status-unknown { color: #b5b0dc; }.footer-platform-status { font-weight: 650; }.status i { margin: 0 7px; color: var(--app-muted); font-style: normal; }.status small { margin-left: 10px; color: var(--app-muted); font-size: 11px; letter-spacing: 0; }
 
 .empty-state {
     text-align: center;

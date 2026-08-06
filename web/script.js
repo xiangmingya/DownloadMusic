@@ -10,6 +10,7 @@ const API_ROUTES = {
     backup: `${API_BASE}/backup`,
     backup3: `${API_BASE}/backup3`,
     backup4: `${API_BASE}/backup4`,
+    publicStatus: `${APP_API_ROOT}/public/service-status`,
     toplists: `${API_BASE}/toplists`,
     toplist: `${API_BASE}/toplist`,
     playlists: `${API_BASE}/playlists`
@@ -3004,6 +3005,45 @@ function setAppView(view) {
     if (valid === 'admin' && APP_CONTEXT.isAdmin) void loadAdminPanel();
 }
 
+function footerStatusLabel(state) {
+    return ({ healthy: '正常', unstable: '波动', down: '维护中', unknown: '检测中' })[String(state || '')] || '检测中';
+}
+
+function footerStatusClass(state) {
+    return ({ healthy: 'status-healthy', unstable: 'status-unstable', down: 'status-down', unknown: 'status-unknown' })[String(state || '')] || 'status-unknown';
+}
+
+function formatStatusUpdatedAt(value) {
+    const time = Date.parse(value || '');
+    if (!Number.isFinite(time)) return '实时检测中';
+    const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
+    return minutes < 1 ? '刚刚更新' : `最后更新 ${minutes} 分钟前`;
+}
+
+async function loadPublicServiceStatus() {
+    const serviceStatus = document.getElementById('serviceStatus');
+    const healthStatus = document.getElementById('healthStatus');
+    if (!serviceStatus || !healthStatus) return;
+    try {
+        const response = await fetch(API_ROUTES.publicStatus, { credentials: 'omit', cache: 'no-store' });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0 || !payload?.data) throw new Error('status unavailable');
+        const data = payload.data;
+        const platforms = Array.isArray(data.platforms) ? data.platforms : [];
+        const latest = platforms.map(item => item.last_updated_at).filter(Boolean).sort().at(-1) || data.generated_at;
+        serviceStatus.innerHTML = `服务状态：<span class="${footerStatusClass(data.overall)}">${escapeHtml(data.overall_label || footerStatusLabel(data.overall))}</span>`;
+        healthStatus.innerHTML = `${platforms.map(item => `<span class="footer-platform-status ${footerStatusClass(item.state)}">${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)} ${escapeHtml(item.label || footerStatusLabel(item.state))}</span>`).join('<i aria-hidden="true">·</i>')}<small>实时检测 · ${escapeHtml(formatStatusUpdatedAt(latest))}</small>`;
+    } catch {
+        serviceStatus.innerHTML = '服务状态：<span class="status-unknown">检测暂不可用</span>';
+        healthStatus.innerHTML = '<small>实时检测将在网络恢复后更新</small>';
+    }
+}
+
+async function refreshServiceStatus() {
+    await checkStatus();
+    await loadPublicServiceStatus();
+}
+
 function setAdminTab(tabName) {
     const active = tabName === 'monitoring' ? 'monitoring' : 'members';
     document.querySelectorAll('[data-admin-tab]').forEach(button => {
@@ -4683,5 +4723,5 @@ updateFullPlayerProgress();
 updateFullPlayerControlState();
 updatePlayModeButtonState();
 updateBrowserFullscreenButtonState();
-checkStatus();
-setInterval(checkStatus, 60000);
+refreshServiceStatus();
+setInterval(refreshServiceStatus, 60000);
