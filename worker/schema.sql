@@ -24,6 +24,32 @@ CREATE TABLE IF NOT EXISTS memberships (
 
 CREATE INDEX IF NOT EXISTS idx_memberships_expires_at ON memberships (expires_at);
 
+-- Linux DO 用户档案用于管理员会员列表。注册和最近登录由 OAuth 登录时更新；
+-- 不保存 OAuth token、邮箱或任何敏感信息。
+CREATE TABLE IF NOT EXISTS member_profiles (
+  linuxdo_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  avatar TEXT,
+  registered_at TEXT NOT NULL,
+  last_login_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_member_profiles_name ON member_profiles (name);
+
+-- 赠送和购买的开通记录。旧会员没有历史记录时，后台会使用 memberships.updated_at 作为兼容显示。
+CREATE TABLE IF NOT EXISTS membership_grants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  linuxdo_id TEXT NOT NULL,
+  days INTEGER NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('purchase', 'admin_gift')),
+  granted_by TEXT,
+  granted_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_membership_grants_member ON membership_grants (linuxdo_id, granted_at DESC);
+
 CREATE TABLE IF NOT EXISTS billing_orders (
   out_trade_no TEXT PRIMARY KEY,
   linuxdo_id TEXT NOT NULL,

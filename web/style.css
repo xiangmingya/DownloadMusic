@@ -1830,6 +1830,32 @@ button.user-chip:hover, button.user-chip[aria-expanded="true"] { color: var(--ap
 .membership-logout-btn:hover, .membership-logout-btn:focus-visible { border-color: rgba(255,133,151,.7); background: rgba(196,73,95,.18); color: #fff2f4; }
 @media (max-width: 600px) { .membership-popover { right: 0; width: min(340px, calc(100vw - 24px)); } }
 
+/* 管理员会员列表：以表格承载大量会员，窄屏自动转为信息卡。 */
+.admin-members-card { margin-top: 18px; }
+.admin-members-heading { align-items: flex-start; }
+.admin-members-heading h2 { margin: 3px 0 0; }
+.admin-members-heading .admin-muted { max-width: 720px; margin: 8px 0 0; }
+.admin-member-toolbar { display: flex; gap: 8px; }
+.admin-member-toolbar input, .grant-membership-form input { min-height: 42px; padding: 0 12px; border: 1px solid var(--app-line); border-radius: 11px; outline: none; background: rgba(8, 8, 28, .55); color: var(--app-text); font: inherit; }
+.admin-member-toolbar input { width: min(270px, 42vw); }
+.admin-member-toolbar input:focus, .grant-membership-form input:focus { border-color: rgba(151, 143, 255, .8); }
+.grant-membership-form { display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(130px, .5fr) minmax(180px, 1fr) auto; align-items: end; gap: 12px; margin: 20px 0 16px; padding: 15px; border: 1px solid rgba(151, 143, 255, .18); border-radius: 14px; background: rgba(8, 8, 28, .28); }
+.grant-membership-form label { display: grid; gap: 6px; min-width: 0; color: var(--app-muted); font-size: 12px; }
+.grant-membership-form button { min-height: 42px; padding: 0 16px; border: 0; border-radius: 11px; background: var(--app-accent); color: #082013; font: inherit; font-weight: 800; cursor: pointer; }
+.admin-member-list { overflow-x: auto; }
+.admin-member-table { min-width: 960px; border: 1px solid rgba(151, 143, 255, .18); border-radius: 14px; overflow: hidden; }
+.admin-member-table-head, .admin-member-row { display: grid; grid-template-columns: minmax(128px, 1.15fr) minmax(116px, .85fr) minmax(145px, 1fr) minmax(145px, 1fr) minmax(145px, 1fr) minmax(145px, 1fr); align-items: center; column-gap: 12px; }
+.admin-member-table-head { min-height: 43px; padding: 0 14px; background: rgba(111, 99, 255, .13); color: var(--app-muted); font-size: 11px; font-weight: 750; }
+.admin-member-row { min-height: 62px; padding: 10px 14px; border-top: 1px solid rgba(151, 143, 255, .13); background: rgba(255, 255, 255, .018); }
+.admin-member-row:hover { background: rgba(111, 99, 255, .07); }
+.admin-member-row strong, .admin-member-row span, .admin-member-row time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-member-identity strong { color: var(--app-text); font-size: 13px; }
+.admin-member-id, .admin-member-row time { color: var(--app-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-member-expiry { color: #bdf3cd !important; font-weight: 700; }
+.admin-members-empty { padding: 28px 0; text-align: center; }
+@media (max-width: 900px) { .grant-membership-form { grid-template-columns: 1fr 1fr; }.grant-note-field { grid-column: 1 / -1; }.grant-membership-form button { justify-self: start; }.admin-members-heading { flex-direction: column; gap: 14px; }.admin-member-toolbar { width: 100%; }.admin-member-toolbar input { flex: 1; width: auto; } }
+@media (max-width: 600px) { .grant-membership-form { grid-template-columns: 1fr; }.grant-note-field { grid-column: auto; }.grant-membership-form button { width: 100%; }.admin-member-table { min-width: 860px; }.admin-member-toolbar { flex-direction: column; }.admin-member-toolbar .secondary-quiet-btn { width: 100%; } }
+
 /* Keep full history available without letting the library page grow indefinitely. */
 .library-grid { align-items: start; }
 #recentList { max-height: 426px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }
