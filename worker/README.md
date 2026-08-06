@@ -79,7 +79,7 @@ wrangler d1 create downloadmusic-auth
 wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 ```
 
-升级到会员管理增强版时，也需要再执行一次上述命令：它会新增 `member_profiles` 和 `membership_grants` 两张表，用于显示昵称、注册时间、最近登录、会员开通时间，并记录管理员赠送会员。已有会员不会丢失；历史会员的开通时间会兼容显示为原有更新时间。
+升级到会员管理增强版时，也需要再执行一次上述命令：它会新增 `membership_grants` 表，并复用已有的 `linuxdo_users` 表显示昵称、注册时间、最近登录和会员开通时间。已有会员不会丢失；历史会员的开通时间会兼容显示为原有更新时间。
 
 密码登录统一使用一个家庭资料库；Linux DO 登录按每个 Linux DO 账号独立保存。
 

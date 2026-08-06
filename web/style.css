@@ -1856,6 +1856,13 @@ button.user-chip:hover, button.user-chip[aria-expanded="true"] { color: var(--ap
 @media (max-width: 900px) { .grant-membership-form { grid-template-columns: 1fr 1fr; }.grant-note-field { grid-column: 1 / -1; }.grant-membership-form button { justify-self: start; }.admin-members-heading { flex-direction: column; gap: 14px; }.admin-member-toolbar { width: 100%; }.admin-member-toolbar input { flex: 1; width: auto; } }
 @media (max-width: 600px) { .grant-membership-form { grid-template-columns: 1fr; }.grant-note-field { grid-column: auto; }.grant-membership-form button { width: 100%; }.admin-member-table { min-width: 860px; }.admin-member-toolbar { flex-direction: column; }.admin-member-toolbar .secondary-quiet-btn { width: 100%; } }
 
+.monitoring-service-group + .monitoring-service-group { margin-top: 22px; }
+.monitoring-service-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 20px 2px 9px; }
+.monitoring-service-group-heading strong { color: var(--app-text); font-size: 14px; }
+.monitoring-service-group-heading span { color: var(--app-muted); font-size: 12px; }
+.monitoring-service-group .monitoring-service-row + .monitoring-service-row { margin-top: 9px; }
+@media (max-width: 600px) { .monitoring-service-group-heading { align-items: flex-start; flex-direction: column; gap: 2px; } }
+
 /* Keep full history available without letting the library page grow indefinitely. */
 .library-grid { align-items: start; }
 #recentList { max-height: 426px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }
