@@ -3112,7 +3112,7 @@ const MONITOR_SOURCE_INFO = {
     oiapi_kuwo: { name: 'OIAPI 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
     chksz_163: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
     chksz_qq: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
-    jkapi: { name: 'JKAPI', detail: '多平台备用 · 网易云 / QQ 音乐', endpoint: '管理员配置的 JKAPI' },
+    jkapi: { name: 'JKAPI 音乐接口', detail: '网易云 / QQ 音乐接口 · 播放链接解析', endpoint: 'jkapi.com/api/music' },
     qqmp3: { name: 'QQMP3 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'qqmp3.cn' },
 };
 
@@ -3149,7 +3149,22 @@ function monitorTime(value) {
 }
 
 function renderAdminMonitoring(data) {
-    const services = Array.isArray(data?.services) ? data.services : [];
+    const rawServices = Array.isArray(data?.services) ? data.services : [];
+    const mergedServices = new Map();
+    rawServices.forEach(item => {
+        const source = item.source === 'chksz_qq' ? 'chksz_163' : item.source;
+        const previous = mergedServices.get(source);
+        if (!previous) {
+            mergedServices.set(source, { ...item, source, category: source === 'chksz_163' ? 'resolve' : item.category });
+            return;
+        }
+        const requests = Number(previous.requests || 0) + Number(item.requests || 0);
+        const successes = Number(previous.successes || 0) + Number(item.successes || 0);
+        const failures = Number(previous.failures || 0) + Number(item.failures || 0);
+        const duration = Number(previous.average_duration_ms || 0) * Number(previous.requests || 0) + Number(item.average_duration_ms || 0) * Number(item.requests || 0);
+        mergedServices.set(source, { ...previous, requests, successes, failures, success_rate: requests ? successes / requests : null, average_duration_ms: requests ? Math.round(duration / requests) : 0, last_failure_at: item.last_failure_at || previous.last_failure_at, last_error: item.last_error || previous.last_error });
+    });
+    const services = [...mergedServices.values()];
     const finalSources = Array.isArray(data?.final_sources) ? data.final_sources : [];
     const trend = Array.isArray(data?.trend) ? data.trend : [];
     const totalRequests = services.reduce((total, item) => total + Number(item.requests || 0), 0);
