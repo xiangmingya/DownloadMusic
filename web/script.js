@@ -2099,10 +2099,7 @@ function renderLocalPage() {
     const totalPages = Math.ceil(allSongs.length / pageSize);
 
     const resultsDiv = document.getElementById('results');
-    const batchActions = allSongs.length > 1
-        ? `<div class="results-batch-actions"><button class="primary-btn" type="button" onclick="playAllResultSongs()">${getIconSvg('play', 17)} 全部播放（${allSongs.length} 首）</button></div>`
-        : '';
-    resultsDiv.innerHTML = batchActions + pageSongs.map((song, index) => {
+    resultsDiv.innerHTML = pageSongs.map((song, index) => {
         const globalIndex = start + index;
         const platform = song.platform || song.source;
         const displayName = escapeHtml(song.name);
@@ -3280,12 +3277,12 @@ function resetSearchViewMode() {
     const title = document.getElementById('searchViewTitle');
     const description = document.getElementById('searchViewDescription');
     const searchSection = document.querySelector('#searchView .search-section');
-    const backButton = document.getElementById('backToToplistsBtn');
+    const toplistActions = document.getElementById('toplistActions');
     if (heading) heading.textContent = '探索';
     if (title) title.textContent = '找到想听的声音';
     if (description) description.textContent = '支持歌曲、歌单与 ID 解析。';
     if (searchSection) searchSection.style.display = '';
-    if (backButton) backButton.style.display = 'none';
+    if (toplistActions) toplistActions.innerHTML = '';
 }
 
 async function openToplistSongs(platform, id, name, options = {}) {
@@ -3293,12 +3290,12 @@ async function openToplistSongs(platform, id, name, options = {}) {
     const title = document.getElementById('searchViewTitle');
     const description = document.getElementById('searchViewDescription');
     const searchSection = document.querySelector('#searchView .search-section');
-    const backButton = document.getElementById('backToToplistsBtn');
+    const toplistActions = document.getElementById('toplistActions');
     if (heading) heading.textContent = platformDisplayName(platform);
     if (title) title.textContent = name || '榜单歌曲';
     if (description) description.textContent = '直接播放、收藏或加入你的歌单。';
     if (searchSection) searchSection.style.display = 'none';
-    if (backButton) backButton.style.display = '';
+    if (toplistActions) toplistActions.innerHTML = '';
     setAppView('search');
     const results = document.getElementById('results');
     results.innerHTML = '<div class="empty-state">正在加载内容…</div>';
@@ -3318,6 +3315,9 @@ async function openToplistSongs(platform, id, name, options = {}) {
         }
         if (!Array.isArray(songs) || songs.length === 0) throw new Error('这里暂时没有可播放歌曲');
         displaySongsWithPagination(songs);
+        if (toplistActions && songs.length > 1) {
+            toplistActions.innerHTML = `<button class="toplist-play-all-btn" type="button" onclick="playAllResultSongs()">${getIconSvg('play', 17)} 全部播放（${songs.length} 首）</button>`;
+        }
     } catch (error) {
         results.innerHTML = `<div class="empty-state">${escapeHtml(localizeErrorMessage(error?.message, '内容加载失败'))}</div>`;
     }
@@ -3522,7 +3522,6 @@ function initHomeInterface() {
         sessionStorage.setItem('downloadmusic_home_toplist_rotation', String(homeToplistRotation));
         renderHomeToplistCards();
     });
-    document.getElementById('backToToplistsBtn')?.addEventListener('click', () => setAppView('home'));
     document.getElementById('homeNowPlayingOpen')?.addEventListener('click', () => {
         if (currentPlayingSong) setFullPlayerOpen(true);
         else if (playlistSongs.length > 0) playSongFromPlaylist(0);
