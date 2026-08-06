@@ -71,6 +71,10 @@ let activePlayRequestId = 0;
 let currentPlayingSong = null;
 let currentPlaylistIndex = -1;
 const audio = document.getElementById('audio');
+let nextTrackPreloadTimer = 0;
+let nextTrackPreloadToken = 0;
+let nextTrackPreloadKey = '';
+let nextTrackPreloadAudio = null;
 
 // 缓存
 const parseCache = new Map();
@@ -625,6 +629,78 @@ async function resolveBackup4Parsed(platform, id, quality, options = {}) {
     };
     cacheParsedItem(normalizedPlatform, quality, parsedItem);
     return parsedItem;
+}
+
+function nextTrackForPreload() {
+    if (currentPlayMode !== 'list') return null;
+    const currentIndex = resolveCurrentPlaylistIndex();
+    const nextIndex = currentIndex + 1;
+    if (currentIndex < 0 || nextIndex >= playlistSongs.length) return null;
+    return playlistSongs[nextIndex] || null;
+}
+
+function shouldPreloadNextTrack() {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (connection?.saveData) return false;
+    return !['slow-2g', '2g'].includes(String(connection?.effectiveType || ''));
+}
+
+async function resolvePreloadMediaUrl(song, quality) {
+    const item = await resolveLookupOnlySong(song);
+    const source = String(item?.platform || item?.source || '');
+    const id = String(item?.id || '');
+    if (!source || !id) return '';
+
+    if (normalizeSongDataSource(item?.dataSource) === 'backup') {
+        const data = await ensureBackupPlayableData(item, quality);
+        return normalizeMediaUrl(data?.url || '');
+    }
+    if (normalizeSongDataSource(item?.dataSource) === 'backup3') {
+        const data = await ensureBackup3PlayableData(item);
+        return normalizeMediaUrl(data?.url || '');
+    }
+
+    let parsed = null;
+    try {
+        parsed = await ensureParsedSong(source, id, quality);
+    } catch {
+        parsed = await resolveBackup4Parsed(source, id, quality, {
+            name: item.name,
+            artist: item.artist,
+            cover: item.cover
+        }).catch(() => null);
+    }
+    return normalizeMediaUrl(parsed?.url || '');
+}
+
+function scheduleNextTrackPreload() {
+    clearTimeout(nextTrackPreloadTimer);
+    if (!shouldPreloadNextTrack()) return;
+
+    const nextSong = nextTrackForPreload();
+    if (!nextSong) return;
+    const quality = String(document.getElementById('quality')?.value || '320k');
+    const targetKey = `${songIdentity(nextSong)}:${quality}`;
+    if (targetKey === nextTrackPreloadKey) return;
+
+    const token = ++nextTrackPreloadToken;
+    nextTrackPreloadTimer = setTimeout(async () => {
+        try {
+            const mediaUrl = await resolvePreloadMediaUrl(nextSong, quality);
+            if (token !== nextTrackPreloadToken || !mediaUrl) return;
+            const proxiedUrl = buildMediaProxyUrl(mediaUrl);
+            if (!proxiedUrl) return;
+
+            nextTrackPreloadAudio?.pause();
+            nextTrackPreloadAudio = new Audio();
+            nextTrackPreloadAudio.preload = 'auto';
+            nextTrackPreloadAudio.src = proxiedUrl;
+            nextTrackPreloadAudio.load();
+            nextTrackPreloadKey = targetKey;
+        } catch {
+            // Preloading is opportunistic and must never interrupt current playback.
+        }
+    }, 850);
 }
 
 async function fetchSongMeta(platform, id) {
@@ -3686,6 +3762,8 @@ async function playSongCore(source, id, name, artist, options = {}) {
     }
 
     const playRequestId = ++activePlayRequestId;
+    nextTrackPreloadToken += 1;
+    clearTimeout(nextTrackPreloadTimer);
     if (btn) btn.disabled = true;
 
     try {
@@ -3801,6 +3879,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
         bindSongMeta(songMeta);
         syncInlinePlayButtonState();
         updateFullPlayerControlState();
+        scheduleNextTrackPreload();
     } catch (error) {
         if (playRequestId === activePlayRequestId) {
             showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
