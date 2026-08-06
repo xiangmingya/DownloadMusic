@@ -3082,6 +3082,20 @@ function monitorSourceInfo(source) {
     return MONITOR_SOURCE_INFO[raw] || { name: raw || '未知来源', detail: '内部服务来源', endpoint: raw || '—' };
 }
 
+function monitoringCategory(item) {
+    if (item?.category) return item.category;
+    return ['netease', 'qq', 'kuwo'].includes(String(item?.source || '')) ? 'data' : 'resolve';
+}
+
+function monitoringHealthOrder(health) {
+    return ({ down: 0, unstable: 1, healthy: 2, unknown: 3 })[String(health || '')] ?? 4;
+}
+
+function renderMonitoringServiceRow(item) {
+    const info = monitorSourceInfo(item.source);
+    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)} · ${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
+}
+
 function monitorPercent(value) {
     return `${Math.round(Math.max(0, Number(value || 0)) * 100)}%`;
 }
@@ -3131,8 +3145,12 @@ function renderAdminMonitoring(data) {
         }).join('')
         : '<p class="monitoring-empty">暂无成功解析记录。</p>';
 
+    const resolveServices = services.filter(item => monitoringCategory(item) === 'resolve').sort((a, b) => monitoringHealthOrder(a.health) - monitoringHealthOrder(b.health) || Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
+    const dataServices = services.filter(item => monitoringCategory(item) === 'data').sort((a, b) => Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
+    const otherServices = services.filter(item => !['resolve', 'data'].includes(monitoringCategory(item)));
+    const renderGroup = (title, note, items) => `<section class="monitoring-service-group"><div class="monitoring-service-group-heading"><strong>${title}</strong><span>${note}</span></div>${items.length ? items.map(renderMonitoringServiceRow).join('') : '<p class="monitoring-empty">暂无接口。</p>'}</section>`;
     document.getElementById('monitoringServiceList').innerHTML = services.length
-        ? services.map(item => { const info = monitorSourceInfo(item.source); return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)} · ${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : `接口标识：${escapeHtml(item.source)}`}</p></article>`; }).join('')
+        ? `${renderGroup('播放 / 下载链接解析', '不可用接口优先显示', resolveServices)}${renderGroup('歌曲 / 歌单原始数据', '提供搜索、歌单与榜单数据', dataServices)}${otherServices.length ? renderGroup('其他接口', '运行时发现的接口', otherServices) : ''}`
         : '<p class="monitoring-empty">暂无调用记录。</p>';
 }
 

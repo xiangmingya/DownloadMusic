@@ -35,6 +35,21 @@ const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.top/api";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const MONITORING_SERVICE_CATALOG = [
+  { source: "tunehub", category: "resolve", order: 10 },
+  { source: "gdstudio", category: "resolve", order: 20 },
+  { source: "onrender", category: "resolve", order: 30 },
+  { source: "lxmusic_signed", category: "resolve", order: 40 },
+  { source: "qq_backup3", category: "resolve", order: 50 },
+  { source: "jkapi", category: "resolve", order: 60 },
+  { source: "oiapi_music163", category: "resolve", order: 70 },
+  { source: "oiapi_kuwo", category: "resolve", order: 80 },
+  { source: "chksz_163", category: "resolve", order: 90 },
+  { source: "qqmp3", category: "resolve", order: 100 },
+  { source: "netease", category: "data", order: 10 },
+  { source: "qq", category: "data", order: 20 },
+  { source: "kuwo", category: "data", order: 30 },
+];
 let lastServiceMetricsCleanupAt = 0;
 
 export default {
@@ -749,7 +764,7 @@ async function recordMemberLogin(linuxdoId, userName, avatar, env) {
   const db = getDatabase(env);
   if (!db || !linuxdoId) return;
   const now = sqlNow();
-  await db.prepare("INSERT INTO member_profiles (linuxdo_id, name, avatar, registered_at, last_login_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, last_login_at = excluded.last_login_at")
+  await db.prepare("INSERT INTO linuxdo_users (linuxdo_id, name, avatar, created_at, last_login_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, last_login_at = excluded.last_login_at")
     .bind(String(linuxdoId), String(userName || linuxdoId), String(avatar || ""), now, now)
     .run();
 }
@@ -985,8 +1000,8 @@ async function handleAdminMembers(request, env) {
   const keyword = String(new URL(request.url).searchParams.get("q") || "").trim().slice(0, 80);
   const now = sqlNow();
   const statement = keyword
-    ? db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, p.name, p.avatar, p.registered_at, p.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN member_profiles p ON p.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR p.name LIKE ?) ORDER BY m.expires_at ASC LIMIT 500").bind(now, `%${keyword}%`, `%${keyword}%`)
-    : db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, p.name, p.avatar, p.registered_at, p.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN member_profiles p ON p.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? ORDER BY m.expires_at ASC LIMIT 500").bind(now);
+    ? db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar, u.created_at AS registered_at, u.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR u.name LIKE ?) ORDER BY m.expires_at ASC LIMIT 500").bind(now, `%${keyword}%`, `%${keyword}%`)
+    : db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar, u.created_at AS registered_at, u.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? ORDER BY m.expires_at ASC LIMIT 500").bind(now);
   const rows = await statement.all();
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""),
@@ -1013,7 +1028,7 @@ async function handleAdminMemberGrant(request, env) {
   if (!target) return apiError("请输入 Linux DO ID 或完整昵称", 400);
   if (!Number.isInteger(days) || days < 1 || days > 3650) return apiError("赠送天数须为 1 到 3650 天之间的整数", 400);
 
-  const matches = await db.prepare("SELECT linuxdo_id, name FROM member_profiles WHERE linuxdo_id = ? OR name = ? COLLATE NOCASE LIMIT 2").bind(target, target).all();
+  const matches = await db.prepare("SELECT linuxdo_id, name FROM linuxdo_users WHERE linuxdo_id = ? OR name = ? COLLATE NOCASE LIMIT 2").bind(target, target).all();
   if (!matches.results?.length) return apiError("未找到该用户；对方需先使用 Linux DO 登录一次", 404);
   if (matches.results.length > 1) return apiError("昵称不唯一，请改用 Linux DO ID", 409);
 
@@ -1051,14 +1066,20 @@ async function handleAdminMonitoring(request, env) {
     for (const row of latestResult.results || []) {
       if (!latestBySource.has(row.source)) latestBySource.set(row.source, row);
     }
-    const services = (summaryResult.results || []).map((row) => {
-      const latest = latestBySource.get(row.source) || {};
+    const summaryBySource = new Map((summaryResult.results || []).map((row) => [String(row.source || "unknown"), row]));
+    const catalogBySource = new Map(MONITORING_SERVICE_CATALOG.map((item) => [item.source, item]));
+    const allSources = [...MONITORING_SERVICE_CATALOG, ...Array.from(summaryBySource.keys()).filter((source) => !catalogBySource.has(source)).map((source, index) => ({ source, category: "other", order: 1000 + index }))];
+    const services = allSources.map((catalog) => {
+      const row = summaryBySource.get(catalog.source) || {};
+      const latest = latestBySource.get(catalog.source) || {};
       const requests = Number(row.requests || 0);
       const successes = Number(row.successes || 0);
       const failures = Number(row.failures || 0);
       const health = serviceHealth({ ...row, requests, successes, failures }, now);
       return {
-        source: String(row.source || "unknown"),
+        source: String(catalog.source || "unknown"),
+        category: catalog.category,
+        catalog_order: catalog.order,
         requests,
         successes,
         failures,
