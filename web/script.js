@@ -37,9 +37,9 @@ const defaultPlatformNameMap = {
 };
 const sourceNameMap = {
     primary: '主接口',
-    backup: 'GDStudio',
-    backup3: '雨糖',
-    backup4: '多源'
+    backup: '备用服务',
+    backup3: '备用服务',
+    backup4: '多源服务'
 };
 
 let platformNames = { ...defaultPlatformNameMap };
@@ -3152,31 +3152,6 @@ async function loadAdminMembers(keyword = '') {
     }
 }
 
-const MONITOR_SOURCE_INFO = {
-    netease: { name: '网易云音乐', detail: '网易云音乐平台接口 · 搜索 / 歌单', endpoint: 'music.163.com' },
-    qq: { name: 'QQ 音乐', detail: 'QQ 音乐平台接口 · 搜索 / 歌单', endpoint: 'y.qq.com' },
-    kuwo: { name: '酷我音乐', detail: '酷我音乐平台接口 · 搜索 / 歌单', endpoint: 'kuwo.cn' },
-    gdstudio: { name: 'GDStudio', detail: '备用解析服务 · 网易云 / 酷我 / QQ 音乐', endpoint: 'music-api.gdstudio.xyz' },
-    qq_backup3: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 搜索与解析', endpoint: 'yutangxiaowu.cn' },
-    qq_backup3_parse: { name: '雨糖小屋 QQ 接口', detail: 'QQ 音乐专用接口 · 播放链接解析', endpoint: 'yutangxiaowu.cn' },
-    onrender: { name: 'LXMusic Onrender', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: 'lxmusicapi.onrender.com' },
-    lxmusic_signed: { name: 'LXMusic 签名源', detail: '多平台备用 · 网易云 / 酷我 / QQ 音乐', endpoint: '88.lxmusic.xn--fiqs8s' },
-    oiapi_music163: { name: 'OIAPI 网易云接口', detail: '网易云音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
-    oiapi_kuwo: { name: 'OIAPI 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'oiapi.net' },
-    chksz_163: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
-    chksz_qq: { name: 'CHKSZ 音乐接口', detail: '网易云 / QQ 音乐接口 · 搜索与播放链接解析', endpoint: 'api.chksz.com' },
-    jkapi: { name: 'JKAPI 音乐接口', detail: '网易云 / QQ 音乐接口 · 播放链接解析', endpoint: 'jkapi.com/api/music' },
-    qqmp3: { name: 'QQMP3 酷我接口', detail: '酷我音乐专用接口 · 播放链接解析', endpoint: 'qqmp3.cn' },
-};
-
-function monitorSourceLabel(source) {
-    return monitorSourceInfo(source).name;
-}
-
-function monitorSourceInfo(source) {
-    const raw = String(source || '');
-    return MONITOR_SOURCE_INFO[raw] || { name: raw || '未知来源', detail: '内部服务来源', endpoint: raw || '—' };
-}
 
 function monitoringCategory(item) {
     if (item?.category) return item.category;
@@ -3188,8 +3163,7 @@ function monitoringHealthOrder(health) {
 }
 
 function renderMonitoringServiceRow(item) {
-    const info = monitorSourceInfo(item.source);
-    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(info.name)}</strong><small>${escapeHtml(info.detail)}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(info.endpoint)}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
+    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${escapeHtml(item.detail || '内部服务')}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(item.endpoint || '仅管理员可见')}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
 }
 
 function monitorPercent(value) {
@@ -3202,22 +3176,7 @@ function monitorTime(value) {
 }
 
 function renderAdminMonitoring(data) {
-    const rawServices = Array.isArray(data?.services) ? data.services : [];
-    const mergedServices = new Map();
-    rawServices.forEach(item => {
-        const source = item.source === 'chksz_qq' ? 'chksz_163' : item.source;
-        const previous = mergedServices.get(source);
-        if (!previous) {
-            mergedServices.set(source, { ...item, source, category: source === 'chksz_163' ? 'resolve' : item.category });
-            return;
-        }
-        const requests = Number(previous.requests || 0) + Number(item.requests || 0);
-        const successes = Number(previous.successes || 0) + Number(item.successes || 0);
-        const failures = Number(previous.failures || 0) + Number(item.failures || 0);
-        const duration = Number(previous.average_duration_ms || 0) * Number(previous.requests || 0) + Number(item.average_duration_ms || 0) * Number(item.requests || 0);
-        mergedServices.set(source, { ...previous, requests, successes, failures, success_rate: requests ? successes / requests : null, average_duration_ms: requests ? Math.round(duration / requests) : 0, last_failure_at: item.last_failure_at || previous.last_failure_at, last_error: item.last_error || previous.last_error });
-    });
-    const services = [...mergedServices.values()];
+    const services = Array.isArray(data?.services) ? data.services : [];
     const finalSources = Array.isArray(data?.final_sources) ? data.final_sources : [];
     const trend = Array.isArray(data?.trend) ? data.trend : [];
     const totalRequests = services.reduce((total, item) => total + Number(item.requests || 0), 0);
@@ -3252,7 +3211,7 @@ function renderAdminMonitoring(data) {
         ? finalSources.map(item => {
             const hits = Number(item.hits || 0);
             const percent = finalTotal ? hits / finalTotal : 0;
-            return `<div class="monitoring-source-row"><div><strong>${escapeHtml(monitorSourceLabel(item.source))}</strong><small>${hits.toLocaleString()} 次最终命中</small></div><div class="monitoring-share"><span><i style="width:${Math.round(percent * 100)}%"></i></span><b>${monitorPercent(percent)}</b></div></div>`;
+            return `<div class="monitoring-source-row"><div><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${hits.toLocaleString()} 次最终命中</small></div><div class="monitoring-share"><span><i style="width:${Math.round(percent * 100)}%"></i></span><b>${monitorPercent(percent)}</b></div></div>`;
         }).join('')
         : '<p class="monitoring-empty">暂无成功解析记录。</p>';
 
