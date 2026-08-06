@@ -127,7 +127,10 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
-    if (url.pathname.startsWith("/api/proxy/")) {
+    const publicBrowseRoutes = new Set([
+      "/api/proxy/methods", "/api/proxy/method", "/api/proxy/toplists", "/api/proxy/toplist", "/api/proxy/playlists", "/api/proxy/meta",
+    ]);
+    if (url.pathname.startsWith("/api/proxy/") && !publicBrowseRoutes.has(url.pathname)) {
       const access = await requireMusicAccess(request, env);
       if (!access.ok) return withCors(request, env, access.response);
     }
@@ -1394,8 +1397,6 @@ async function handleMe(request, env) {
 }
 
 async function handleMethods(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
   return jsonResponse(200, { code: 0, message: "Success", data: METHODS_MAP });
 }
 
@@ -1833,8 +1834,6 @@ async function callToplist(platform, id) {
 }
 
 async function handleToplists(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
   const platform = String(new URL(request.url).searchParams.get("platform") || "").trim();
   if (!platform) return jsonResponse(400, { code: -1, message: "缺少参数: platform" });
   try {
@@ -1846,8 +1845,6 @@ async function handleToplists(request, env) {
 }
 
 async function handleToplist(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "").trim();
   const id = String(url.searchParams.get("id") || "").trim();
@@ -1932,8 +1929,6 @@ async function callPlaylists(platform) {
 }
 
 async function handlePlaylists(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "netease").trim();
   try {
@@ -1945,8 +1940,6 @@ async function handlePlaylists(request, env) {
 }
 
 async function handleMethod(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
 
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "").trim();
@@ -3256,9 +3249,6 @@ function extractReduxState(html) {
 }
 
 async function handleMeta(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
-
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "").trim();
   const id = String(url.searchParams.get("id") || "").trim();

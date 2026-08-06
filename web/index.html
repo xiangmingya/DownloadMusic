@@ -308,7 +308,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-13';
+        const APP_ASSET_VERSION = '20260806-14';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -332,6 +332,14 @@
             document.body.classList.remove('auth-pending');
             document.getElementById('loginShell')?.setAttribute('aria-busy', 'false');
         }
+
+        window.openLoginModal = function (message) {
+            const shell = document.getElementById('loginShell');
+            if (!shell) return;
+            shell.style.display = '';
+            shell.setAttribute('aria-busy', 'false');
+            setLoginTip(message || '登录后即可播放、下载和收藏歌曲。', false);
+        };
 
         async function authFetch(path, init = {}) {
             const response = await fetch(`${AUTH_BASE}${path}`, {
@@ -484,7 +492,7 @@
             const password = String(input.value || '');
             try {
                 await doPasswordLogin(password);
-                await checkLoginAndStart();
+                window.location.href = window.location.origin + window.location.pathname;
             } catch (err) {
                 setLoginTip(err.message || '密码错误，请重试。', true);
             }
@@ -504,7 +512,7 @@
         (async function init() {
             const loggedIn = await checkLoginAndStart();
             if (loggedIn) return;
-            revealLogin();
+            mountApp({ auth_type: 'guest', user: { id: '', name: '游客', linuxdo_id: '', avatar: '' }, membership: {} });
             void checkLinuxdoStatus();
         })();
     })();
