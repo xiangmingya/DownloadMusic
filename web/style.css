@@ -485,6 +485,7 @@ button .icon-park {
     margin-top: 30px;
 }
 
+.toplist-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.toplist-title-row h1 { margin: 0; }.toplist-play-all-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 16px; border: 0; border-radius: 11px; background: #32b66a; color: #fff; font: inherit; font-weight: 750; white-space: nowrap; cursor: pointer; }.toplist-play-all-btn:hover { background: #249857; }
 .results-batch-actions { display: flex; justify-content: flex-end; margin: 0 0 12px; }
 .results-batch-actions .primary-btn { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 15px; }
 
