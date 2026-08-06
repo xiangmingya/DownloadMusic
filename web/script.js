@@ -3031,8 +3031,8 @@ async function loadPublicServiceStatus() {
         const data = payload.data;
         const platforms = Array.isArray(data.platforms) ? data.platforms : [];
         const latest = platforms.map(item => item.last_updated_at).filter(Boolean).sort().at(-1) || data.generated_at;
-        serviceStatus.innerHTML = `服务状态：<span class="${footerStatusClass(data.overall)}">${escapeHtml(data.overall_label || footerStatusLabel(data.overall))}</span>`;
-        healthStatus.innerHTML = `${platforms.map(item => `<span class="footer-platform-status ${footerStatusClass(item.state)}">${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)} ${escapeHtml(item.label || footerStatusLabel(item.state))}</span>`).join('<i aria-hidden="true">·</i>')}<small>实时检测 · ${escapeHtml(formatStatusUpdatedAt(latest))}</small>`;
+        serviceStatus.innerHTML = `服务状态：${platforms.map(item => `<span class="footer-platform-status ${footerStatusClass(item.state)}">${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)} ${escapeHtml(item.label || footerStatusLabel(item.state))}</span>`).join('<i aria-hidden="true">·</i>')}`;
+        healthStatus.innerHTML = `<small>实时检测 · ${escapeHtml(formatStatusUpdatedAt(latest))}</small>`;
     } catch {
         serviceStatus.innerHTML = '服务状态：<span class="status-unknown">检测暂不可用</span>';
         healthStatus.innerHTML = '<small>实时检测将在网络恢复后更新</small>';
