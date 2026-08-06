@@ -597,9 +597,9 @@ async function resolveBackup4Parsed(platform, id, quality, options = {}) {
         name: String(options.name || '').trim(),
         artist: String(options.artist || '').trim()
     }, {
-        timeoutMs: 18000,
-        retries: 1,
-        retryDelayMs: 600
+        timeoutMs: 40000,
+        retries: 0,
+        retryDelayMs: 0
     });
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
     const mediaUrl = normalizeMediaUrl(data?.url || '');
@@ -896,7 +896,7 @@ async function callBackupApi(params, options = {}) {
 }
 
 async function callBackup3Api(params, options = {}) {
-    const timeoutMs = Number(options.timeoutMs || 18000);
+    const timeoutMs = Number(options.timeoutMs || 40000);
     const retries = Math.max(0, Number(options.retries || 1));
     const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
     let lastError = null;

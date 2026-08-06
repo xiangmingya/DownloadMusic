@@ -14,7 +14,8 @@ const YUTANG_API_ROOT = "https://api.yutangxiaowu.cn";
 const QQ_BACKUP3_ALLOWED_FILTERS = new Set(["name", "id"]);
 const QQ_BACKUP3_TIMEOUT_MS = 18000;
 const BACKUP4_ALLOWED_PLATFORMS = new Set(["netease", "qq", "kuwo"]);
-const BACKUP4_TIMEOUT_MS = 18000;
+// Keep one slow provider from consuming the browser's whole fallback budget.
+const BACKUP4_TIMEOUT_MS = 6500;
 const BACKUP4_QQMP3_TIMEOUT_MS = 8000;
 const BACKUP4_LXMUSIC_ONRENDER_URL = "https://lxmusicapi.onrender.com";
 const BACKUP4_LXMUSIC_ONRENDER_KEY = "share-v3";
