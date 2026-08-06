@@ -261,6 +261,7 @@ function buildMediaProxyUrl(rawUrl, options = {}) {
 }
 
 function getProxiedCoverUrl(rawUrl) {
+    if (AUTH_TYPE === 'guest') return normalizeMediaUrl(rawUrl);
     return buildMediaProxyUrl(rawUrl);
 }
 
@@ -485,20 +486,24 @@ function wait(ms) {
 async function apiFetch(url, init = {}) {
     const { timeoutMs = 0, ...fetchInit } = init;
     if (!timeoutMs || timeoutMs <= 0) {
-        return fetch(url, {
+        const response = await fetch(url, {
             credentials: 'include',
             ...fetchInit
         });
+        if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
+        return response;
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        return await fetch(url, {
+        const response = await fetch(url, {
             credentials: 'include',
             ...fetchInit,
             signal: controller.signal
         });
+        if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
+        return response;
     } finally {
         clearTimeout(timer);
     }
