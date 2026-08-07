@@ -34,6 +34,7 @@ const TUNEHUB_API_BASE = "https://tunehub.sayqz.com/api";
 const NXVAV_API_URL = "https://api.nxvav.cn/api/music/";
 const NXVAV_DEFAULT_SECRET = "token";
 const BACKUP4_11NA_URL = "https://api.11na.cn/v1/music";
+const PREVIEW_MAX_BYTES = 1048576;
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
@@ -3080,6 +3081,10 @@ async function backup4TryNxvav(platform, id, quality, name, artist, env) {
   if (!probe.ok) {
     throw new Error(`nxvav url failed (${probe.status})`);
   }
+  const totalBytes = probeTotalSize(probe);
+  if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
+    throw new Error(`nxvav 疑似试听片段 (${totalBytes} bytes)`);
+  }
   return { url: endpoint.toString(), provider: "nxvav" };
 }
 
@@ -3149,7 +3154,18 @@ async function backup4Try11na(platform, id, quality, name, artist) {
   if (!contentType.startsWith("audio/")) {
     throw new Error("11na url 不是音频内容");
   }
+  const totalBytes = probeTotalSize(probe);
+  if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
+    throw new Error(`11na 疑似试听片段 (${totalBytes} bytes)`);
+  }
   return { url: endpoint.toString(), provider: "11na" };
+}
+
+function probeTotalSize(response) {
+  const range = String(response.headers.get("Content-Range") || "").trim();
+  const fromRange = Number(range.split("/")[1] || 0);
+  if (fromRange > 0) return fromRange;
+  return Number(response.headers.get("Content-Length") || 0);
 }
 
 function getBackup4ProviderChain(platform, env) {
