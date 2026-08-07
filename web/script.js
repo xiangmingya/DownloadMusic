@@ -68,6 +68,7 @@ let keywordPagingState = {
 // 播放相关
 let currentPlayingIndex = null;
 let currentPlayCollection = '';
+let currentPlayKey = '';
 let currentLyrics = [];
 let activePlayRequestId = 0;
 let currentPlayingSong = null;
@@ -2215,7 +2216,7 @@ function renderLocalPage() {
                     </div>
                 </div>
                 <div>
-                    <button class="play-btn-item" data-index="${globalIndex}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 20)}</button>
+                    <button class="play-btn-item" data-index="${globalIndex}" data-play-key="${escapeHtml(platform)}:${escapeHtml(song.id)}" onclick="playSong('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', ${globalIndex})">${getIconSvg('play', 20)}</button>
                     <button class="favorite-song-btn${favorite ? ' is-favorite' : ''}" onclick="toggleFavoriteByIndex(${globalIndex})" aria-label="${favorite ? '取消收藏' : '收藏'}" title="${favorite ? '取消收藏' : '收藏'}">${getIconSvg('heart', 18)}</button>
                     <button class="add-playlist-btn" onclick="addSongToPlaylist('${safePlatform}', '${safeId}', '${safeName}', '${safeArtist}', '${safeAlbum}', '${safeCover}', ${globalIndex})">${getIconSvg('plus', 18)}</button>
                     <button class="save-song-btn" onclick="saveSongToCustomPlaylistByIndex(${globalIndex})" aria-label="保存到歌单">${getIconSvg('bookmark', 18)}</button>
@@ -2472,32 +2473,49 @@ function syncInlinePlayButtonState() {
     document.querySelectorAll('.play-btn-item').forEach(btn => {
         btn.innerHTML = getIconSvg('play', 20);
     });
+    document.querySelectorAll('[data-play-collection]').forEach(btn => {
+        btn.innerHTML = getIconSvg('play', 32);
+    });
+    document.querySelectorAll('[data-play-saved-song]').forEach(btn => {
+        btn.innerHTML = getIconSvg('play', 20);
+    });
+    document.querySelectorAll('[data-play-sheet]').forEach(btn => {
+        btn.innerHTML = '播放';
+    });
+    if (currentPlayKey && currentPlayingSong && !audio.paused) {
+        playButtonsByKey(currentPlayKey).forEach(btn => {
+            if (btn.classList.contains('play-btn-item')) btn.innerHTML = getIconSvg('pause', 16);
+            else if (btn.hasAttribute('data-play-saved-song')) btn.innerHTML = getIconSvg('pause', 20);
+            else if (btn.hasAttribute('data-play-sheet')) btn.innerHTML = '播放中';
+            else btn.innerHTML = getIconSvg('pause', 32);
+        });
+    }
+    // 兼容 lookupOnly 榜单：按当前序号回退显示暂停图标。
     if (currentPlayingIndex !== null && !audio.paused) {
         const activeBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
         if (activeBtn) activeBtn.innerHTML = getIconSvg('pause', 16);
     }
-    if (currentPlayCollection) {
-        const collectionBtn = document.querySelector(`button[data-play-collection="${currentPlayCollection}"][data-song-index="${currentPlayingIndex}"]`);
-        if (collectionBtn) {
-            collectionBtn.innerHTML = (currentPlayingIndex !== null && !audio.paused)
-                ? getIconSvg('pause', 32)
-                : getIconSvg('play', 32);
-        }
+}
+
+function currentPlayKeyOf(song) {
+    return `${String(song?.platform || song?.source || '')}:${String(song?.id || '')}`;
+}
+
+function playButtonsByKey(key) {
+    if (!key) return [];
+    try {
+        return Array.from(document.querySelectorAll(`[data-play-key="${CSS.escape(key)}"]`));
+    } catch {
+        return [];
     }
 }
 
-function setInlinePlayButtonLoading(index, loading) {
-    const btn = (index === null || index === undefined) ? null : document.querySelector(`button[data-index="${index}"]`);
-    if (!btn) return;
-    btn.classList.toggle('is-loading', Boolean(loading));
-    btn.setAttribute('aria-busy', String(Boolean(loading)));
-}
-
-function setCollectionPlayLoading(collection, index, loading) {
-    const btn = document.querySelector(`button[data-play-collection="${String(collection || '')}"][data-song-index="${Number(index)}"]`);
-    if (!btn) return;
-    btn.classList.toggle('is-loading', Boolean(loading));
-    btn.setAttribute('aria-busy', String(Boolean(loading)));
+function setPlayButtonLoading(key, loading) {
+    playButtonsByKey(key).forEach(btn => {
+        btn.classList.toggle('is-loading', Boolean(loading));
+        btn.disabled = Boolean(loading);
+        btn.setAttribute('aria-busy', String(Boolean(loading)));
+    });
 }
 
 function setGlobalPlayLoading(loading) {
@@ -2916,7 +2934,7 @@ function songRowMarkup(song, collection, index, allowFavoriteRemove = false) {
     const favoriteControl = allowFavoriteRemove
         ? `<button type="button" class="favorite-song-btn is-favorite" data-remove-favorite="${index}" aria-label="取消收藏 ${escapeHtml(song.name)}" title="取消收藏">${getIconSvg('heart', 18)}</button>`
         : '';
-    return `<div class="mini-song-row${allowFavoriteRemove ? ' has-favorite-control' : ''}">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 32)}</button>${favoriteControl}</div>`;
+    return `<div class="mini-song-row${allowFavoriteRemove ? ' has-favorite-control' : ''}">${image}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" data-play-collection="${collection}" data-song-index="${index}" data-play-key="${escapeHtml(song.platform || song.source || '')}:${escapeHtml(song.id || '')}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 32)}</button>${favoriteControl}</div>`;
 }
 
 function setNowPlayingArt(art, cover) {
@@ -2997,6 +3015,7 @@ function renderHomeCollection() {
         return;
     }
     list.innerHTML = source.slice(0, 3).map((song, index) => songRowMarkup(song, collection, index)).join('');
+    syncInlinePlayButtonState();
 }
 
 function renderLibrary() {
@@ -3026,6 +3045,7 @@ function renderLibrary() {
         }).join('')
         : '<div class="library-empty">新建歌单后，可在搜索结果中将歌曲保存进去。</div>';
     renderSavedPlaylistDetail();
+    syncInlinePlayButtonState();
 }
 
 async function playCollectionSong(collection, index) {
@@ -3110,10 +3130,11 @@ function renderSavedPlaylistDetail() {
             const art = cover
                 ? `<img src="${escapeHtml(cover)}" alt="" onerror="this.outerHTML='<span class=mini-song-art></span>'">`
                 : '<span class="mini-song-art" aria-hidden="true"></span>';
-            return `<div class="saved-playlist-song">${art}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" class="saved-playlist-song-play" data-play-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 20)}</button><button type="button" class="saved-playlist-song-remove" data-remove-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" aria-label="从歌单移除 ${escapeHtml(song.name)}">${getIconSvg('close', 18)}</button></div>`;
+            return `<div class="saved-playlist-song">${art}<div class="mini-song-meta"><strong>${escapeHtml(song.name)}</strong><small>${escapeHtml(song.artist)}</small></div><button type="button" class="saved-playlist-song-play" data-play-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" data-play-key="${escapeHtml(song.platform || song.source || '')}:${escapeHtml(song.id || '')}" aria-label="播放 ${escapeHtml(song.name)}">${getIconSvg('play', 20)}</button><button type="button" class="saved-playlist-song-remove" data-remove-saved-song="${escapeHtml(playlist.id)}" data-song-index="${index}" aria-label="从歌单移除 ${escapeHtml(song.name)}">${getIconSvg('close', 18)}</button></div>`;
         }).join('')
         : '<div class="library-empty">歌单还是空的，从搜索结果中保存歌曲吧。</div>';
     detail.innerHTML = `<div class="saved-playlist-detail-head"><div><p class="eyebrow">歌单详情</p><h3>${escapeHtml(playlist.name)}</h3><p>${playlist.songs.length} 首歌曲</p></div><div class="saved-playlist-detail-actions"><button type="button" class="saved-playlist-play-all" data-play-saved-playlist="${escapeHtml(playlist.id)}" ${playlist.songs.length ? '' : 'disabled'}>播放全部</button><button type="button" class="saved-playlist-delete" data-delete-saved-playlist="${escapeHtml(playlist.id)}">删除歌单</button></div></div><div class="saved-playlist-song-list">${songRows}</div>`;
+    syncInlinePlayButtonState();
 }
 
 function setAppView(view) {
@@ -3870,10 +3891,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const quality = document.getElementById('quality').value;
     const inlineIndex = Number.isInteger(options.inlineIndex) ? options.inlineIndex : null;
     const runtimeSong = options.song || (inlineIndex !== null ? getSongByIndex(inlineIndex) : null);
-    const btn = inlineIndex !== null ? document.querySelector(`button[data-index="${inlineIndex}"]`) : null;
-    const collectionBtn = (inlineIndex !== null && options.collection)
-        ? document.querySelector(`button[data-play-collection="${String(options.collection)}"][data-song-index="${inlineIndex}"]`)
-        : null;
+    const playKey = String(options.playKey || currentPlayKeyOf({ platform: source, id }));
     const player = inlineIndex !== null ? document.getElementById(`player-${inlineIndex}`) : null;
     const inlineLyrics = inlineIndex !== null ? document.getElementById(`inline-lyrics-${inlineIndex}`) : null;
     let resumeTime = 0;
@@ -3902,11 +3920,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const playRequestId = ++activePlayRequestId;
     nextTrackPreloadToken += 1;
     clearTimeout(nextTrackPreloadTimer);
-    const loadingBtn = collectionBtn || btn;
-    if (loadingBtn) {
-        loadingBtn.disabled = true;
-        loadingBtn.classList.add('is-loading');
-    }
+    setPlayButtonLoading(playKey, true);
     setGlobalPlayLoading(true);
 
     try {
@@ -4020,6 +4034,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
         audio.src = playUrl;
         currentPlayingIndex = inlineIndex;
+        currentPlayKey = playKey;
         if (player) {
             player.style.display = 'flex';
         }
@@ -4035,25 +4050,19 @@ async function playSongCore(source, id, name, artist, options = {}) {
             updateFullPlayerControlState();
         }
     } finally {
-        if (playRequestId === activePlayRequestId) {
-            if (loadingBtn) loadingBtn.classList.remove('is-loading');
-            setGlobalPlayLoading(false);
-        }
-        if (loadingBtn) loadingBtn.disabled = false;
+        setPlayButtonLoading(playKey, false);
+        if (playRequestId === activePlayRequestId) setGlobalPlayLoading(false);
     }
 }
 
 // 播放歌曲
 async function playSong(source, id, name, artist, index, options = {}) {
+    const playKey = currentPlayKeyOf({ platform: source, id });
     const collection = String(options.collection || '');
     currentPlayCollection = collection;
     const toggleSameSong = isSameSong(source, id);
     if (!toggleSameSong) {
-        if (collection) {
-            setCollectionPlayLoading(collection, index, true);
-        } else {
-            setInlinePlayButtonLoading(index, true);
-        }
+        setPlayButtonLoading(playKey, true);
         setGlobalPlayLoading(true);
     }
     let runtimeSong;
@@ -4061,11 +4070,7 @@ async function playSong(source, id, name, artist, index, options = {}) {
         runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
     } catch (error) {
         if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
-        if (collection) {
-            setCollectionPlayLoading(collection, index, false);
-        } else {
-            setInlinePlayButtonLoading(index, false);
-        }
+        setPlayButtonLoading(playKey, false);
         setGlobalPlayLoading(false);
         return;
     }
@@ -4096,7 +4101,8 @@ async function playSong(source, id, name, artist, index, options = {}) {
     await playSongCore(source, id, name, artist, {
         inlineIndex: index,
         song: runtimeSong,
-        collection
+        collection,
+        playKey
     });
 }
 
@@ -4304,12 +4310,13 @@ function renderPlaylistSheet() {
                     <p>${escapeHtml(song.artist)} · ${escapeHtml(platform)}</p>
                 </div>
                 <div class="playlist-item-actions">
-                    <button type="button" data-action="play" data-index="${index}">播放</button>
+                    <button type="button" data-action="play" data-index="${index}" data-play-sheet="1" data-play-key="${escapeHtml(song.platform || song.source || '')}:${escapeHtml(song.id || '')}">播放</button>
                     <button type="button" data-action="remove" data-index="${index}" class="ghost-btn">移除</button>
                 </div>
             </div>
         `;
     }).join('');
+    syncInlinePlayButtonState();
 }
 
 function setPlaylistSheetOpen(open) {
