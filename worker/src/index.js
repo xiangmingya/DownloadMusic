@@ -127,11 +127,12 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
-    const publicBrowseRoutes = new Set([
-      "/api/proxy/methods", "/api/proxy/method", "/api/proxy/toplists", "/api/proxy/toplist", "/api/proxy/playlists", "/api/proxy/meta", "/api/proxy/cover",
-      "/api/proxy/backup", "/api/proxy/backup3", "/api/proxy/backup4",
-    ]);
-    if (url.pathname.startsWith("/api/proxy/") && !publicBrowseRoutes.has(url.pathname)) {
+    if (url.pathname.startsWith("/api/proxy/")) {
+      const sessionAuth = await requireSession(request, env);
+      if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
+    }
+    const membershipRequiredRoutes = new Set(["/api/proxy/parse", "/api/proxy/media"]);
+    if (membershipRequiredRoutes.has(url.pathname)) {
       const access = await requireMusicAccess(request, env);
       if (!access.ok) return withCors(request, env, access.response);
     }
