@@ -495,14 +495,14 @@ function wait(ms) {
 }
 
 async function apiFetch(url, init = {}) {
-    const { timeoutMs = 0, ...fetchInit } = init;
+    const { timeoutMs = 0, dialogOn402 = false, ...fetchInit } = init;
     if (!timeoutMs || timeoutMs <= 0) {
         const response = await fetch(url, {
             credentials: 'include',
             ...fetchInit
         });
         if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
-        if (response.status === 402) window.openMembershipModal?.();
+        if (response.status === 402 && dialogOn402) window.openMembershipModal?.();
         return response;
     }
 
@@ -515,7 +515,7 @@ async function apiFetch(url, init = {}) {
             signal: controller.signal
         });
         if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
-        if (response.status === 402) window.openMembershipModal?.();
+        if (response.status === 402 && dialogOn402) window.openMembershipModal?.();
         return response;
     } finally {
         clearTimeout(timer);
@@ -526,6 +526,7 @@ async function parseSongs(platform, ids, quality) {
     const response = await apiFetch(API_ROUTES.parse, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        dialogOn402: true,
         body: JSON.stringify({
             platform,
             ids,
@@ -965,7 +966,8 @@ async function callBackupApi(params, options = {}) {
                 }
             });
 
-            const response = await apiFetch(url.toString(), { timeoutMs });
+            const dialogOn402 = String(params?.types || '') === 'url';
+            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
             const text = await response.text();
             const data = parseResponseText(text);
             if (!response.ok) {
@@ -1005,7 +1007,8 @@ async function callBackup3Api(params, options = {}) {
                 }
             });
 
-            const response = await apiFetch(url.toString(), { timeoutMs });
+            const dialogOn402 = String(params?.filter || '') === 'id';
+            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
             const text = await response.text();
             const data = parseResponseText(text);
             if (!response.ok) {
@@ -1042,7 +1045,8 @@ async function callBackup4Api(params, options = {}) {
                 }
             });
 
-            const response = await apiFetch(url.toString(), { timeoutMs });
+            const dialogOn402 = String(params?.mode || 'url') !== 'search';
+            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
             const text = await response.text();
             const data = parseResponseText(text);
             if (!response.ok || Number(data?.code) !== 0) {

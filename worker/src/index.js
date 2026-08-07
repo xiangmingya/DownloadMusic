@@ -30,6 +30,7 @@ const KUWO_TOPLIST_ENDPOINTS = [
   "https://bb.qqmp3.vip/api/songs.php",
 ];
 const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
+const TUNEHUB_API_BASE = "https://tunehub.sayqz.com/api";
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
@@ -1553,7 +1554,83 @@ const NETEASE_WEB_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 };
 
+function fillTemplateExpr(template, vars) {
+  return String(template || "").replace(/\{\{([^}]+)\}\}/g, (match, expr) => {
+    const source = String(expr || "").trim();
+    const simple = { keyword: vars.keyword, page: vars.page, limit: vars.limit }[source];
+    if (simple !== undefined) return String(simple);
+    if (!/^[\d\s()+\-*/|a-z]{0,80}$/i.test(source)) return match;
+    try {
+      const value = new Function("page", "limit", `"use strict"; return (${source});`)(vars.page, vars.limit);
+      return value === undefined || value === null ? "" : String(value);
+    } catch {
+      return match;
+    }
+  });
+}
+
+async function callTunehubSearch(platform, keyword, page, limit) {
+  const cfgRes = await fetch(`${TUNEHUB_API_BASE}/v1/methods/${encodeURIComponent(platform)}/search`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!cfgRes.ok) throw new Error(`TuneHub 方法下发失败 (${cfgRes.status})`);
+  const cfg = parseJsonText(await cfgRes.text())?.data;
+  if (!cfg || !cfg.url || typeof cfg.transform !== "string") {
+    throw new Error("TuneHub 搜索配置无效");
+  }
+
+  const requestPage = Math.max(1, Number(page) || 1);
+  const requestLimit = Math.max(1, Number(limit) || 20);
+  const params = {};
+  for (const [key, value] of Object.entries(cfg.params || {})) {
+    params[key] = fillTemplateExpr(String(value), { keyword, page: requestPage, limit: requestLimit });
+  }
+
+  const url = new URL(cfg.url);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  });
+
+  const upstream = await fetch(url.toString(), {
+    method: String(cfg.method || "GET").toUpperCase(),
+    headers: cfg.headers || {},
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await upstream.text();
+  if (!upstream.ok) throw new Error(`TuneHub 搜索上游失败 (${upstream.status})`);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("TuneHub 搜索响应不是 JSON");
+  }
+
+  const transformFn = new Function("response", `return (${cfg.transform})(response);`);
+  const transformed = transformFn(parsed);
+  const list = Array.isArray(transformed) ? transformed : (Array.isArray(transformed?.list) ? transformed.list : []);
+  return list
+    .map((item) => ({
+      id: String(item?.id ?? ""),
+      name: String(item?.name || "未知歌曲"),
+      artist: String(item?.artist || "未知歌手"),
+      album: String(item?.album || ""),
+      cover: normalizeMediaUrl(item?.cover || item?.pic || ""),
+    }))
+    .filter((item) => item.id);
+}
+
 async function callSearch(platform, keyword, page, limit) {
+  if (platform === "netease" || platform === "kuwo") {
+    try {
+      const tunehubList = await callTunehubSearch(platform, keyword, page, limit);
+      if (tunehubList.length > 0) return tunehubList;
+    } catch {
+      // TuneHub 方法下发不可用时回退到直连搜索。
+    }
+  }
+
   if (platform === "netease") {
     const endpoint = new URL("https://music.163.com/api/search/get/web");
     endpoint.searchParams.set("s", keyword);
@@ -1985,7 +2062,7 @@ async function handleBackup(request, env) {
   if (!BACKUP_ALLOWED_TYPES.has(types)) {
     return jsonResponse(400, { code: -1, message: "备用源参数无效: types" });
   }
-  if (types !== "search") {
+  if (types !== "search" && types !== "pic") {
     const auth = await requireMusicAccess(request, env);
     if (!auth.ok) return auth.response;
   }
