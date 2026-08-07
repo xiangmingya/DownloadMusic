@@ -335,6 +335,11 @@ function getApiErrorMessage(payload, statusCode, fallback = '请求失败') {
     return fallback;
 }
 
+function isMembershipError(error) {
+    const text = String((error && error.message) || '').toLowerCase();
+    return text.includes('会员') || text.includes('membership');
+}
+
 function isBackupTemporarilyBlocked() {
     return Number(backupCircuitState.blockedUntil || 0) > Date.now();
 }
@@ -2264,7 +2269,7 @@ async function playAllResultSongs() {
     try {
         firstSong = await resolveLookupOnlySong(allSongs[0]);
     } catch (error) {
-        showToast(`全部播放失败: ${error.message || '无法准备第一首歌曲'}`, 'error');
+        if (!isMembershipError(error)) showToast(`全部播放失败: ${error.message || '无法准备第一首歌曲'}`, 'error');
         return;
     }
     const queue = [];
@@ -3208,6 +3213,7 @@ async function startMembershipCheckout() {
         await loadMembership();
     }
 }
+window.startMembershipCheckout = startMembershipCheckout;
 
 async function loadAdminPanel() {
     try {
@@ -3659,7 +3665,7 @@ function initHomeInterface() {
             try {
                 await audio.play();
             } catch (error) {
-                showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
+                if (!isMembershipError(error)) showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
             }
         } else {
             audio.pause();
@@ -3913,7 +3919,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
         scheduleNextTrackPreload();
     } catch (error) {
         if (playRequestId === activePlayRequestId) {
-            showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
+            if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
             syncInlinePlayButtonState();
             updateFullPlayerControlState();
         }
@@ -3928,7 +3934,7 @@ async function playSong(source, id, name, artist, index) {
     try {
         runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
     } catch (error) {
-        showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
         return;
     }
     source = String(runtimeSong?.platform || runtimeSong?.source || source);
@@ -4565,7 +4571,7 @@ async function replayCurrentTrack() {
     try {
         await audio.play();
     } catch (error) {
-        showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
+        if (!isMembershipError(error)) showToast(`播放失败: ${error?.message || '未知错误'}`, 'error');
     }
 }
 
@@ -4716,7 +4722,7 @@ function bindPlayerUiEvents() {
                 try {
                     await audio.play();
                 } catch (err) {
-                    showToast(`播放失败: ${err?.message || '未知错误'}`, 'error');
+                    if (!isMembershipError(err)) showToast(`播放失败: ${err?.message || '未知错误'}`, 'error');
                 }
             } else {
                 audio.pause();

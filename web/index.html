@@ -341,7 +341,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-18';
+        const APP_ASSET_VERSION = '20260806-19';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -445,7 +445,11 @@
         document.getElementById('membershipDialogBuyBtn')?.addEventListener('click', function () {
             const dialog = document.getElementById('membershipDialog');
             if (dialog && dialog.open) dialog.close();
-            document.getElementById('userChip')?.click();
+            if (window.startMembershipCheckout) {
+                window.startMembershipCheckout();
+            } else {
+                document.getElementById('userChip')?.click();
+            }
         });
 
         window.openLoginModal = function (message) {
