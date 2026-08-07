@@ -4516,8 +4516,7 @@ function updateFullPlayerMeta() {
         titleEl.textContent = '未播放';
         artistEl.textContent = '请选择歌曲';
         coverEl.src = '';
-        document.getElementById('fullPlayerCurrentLyric').textContent = '点击歌曲开始播放';
-        document.getElementById('fullPlayerNextLyric').textContent = '';
+        renderFullPlayerLyrics();
         updatePlayerFabPreview();
         return;
     }
@@ -4525,6 +4524,7 @@ function updateFullPlayerMeta() {
     titleEl.textContent = currentPlayingSong.name || '未知歌曲';
     artistEl.textContent = currentPlayingSong.artist || '未知歌手';
     coverEl.src = getProxiedCoverUrl(currentPlayingSong.cover || '');
+    renderFullPlayerLyrics();
     updateFullPlayerLyric(audio.currentTime || 0);
     updatePlayerFabPreview();
 }
@@ -4590,15 +4590,10 @@ function updateFullPlayerProgress() {
 }
 
 function updateFullPlayerLyric(currentTime) {
-    const currentLyricEl = document.getElementById('fullPlayerCurrentLyric');
-    const nextLyricEl = document.getElementById('fullPlayerNextLyric');
-    if (!currentLyricEl || !nextLyricEl) return;
-
-    if (!currentLyrics.length) {
-        currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '点击歌曲开始播放';
-        nextLyricEl.textContent = '';
-        return;
-    }
+    const linesEl = document.getElementById('fullPlayerLyricLines');
+    const viewport = document.getElementById('fullPlayerLyricViewport');
+    if (!linesEl || !viewport) return;
+    if (!currentLyrics.length) return;
 
     let activeIndex = 0;
     for (let i = 0; i < currentLyrics.length; i += 1) {
@@ -4609,8 +4604,27 @@ function updateFullPlayerLyric(currentTime) {
         }
     }
 
-    currentLyricEl.textContent = currentLyrics[activeIndex]?.text || '';
-    nextLyricEl.textContent = currentLyrics[activeIndex + 1]?.text || '';
+    const lineEls = linesEl.querySelectorAll('.full-player-lyric-line');
+    lineEls.forEach((el, index) => el.classList.toggle('is-active', index === activeIndex));
+
+    const activeEl = lineEls[activeIndex];
+    if (!activeEl) return;
+    const offset = viewport.clientHeight / 2 - (activeEl.offsetTop + activeEl.offsetHeight / 2);
+    linesEl.style.transform = `translateY(${offset}px)`;
+}
+
+function renderFullPlayerLyrics() {
+    const linesEl = document.getElementById('fullPlayerLyricLines');
+    if (!linesEl) return;
+    if (!currentLyrics.length) {
+        linesEl.innerHTML = `<p class="full-player-lyric-line is-placeholder">${escapeHtml(currentPlayingSong ? (currentPlayingSong.name || '播放中') : '点击歌曲开始播放')}</p>`;
+        linesEl.style.transform = '';
+        return;
+    }
+    linesEl.innerHTML = currentLyrics.map((line, index) =>
+        `<p class="full-player-lyric-line" data-lyric-index="${index}">${escapeHtml(line.text)}</p>`
+    ).join('');
+    linesEl.style.transform = '';
 }
 
 async function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
@@ -4842,6 +4856,15 @@ function bindPlayerUiEvents() {
     if (fullPlayerCloseArea) {
         fullPlayerCloseArea.addEventListener('click', () => setFullPlayerOpen(false));
     }
+    document.getElementById('fullPlayerLyricLines')?.addEventListener('click', event => {
+        const lineEl = event.target.closest('[data-lyric-index]');
+        if (!lineEl) return;
+        const line = currentLyrics[Number(lineEl.dataset.lyricIndex)];
+        if (line && audio.src) {
+            audio.currentTime = line.time;
+            updateFullPlayerLyric(line.time);
+        }
+    });
     if (fullPlayerBrowserFullscreenBtn) {
         fullPlayerBrowserFullscreenBtn.addEventListener('click', async () => {
             await toggleBrowserFullscreen();
