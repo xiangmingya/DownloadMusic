@@ -3366,7 +3366,7 @@ function renderAdminMonitoring(data) {
         return `<div class="monitoring-source-row"><div><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${hits.toLocaleString()} 次最终命中</small></div><div class="monitoring-share"><span><i style="width:${Math.round(percent * 100)}%"></i></span><b>${monitorPercent(percent)}</b></div></div>`;
     };
     document.getElementById('monitoringFinalSources').innerHTML = finalSources.length
-        ? `${finalSources.slice(0, 3).map(renderSourceRow).join('')}${finalSources.length > 3 ? `<div class="monitoring-source-scroll">${finalSources.slice(3).map(renderSourceRow).join('')}</div>` : ''}`
+        ? `<div class="monitoring-source-scroll">${finalSources.map(renderSourceRow).join('')}</div>`
         : '<p class="monitoring-empty">暂无成功解析记录。</p>';
 
     const resolveServices = services.filter(item => monitoringCategory(item) === 'resolve').sort((a, b) => monitoringHealthOrder(a.health) - monitoringHealthOrder(b.health) || Number(b.success_rate ?? -1) - Number(a.success_rate ?? -1) || Number(a.average_duration_ms || Number.MAX_SAFE_INTEGER) - Number(b.average_duration_ms || Number.MAX_SAFE_INTEGER) || Number(a.catalog_order || 999) - Number(b.catalog_order || 999));
