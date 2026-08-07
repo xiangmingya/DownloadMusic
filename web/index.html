@@ -242,7 +242,7 @@
                     </div>
                     <div class="full-player-lyric-wrap">
                         <p class="full-player-kicker">Now Playing</p>
-                        <p id="fullPlayerCurrentLyric" class="full-player-current-lyric">点击歌曲开始播放</p>
+                        <p id="fullPlayerCurrentLyric" class="full-player-current-lyric"></p>
                         <p id="fullPlayerNextLyric" class="full-player-next-lyric"></p>
                     </div>
                 </div>
@@ -350,7 +350,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-36';
+        const APP_ASSET_VERSION = '20260806-37';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

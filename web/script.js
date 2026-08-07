@@ -4072,7 +4072,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
                 const fallbackLyrics = parseLyrics(lyricText);
                 if (!fallbackLyrics.length) return;
                 currentLyrics = fallbackLyrics;
-                if (currentPlayingSong) currentPlayingSong.lyrics = lyricText;
+                if (currentPlayingSong) currentPlayingSong.lyrics = fallbackLyrics;
                 updateFullPlayerLyric(audio.currentTime || 0);
                 updateLyrics(audio.currentTime || 0);
             }).catch(() => {});
@@ -4552,7 +4552,7 @@ function updateFullPlayerMeta() {
         titleEl.textContent = '未播放';
         artistEl.textContent = '请选择歌曲';
         coverEl.src = '';
-        document.getElementById('fullPlayerCurrentLyric').textContent = '点击歌曲开始播放';
+        document.getElementById('fullPlayerCurrentLyric').textContent = '';
         document.getElementById('fullPlayerNextLyric').textContent = '';
         updatePlayerFabPreview();
         return;
@@ -4631,7 +4631,7 @@ function updateFullPlayerLyric(currentTime) {
     if (!currentLyricEl || !nextLyricEl) return;
 
     if (!currentLyrics.length) {
-        currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '点击歌曲开始播放';
+        currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '';
         nextLyricEl.textContent = '';
         return;
     }
