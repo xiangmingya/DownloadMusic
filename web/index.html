@@ -142,6 +142,15 @@
                         <button class="type-btn active" data-type="song">单曲</button>
                         <button class="type-btn" data-type="playlist">歌单</button>
                     </div>
+                    <div class="platform-selector">
+                        <label>平台:</label>
+                        <select id="platform">
+                            <option value="all" selected>全部平台</option>
+                            <option value="netease">网易云</option>
+                            <option value="qq">QQ 音乐</option>
+                            <option value="kuwo">酷我</option>
+                        </select>
+                    </div>
                     <div class="quality-selector">
                         <label>音质:</label>
                         <select id="quality">
@@ -341,7 +350,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-22';
+        const APP_ASSET_VERSION = '20260806-23';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

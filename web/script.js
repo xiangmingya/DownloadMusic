@@ -2090,7 +2090,7 @@ async function search() {
     if (!input) return;
 
     const searchMode = document.getElementById('searchMode').value;
-    let platform = PLATFORM_ALL_VALUE;
+    let platform = String(document.getElementById('platform')?.value || PLATFORM_ALL_VALUE).trim();
     const quality = document.getElementById('quality').value;
     const resultsDiv = document.getElementById('results');
 
@@ -2099,7 +2099,9 @@ async function search() {
         showToast(`ID / 歌单解析会自动尝试可用音乐源`, 'info');
     }
 
-    resultsDiv.innerHTML = '<div class="empty-state">正在同时搜索网易云、QQ 音乐和酷我…</div>';
+    resultsDiv.innerHTML = String(platform) === PLATFORM_ALL_VALUE
+        ? '<div class="empty-state">正在同时搜索网易云、QQ 音乐和酷我…</div>'
+        : `<div class="empty-state">正在搜索${platformDisplayName(platform)}…</div>`;
 
     try {
         currentSearchParams = null;
