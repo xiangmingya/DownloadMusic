@@ -33,6 +33,7 @@ const BACKUP4_JKAPI_URL = "https://jkapi.com/api/music";
 const TUNEHUB_API_BASE = "https://tunehub.sayqz.com/api";
 const NXVAV_API_URL = "https://api.nxvav.cn/api/music/";
 const NXVAV_DEFAULT_SECRET = "token";
+const BACKUP4_11NA_URL = "https://api.11na.cn/v1/music";
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
@@ -55,6 +56,7 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "paugram_netease", category: "resolve", order: 96, name: "Paugram 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "api.paugram.com" },
   { source: "qqmp3", category: "resolve", order: 100, name: "QQMP3 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "qqmp3.vip" },
   { source: "nxvav", category: "resolve", order: 101, name: "NXVAV 音乐解析", detail: "网易云 / QQ 音乐 · 搜索与播放链接解析", endpoint: "api.nxvav.cn" },
+  { source: "11na", category: "resolve", order: 102, name: "11NA 音乐接口", detail: "网易云 / QQ / 酷我 · 搜索与播放链接解析", endpoint: "api.11na.cn" },
   { source: "netease", category: "data", order: 10, name: "网易云音乐", detail: "网易云音乐平台接口 · 搜索 / 歌单", endpoint: "music.163.com" },
   { source: "qq", category: "data", order: 20, name: "QQ 音乐", detail: "QQ 音乐平台接口 · 搜索 / 歌单", endpoint: "y.qq.com" },
   { source: "kuwo", category: "data", order: 30, name: "酷我音乐", detail: "酷我音乐平台接口 · 搜索 / 歌单", endpoint: "kuwo.cn" },
@@ -2963,6 +2965,7 @@ function getBackup4SearchChain(platform, env) {
       { source: "qq_backup3", run: (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit) },
       { source: "qq", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
       { source: "nxvav", run: (p, k) => backup4SearchViaNxvav(p, k) },
+      { source: "11na", run: (p, k) => backup4SearchVia11na(p, k) },
     ];
   }
   if (platform === "netease") {
@@ -2971,11 +2974,13 @@ function getBackup4SearchChain(platform, env) {
       { source: "netease", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
       { source: "chksz_163", run: (p, k, page, limit) => backup4SearchViaChkszMusic163(p, k, page, limit, env) },
       { source: "nxvav", run: (p, k) => backup4SearchViaNxvav(p, k) },
+      { source: "11na", run: (p, k) => backup4SearchVia11na(p, k) },
     ];
   }
   return [
     { source: "gdstudio", run: (p, k, page, limit) => backup4SearchViaGdstudio(p, k, page, limit) },
     { source: "kuwo", run: (p, k, page, limit) => backup4SearchViaMethod(p, k, page, limit) },
+    { source: "11na", run: (p, k) => backup4SearchVia11na(p, k) },
   ];
 }
 
@@ -3078,6 +3083,75 @@ async function backup4TryNxvav(platform, id, quality, name, artist, env) {
   return { url: endpoint.toString(), provider: "nxvav" };
 }
 
+function music11naServer(platform) {
+  if (platform === "qq") return "tencent";
+  if (platform === "netease") return "netease";
+  if (platform === "kuwo") return "kuwo";
+  return "";
+}
+
+async function backup4SearchVia11na(platform, keyword) {
+  const server = music11naServer(platform);
+  if (!server) throw new Error("11na 不支持该平台");
+  const endpoint = new URL(BACKUP4_11NA_URL);
+  endpoint.searchParams.set("server", server);
+  endpoint.searchParams.set("type", "search");
+  endpoint.searchParams.set("id", keyword);
+  const response = await backup4Json(endpoint.toString(), {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    },
+  });
+  const items = Array.isArray(response.json?.data?.items) ? response.json.data.items : [];
+  const mapped = items
+    .map((item) => {
+      let id = "";
+      try {
+        id = String(new URL(String(item?.url || "")).searchParams.get("id") || "");
+      } catch {
+        // 忽略无法解析的条目。
+      }
+      if (!id) return null;
+      return {
+        id,
+        name: String(item?.title || "未知歌曲"),
+        artist: String(item?.artist || "未知歌手").replace(/\s*\/\s*/g, ", "),
+        album: String(item?.album || ""),
+        cover: normalizeMediaUrl(item?.pic || item?.cover || ""),
+      };
+    })
+    .filter(Boolean);
+  if (mapped.length > 0) {
+    return { list: mapped, provider: "11na_search" };
+  }
+  throw new Error(`11na search empty (${platform})`);
+}
+
+async function backup4Try11na(platform, id, quality, name, artist) {
+  const server = music11naServer(platform);
+  if (!server || !id) throw new Error("11na 不支持该平台");
+  const token = await nxvavToken(server, "url", String(id));
+  const endpoint = new URL(BACKUP4_11NA_URL);
+  endpoint.searchParams.set("server", server);
+  endpoint.searchParams.set("type", "url");
+  endpoint.searchParams.set("id", String(id));
+  endpoint.searchParams.set("auth", token);
+  const probe = await fetch(endpoint.toString(), {
+    headers: { Range: "bytes=0-1023", "User-Agent": "Mozilla/5.0" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!probe.ok) {
+    throw new Error(`11na url failed (${probe.status})`);
+  }
+  const contentType = String(probe.headers.get("Content-Type") || "").toLowerCase();
+  if (!contentType.startsWith("audio/")) {
+    throw new Error("11na url 不是音频内容");
+  }
+  return { url: endpoint.toString(), provider: "11na" };
+}
+
 function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
     return [
@@ -3088,6 +3162,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
       { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
+      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
     ];
   }
   if (platform === "netease") {
@@ -3100,6 +3175,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "bugpk", run: backup4TryBugpk },
       { source: "paugram_netease", run: backup4TryPaugramNetease },
       { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
+      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
     ];
   }
   if (platform === "kuwo") {
@@ -3110,6 +3186,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
       { source: "qqmp3", run: backup4TryQqmp3 },
+      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
     ];
   }
   return [];
