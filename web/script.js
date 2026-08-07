@@ -67,6 +67,7 @@ let keywordPagingState = {
 
 // 播放相关
 let currentPlayingIndex = null;
+let currentPlayCollection = '';
 let currentLyrics = [];
 let activePlayRequestId = 0;
 let currentPlayingSong = null;
@@ -2475,6 +2476,14 @@ function syncInlinePlayButtonState() {
         const activeBtn = document.querySelector(`button[data-index="${currentPlayingIndex}"]`);
         if (activeBtn) activeBtn.innerHTML = getIconSvg('pause', 16);
     }
+    if (currentPlayCollection) {
+        const collectionBtn = document.querySelector(`button[data-play-collection="${currentPlayCollection}"][data-song-index="${currentPlayingIndex}"]`);
+        if (collectionBtn) {
+            collectionBtn.innerHTML = (currentPlayingIndex !== null && !audio.paused)
+                ? getIconSvg('pause', 32)
+                : getIconSvg('play', 32);
+        }
+    }
 }
 
 function setInlinePlayButtonLoading(index, loading) {
@@ -3893,7 +3902,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const playRequestId = ++activePlayRequestId;
     nextTrackPreloadToken += 1;
     clearTimeout(nextTrackPreloadTimer);
-    const loadingBtn = btn || collectionBtn;
+    const loadingBtn = collectionBtn || btn;
     if (loadingBtn) {
         loadingBtn.disabled = true;
         loadingBtn.classList.add('is-loading');
@@ -4037,6 +4046,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
 // 播放歌曲
 async function playSong(source, id, name, artist, index, options = {}) {
     const collection = String(options.collection || '');
+    currentPlayCollection = collection;
     const toggleSameSong = isSameSong(source, id);
     if (!toggleSameSong) {
         if (collection) {
