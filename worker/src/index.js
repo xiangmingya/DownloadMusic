@@ -2764,7 +2764,7 @@ async function backup4SearchViaQqBackup3(keyword, page, limit) {
   throw new Error(String(payload?.errMsg || "qq backup3 search failed"));
 }
 
-function getBackup4SearchChain(platform) {
+function getBackup4SearchChain(platform, env) {
   if (platform === "qq") {
     return [
       { source: "qq_backup3", run: (p, k, page, limit) => backup4SearchViaQqBackup3(k, page, limit) },
@@ -2786,7 +2786,7 @@ function getBackup4SearchChain(platform) {
 
 async function backup4Search(platform, keyword, page, limit, env) {
   const errors = [];
-  const chain = await prioritizeBackupChain(env, getBackup4SearchChain(platform), "search", `${platform}:${keyword}:${page}`);
+  const chain = await prioritizeBackupChain(env, getBackup4SearchChain(platform, env), "search", `${platform}:${keyword}:${page}`);
   for (const runner of chain) {
     const startedAt = Date.now();
     try {
