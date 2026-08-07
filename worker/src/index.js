@@ -569,6 +569,7 @@ async function requireMusicAccess(request, env) {
   if (!membershipRequired(env)) return auth;
   const membership = await getMembershipStatus(auth.session, env);
   if (membership.active) return auth;
+  if (isAdminSession(auth.session, env)) return auth;
   return { ok: false, response: jsonResponse(402, { code: 402, message: "需要有效的月会员" }) };
 }
 
