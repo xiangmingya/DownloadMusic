@@ -4025,8 +4025,11 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
 // 播放歌曲
 async function playSong(source, id, name, artist, index) {
-    setInlinePlayButtonLoading(index, true);
-    setGlobalPlayLoading(true);
+    const toggleSameSong = isSameSong(source, id);
+    if (!toggleSameSong) {
+        setInlinePlayButtonLoading(index, true);
+        setGlobalPlayLoading(true);
+    }
     let runtimeSong;
     try {
         runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
