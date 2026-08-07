@@ -886,16 +886,16 @@ async function checkStatus() {
         }
         try {
             const backup4Probe = await callBackup4Api({
+                mode: 'search',
                 platform: 'netease',
-                id: '1901371647',
-                quality: '320k',
-                name: '孤勇者',
-                artist: '陈奕迅'
+                keyword: '周杰伦',
+                page: 1,
+                limit: 1
             }, {
                 timeoutMs: 10000,
                 retries: 0
             });
-            const backup4Alive = Boolean(normalizeMediaUrl(backup4Probe?.data?.url || backup4Probe?.url || ''));
+            const backup4Alive = Array.isArray(backup4Probe?.data) && backup4Probe.data.length > 0;
             if (backup4Alive) {
                 supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
                 platformNames = {

@@ -1978,10 +1978,16 @@ async function handleMethod(request, env) {
 }
 
 async function handleBackup(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
-
   const reqUrl = new URL(request.url);
+  const types = String(reqUrl.searchParams.get("types") || "").trim();
+  if (!BACKUP_ALLOWED_TYPES.has(types)) {
+    return jsonResponse(400, { code: -1, message: "备用源参数无效: types" });
+  }
+  if (types !== "search") {
+    const auth = await requireMusicAccess(request, env);
+    if (!auth.ok) return auth.response;
+  }
+
   const backupUrl = new URL(BACKUP_API_URL);
 
   for (const [key, value] of reqUrl.searchParams.entries()) {
@@ -1989,11 +1995,6 @@ async function handleBackup(request, env) {
     const text = String(value || "").trim();
     if (!text) continue;
     backupUrl.searchParams.set(key, text);
-  }
-
-  const types = String(backupUrl.searchParams.get("types") || "").trim();
-  if (!BACKUP_ALLOWED_TYPES.has(types)) {
-    return jsonResponse(400, { code: -1, message: "备用源参数无效: types" });
   }
 
   const source = String(backupUrl.searchParams.get("source") || "").trim();
@@ -2223,9 +2224,6 @@ function getBackup3PayloadMessage(payload, fallback = "备用源3请求失败") 
 }
 
 async function handleBackup3(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
-
   const reqUrl = new URL(request.url);
   const input = String(reqUrl.searchParams.get("input") || "").trim();
   const filter = String(reqUrl.searchParams.get("filter") || "name").trim();
@@ -2240,6 +2238,10 @@ async function handleBackup3(request, env) {
   }
   if (type !== "qq") {
     return jsonResponse(400, { code: -1, message: "备用源3仅支持 QQ 平台" });
+  }
+  if (filter !== "name") {
+    const auth = await requireMusicAccess(request, env);
+    if (!auth.ok) return auth.response;
   }
 
   const startedAt = Date.now();
@@ -2894,15 +2896,16 @@ async function prioritizeBackupChain(env, chain, operation, routingKey) {
 }
 
 async function handleBackup4(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
-
   const reqUrl = new URL(request.url);
   const mode = String(reqUrl.searchParams.get("mode") || "url").trim().toLowerCase();
   const platform = normalizeBackup4Platform(reqUrl.searchParams.get("platform"));
 
   if (!BACKUP4_ALLOWED_PLATFORMS.has(platform)) {
     return jsonResponse(400, { code: -1, message: "备用源4参数无效: platform" });
+  }
+  if (mode !== "search") {
+    const auth = await requireMusicAccess(request, env);
+    if (!auth.ok) return auth.response;
   }
 
   if (mode === "search") {
