@@ -2649,7 +2649,7 @@ async function backup4TryChkszMusic163(platform, id, quality, env) {
 
   const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_music`);
   endpoint.searchParams.set("id", id);
-  endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
+  endpoint.searchParams.set("level", backup4ChkszLevel(quality));
   endpoint.searchParams.set("apikey", apiKey);
 
   const response = await backup4Json(endpoint.toString());
@@ -2659,6 +2659,13 @@ async function backup4TryChkszMusic163(platform, id, quality, env) {
     return { url, provider: "chksz_163" };
   }
   throw new Error(String(parsed?.msg || parsed?.message || `chksz music163 failed (${response.status})`));
+}
+
+function backup4ChkszLevel(quality) {
+  const text = String(quality || "").trim().toLowerCase();
+  if (text.startsWith("128")) return "standard";
+  if (text.startsWith("flac")) return text.includes("24") ? "hires" : "lossless";
+  return "jymaster";
 }
 
 async function backup4TryBugpk(platform, id) {
