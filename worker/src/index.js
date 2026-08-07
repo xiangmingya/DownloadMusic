@@ -2787,7 +2787,13 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
       endpoint.searchParams.set("type", "json");
       endpoint.searchParams.set("apiKey", apiKey);
       endpoint.searchParams.set("name", keyword);
-      const response = await backup4Json(endpoint.toString());
+      const response = await backup4Json(endpoint.toString(), {
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Referer: "https://jkapi.com/",
+        },
+      });
       const parsed = response.json;
       const url = normalizeMediaUrl(parsed?.music_url || parsed?.data?.music_url || parsed?.data?.url || "");
       if (response.ok && Number(parsed?.code) === 1 && url) {
