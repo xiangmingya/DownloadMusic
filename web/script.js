@@ -2484,6 +2484,13 @@ function setInlinePlayButtonLoading(index, loading) {
     btn.setAttribute('aria-busy', String(Boolean(loading)));
 }
 
+function setCollectionPlayLoading(collection, index, loading) {
+    const btn = document.querySelector(`button[data-play-collection="${String(collection || '')}"][data-song-index="${Number(index)}"]`);
+    if (!btn) return;
+    btn.classList.toggle('is-loading', Boolean(loading));
+    btn.setAttribute('aria-busy', String(Boolean(loading)));
+}
+
 function setGlobalPlayLoading(loading) {
     ['homeNowPlayingBtn', 'fullPlayerToggleBtn'].forEach(id => {
         const btn = document.getElementById(id);
@@ -3018,7 +3025,7 @@ async function playCollectionSong(collection, index) {
     const song = songs?.[Number(index)];
     if (!song) return;
     allSongs = songs.map(toLibrarySong).filter(Boolean);
-    await playSong(song.platform, song.id, song.name, song.artist, Number(index));
+    await playSong(song.platform, song.id, song.name, song.artist, Number(index), { collection });
 }
 
 async function playSavedPlaylist(playlistId) {
@@ -3855,6 +3862,9 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const inlineIndex = Number.isInteger(options.inlineIndex) ? options.inlineIndex : null;
     const runtimeSong = options.song || (inlineIndex !== null ? getSongByIndex(inlineIndex) : null);
     const btn = inlineIndex !== null ? document.querySelector(`button[data-index="${inlineIndex}"]`) : null;
+    const collectionBtn = (inlineIndex !== null && options.collection)
+        ? document.querySelector(`button[data-play-collection="${String(options.collection)}"][data-song-index="${inlineIndex}"]`)
+        : null;
     const player = inlineIndex !== null ? document.getElementById(`player-${inlineIndex}`) : null;
     const inlineLyrics = inlineIndex !== null ? document.getElementById(`inline-lyrics-${inlineIndex}`) : null;
     let resumeTime = 0;
@@ -3883,9 +3893,10 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const playRequestId = ++activePlayRequestId;
     nextTrackPreloadToken += 1;
     clearTimeout(nextTrackPreloadTimer);
-    if (btn) {
-        btn.disabled = true;
-        btn.classList.add('is-loading');
+    const loadingBtn = btn || collectionBtn;
+    if (loadingBtn) {
+        loadingBtn.disabled = true;
+        loadingBtn.classList.add('is-loading');
     }
     setGlobalPlayLoading(true);
 
@@ -4016,18 +4027,23 @@ async function playSongCore(source, id, name, artist, options = {}) {
         }
     } finally {
         if (playRequestId === activePlayRequestId) {
-            if (btn) btn.classList.remove('is-loading');
+            if (loadingBtn) loadingBtn.classList.remove('is-loading');
             setGlobalPlayLoading(false);
         }
-        if (btn) btn.disabled = false;
+        if (loadingBtn) loadingBtn.disabled = false;
     }
 }
 
 // 播放歌曲
-async function playSong(source, id, name, artist, index) {
+async function playSong(source, id, name, artist, index, options = {}) {
+    const collection = String(options.collection || '');
     const toggleSameSong = isSameSong(source, id);
     if (!toggleSameSong) {
-        setInlinePlayButtonLoading(index, true);
+        if (collection) {
+            setCollectionPlayLoading(collection, index, true);
+        } else {
+            setInlinePlayButtonLoading(index, true);
+        }
         setGlobalPlayLoading(true);
     }
     let runtimeSong;
@@ -4035,7 +4051,11 @@ async function playSong(source, id, name, artist, index) {
         runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
     } catch (error) {
         if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
-        setInlinePlayButtonLoading(index, false);
+        if (collection) {
+            setCollectionPlayLoading(collection, index, false);
+        } else {
+            setInlinePlayButtonLoading(index, false);
+        }
         setGlobalPlayLoading(false);
         return;
     }
@@ -4065,7 +4085,8 @@ async function playSong(source, id, name, artist, index) {
     renderPlaylistSheet();
     await playSongCore(source, id, name, artist, {
         inlineIndex: index,
-        song: runtimeSong
+        song: runtimeSong,
+        collection
     });
 }
 
