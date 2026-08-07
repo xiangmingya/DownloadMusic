@@ -3207,13 +3207,63 @@ async function startMembershipCheckout() {
     button.disabled = true;
     try {
         const data = await getJson(`${APP_API_ROOT}/billing/checkout`, { method: 'POST' });
-        window.location.assign(data.checkout_url);
+        const win = window.open(data.checkout_url, '_blank');
+        if (!win) {
+            window.location.assign(data.checkout_url);
+        } else {
+            showToast('已在新窗口打开支付页面，支付完成后会员将自动生效', 'info');
+            startMembershipPolling();
+        }
     } catch (error) {
         showToast(error.message || '创建订单失败', 'error');
         await loadMembership();
     }
+    button.disabled = false;
 }
 window.startMembershipCheckout = startMembershipCheckout;
+
+let membershipPollTimer = null;
+let membershipPollAttempts = 0;
+const MEMBERSHIP_POLL_INTERVAL_MS = 5000;
+const MEMBERSHIP_POLL_MAX_ATTEMPTS = 72;
+
+async function pollMembershipOnce() {
+    try {
+        const data = await getJson(`${APP_API_ROOT}/membership`);
+        if (data && data.active) {
+            stopMembershipPolling();
+            renderMembership(data);
+            showToast('会员已开通，欢迎加入！', 'success');
+            return true;
+        }
+    } catch {
+        // 网络波动时继续轮询。
+    }
+    return false;
+}
+
+function startMembershipPolling() {
+    if (membershipPollTimer) return;
+    membershipPollAttempts = 0;
+    const tick = async () => {
+        membershipPollAttempts += 1;
+        const done = await pollMembershipOnce();
+        if (done) return;
+        if (membershipPollAttempts >= MEMBERSHIP_POLL_MAX_ATTEMPTS) {
+            stopMembershipPolling();
+            showToast('暂未检测到支付结果，稍后可在会员弹层查看状态', 'info');
+        }
+    };
+    void tick();
+    membershipPollTimer = setInterval(tick, MEMBERSHIP_POLL_INTERVAL_MS);
+}
+
+function stopMembershipPolling() {
+    if (membershipPollTimer) {
+        clearInterval(membershipPollTimer);
+        membershipPollTimer = null;
+    }
+}
 
 async function loadAdminPanel() {
     try {

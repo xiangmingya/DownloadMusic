@@ -341,7 +341,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-19';
+        const APP_ASSET_VERSION = '20260806-20';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -628,6 +628,16 @@
             }
         });
 
+        document.getElementById('linuxdoLoginBtn')?.addEventListener('click', function (e) {
+            e.preventDefault();
+            const href = this.getAttribute('href');
+            if (!href || href === '#') return;
+            const popup = window.open(href, 'linuxdo_auth', 'width=460,height=620,popup=yes');
+            if (!popup) {
+                window.location.href = href;
+            }
+        });
+
         document.getElementById('logoutBtn').addEventListener('click', async function (e) {
             e.preventDefault();
             await doLogout();
@@ -639,8 +649,35 @@
             setLoginTip('Linux DO 登录失败，请稍后重试。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
+
+        function notifyAuthPopup(success) {
+            try {
+                if (window.opener) {
+                    window.opener.postMessage({ type: 'dm-linuxdo-auth', success: Boolean(success) }, window.location.origin);
+                }
+            } catch {
+                // 跨域等异常直接忽略。
+            }
+            window.close();
+        }
+
+        window.addEventListener('message', function (event) {
+            if (event.origin !== window.location.origin) return;
+            const data = event.data;
+            if (!data || data.type !== 'dm-linuxdo-auth') return;
+            if (data.success) {
+                window.location.reload();
+            } else {
+                setLoginTip('Linux DO 登录失败，请稍后重试。', true);
+            }
+        });
+
         (async function init() {
             const loggedIn = await checkLoginAndStart();
+            if (window.opener) {
+                notifyAuthPopup(loggedIn);
+                return;
+            }
             if (loggedIn) return;
             revealLogin();
             void checkLinuxdoStatus();
