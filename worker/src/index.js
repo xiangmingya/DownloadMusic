@@ -128,7 +128,7 @@ async function handleRequest(request, env) {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
     const publicBrowseRoutes = new Set([
-      "/api/proxy/methods", "/api/proxy/method", "/api/proxy/toplists", "/api/proxy/toplist", "/api/proxy/playlists", "/api/proxy/meta",
+      "/api/proxy/methods", "/api/proxy/method", "/api/proxy/toplists", "/api/proxy/toplist", "/api/proxy/playlists", "/api/proxy/meta", "/api/proxy/cover",
     ]);
     if (url.pathname.startsWith("/api/proxy/") && !publicBrowseRoutes.has(url.pathname)) {
       const access = await requireMusicAccess(request, env);
@@ -158,6 +158,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/media" && request.method === "GET") {
       return withCors(request, env, await handleMedia(request, env));
+    }
+    if (url.pathname === "/api/proxy/cover" && request.method === "GET") {
+      return withCors(request, env, await handleCover(request, env));
     }
     if (url.pathname === "/api/proxy/backup" && request.method === "GET") {
       return withCors(request, env, await handleBackup(request, env));
@@ -3095,46 +3098,35 @@ async function fetchMediaUpstream(targetUrl, request) {
   }
 }
 
-async function handleMedia(request, env) {
-  const auth = await requireSession(request, env);
-  if (!auth.ok) return auth.response;
-
-  const reqUrl = new URL(request.url);
-  const targetRaw = normalizeMediaUrl(reqUrl.searchParams.get("url") || "");
-  if (!targetRaw) {
-    return jsonResponse(400, { code: -1, message: "缺少参数: url" });
-  }
+function resolveProxyTarget(rawUrl, env) {
+  const badRequest = (message) => ({ error: jsonResponse(400, { code: -1, message }) });
+  const targetRaw = normalizeMediaUrl(rawUrl || "");
+  if (!targetRaw) return badRequest("缺少参数: url");
 
   let target;
   try {
     target = new URL(targetRaw);
   } catch {
-    return jsonResponse(400, { code: -1, message: "url 参数无效" });
+    return badRequest("url 参数无效");
   }
 
   if (!["http:", "https:"].includes(target.protocol)) {
-    return jsonResponse(400, { code: -1, message: "仅支持 http/https 媒体链接" });
+    return badRequest("仅支持 http/https 媒体链接");
   }
 
   if (isBlockedMediaHost(target.hostname)) {
-    return jsonResponse(400, { code: -1, message: "不允许访问该媒体地址" });
+    return badRequest("不允许访问该媒体地址");
   }
 
   const allowedHosts = getMediaAllowedHosts(env);
   if (allowedHosts.length > 0 && !allowedHosts.some((rule) => hostMatchesRule(target.hostname, rule))) {
-    return jsonResponse(400, { code: -1, message: "该域名未在媒体代理白名单中" });
+    return badRequest("该域名未在媒体代理白名单中");
   }
 
-  let upstream;
-  try {
-    upstream = await fetchMediaUpstream(target, request);
-  } catch (err) {
-    return jsonResponse(502, {
-      code: -1,
-      message: err instanceof Error ? err.message : "媒体请求失败",
-    });
-  }
+  return { target };
+}
 
+function buildUpstreamProxyResponse(upstream, extraHeaders = {}) {
   const headers = new Headers();
   const passthrough = [
     "Content-Type",
@@ -3149,16 +3141,58 @@ async function handleMedia(request, env) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   });
+  Object.entries(extraHeaders).forEach(([name, value]) => {
+    if (value) headers.set(name, value);
+  });
+  return new Response(upstream.body, { status: upstream.status, headers });
+}
 
-  if (reqUrl.searchParams.get("download") === "1") {
-    const filename = sanitizeDownloadFilename(reqUrl.searchParams.get("filename"));
-    headers.set("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+async function handleMedia(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+
+  const reqUrl = new URL(request.url);
+  const resolved = resolveProxyTarget(reqUrl.searchParams.get("url") || "", env);
+  if (resolved.error) return resolved.error;
+
+  let upstream;
+  try {
+    upstream = await fetchMediaUpstream(resolved.target, request);
+  } catch (err) {
+    return jsonResponse(502, {
+      code: -1,
+      message: err instanceof Error ? err.message : "媒体请求失败",
+    });
   }
 
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers,
-  });
+  const extraHeaders = {};
+  if (reqUrl.searchParams.get("download") === "1") {
+    const filename = sanitizeDownloadFilename(reqUrl.searchParams.get("filename"));
+    extraHeaders["Content-Disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  }
+  return buildUpstreamProxyResponse(upstream, extraHeaders);
+}
+
+async function handleCover(request, env) {
+  const reqUrl = new URL(request.url);
+  const resolved = resolveProxyTarget(reqUrl.searchParams.get("url") || "", env);
+  if (resolved.error) return resolved.error;
+
+  let upstream;
+  try {
+    upstream = await fetchMediaUpstream(resolved.target, request);
+  } catch (err) {
+    return jsonResponse(502, {
+      code: -1,
+      message: err instanceof Error ? err.message : "封面请求失败",
+    });
+  }
+
+  const contentType = String(upstream.headers.get("Content-Type") || "").toLowerCase();
+  if (!upstream.ok || !contentType.startsWith("image/")) {
+    return jsonResponse(400, { code: -1, message: "该地址不是图片资源" });
+  }
+  return buildUpstreamProxyResponse(upstream);
 }
 
 async function handleParse(request, env) {

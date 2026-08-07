@@ -7,6 +7,7 @@ const API_ROUTES = {
     method: `${API_BASE}/method`,
     methods: `${API_BASE}/methods`,
     media: `${API_BASE}/media`,
+    cover: `${API_BASE}/cover`,
     backup: `${API_BASE}/backup`,
     backup3: `${API_BASE}/backup3`,
     backup4: `${API_BASE}/backup4`,
@@ -261,8 +262,11 @@ function buildMediaProxyUrl(rawUrl, options = {}) {
 }
 
 function getProxiedCoverUrl(rawUrl) {
-    if (AUTH_TYPE === 'guest') return normalizeMediaUrl(rawUrl);
-    return buildMediaProxyUrl(rawUrl);
+    const mediaUrl = normalizeMediaUrl(rawUrl);
+    if (!mediaUrl) return '';
+    const endpoint = new URL(API_ROUTES.cover, window.location.href);
+    endpoint.searchParams.set('url', mediaUrl);
+    return endpoint.toString();
 }
 
 function buildDownloadFilename(name, artist) {
