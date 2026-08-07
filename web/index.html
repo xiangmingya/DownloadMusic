@@ -315,7 +315,7 @@
             </div>
             <div class="welcome-dialog-actions">
                 <button id="welcomeDialogDismissBtn" type="button">知道了</button>
-                <button id="welcomeDialogMembershipBtn" type="button">查看会员方案</button>
+                <button id="welcomeDialogMembershipBtn" type="button">开通会员</button>
             </div>
         </dialog>
 
@@ -418,6 +418,13 @@
                     ? `${name}，欢迎回来。愿你在这里，找到此刻最想听的歌。`
                     : '欢迎回来。愿你在这里，找到此刻最想听的歌。';
             }
+            const isMember = Boolean(window.APP_CONTEXT && window.APP_CONTEXT.membership && window.APP_CONTEXT.membership.active);
+            if (isMember) {
+                const tip = document.querySelector('.welcome-membership-tip');
+                if (tip) tip.style.display = 'none';
+                const buyBtn = document.getElementById('welcomeDialogMembershipBtn');
+                if (buyBtn) buyBtn.style.display = 'none';
+            }
             dialog.showModal();
             startWelcomeCountdown();
         }
@@ -426,7 +433,11 @@
         document.getElementById('welcomeDialogDismissBtn')?.addEventListener('click', closeWelcomeDialog);
         document.getElementById('welcomeDialogMembershipBtn')?.addEventListener('click', function () {
             closeWelcomeDialog();
-            document.getElementById('userChip')?.click();
+            if (window.startMembershipCheckout) {
+                window.startMembershipCheckout();
+            } else {
+                document.getElementById('userChip')?.click();
+            }
         });
         document.getElementById('welcomeDialog')?.addEventListener('close', stopWelcomeCountdown);
 
