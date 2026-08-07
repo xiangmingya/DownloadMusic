@@ -1306,9 +1306,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             limit: requestLimit
         });
         if (backupSongs.length > 0) {
-            if (!silentFallback) {
-                showToast(primaryError ? '主搜索异常，已自动切换备用源' : '主搜索无结果，已自动切换备用源', 'info');
-            }
             return { songs: backupSongs, provider: 'backup' };
         }
     } catch (error) {
@@ -1322,9 +1319,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             limit: requestLimit
         });
         if (backup3Songs.length > 0) {
-            if (!silentFallback) {
-                showToast(primaryError ? '主源/备用源异常，已切换第3层备用源' : '主源/备用源无结果，已切换第3层备用源', 'info');
-            }
             return { songs: backup3Songs, provider: 'backup3' };
         }
     } catch (backup3Error) {
@@ -1337,9 +1331,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             limit: requestLimit
         });
         if (backup4Songs.length > 0) {
-            if (!silentFallback) {
-                showToast(primaryError ? '前3层备用异常，已切换第4层备用源' : '前3层无结果，已切换第4层备用源', 'info');
-            }
             return { songs: backup4Songs, provider: 'backup4' };
         }
     } catch (backup4Error) {
@@ -2067,9 +2058,6 @@ async function fetchPlaylistSongs(platform, playlistId, options = {}) {
     try {
         const backupSongs = await fetchPlaylistSongsBackup(platform, playlistId);
         if (backupSongs.length > 0) {
-            if (!silentFallback) {
-                showToast(primaryError ? '主歌单接口异常，已自动切换备用源' : '主歌单无结果，已自动切换备用源', 'info');
-            }
             return backupSongs;
         }
     } catch (backupError) {
@@ -2150,14 +2138,12 @@ async function search() {
 
             const backupSong = await fetchSongByIdBackup(platform, input, quality).catch(() => null);
             if (backupSong) {
-                showToast('主解析无结果，已自动切换备用源', 'info');
                 displaySongsWithPagination([backupSong]);
                 return;
             }
 
             const backup3Song = await fetchSongByIdBackup3(platform, input).catch(() => null);
             if (backup3Song) {
-                showToast('主解析/备用源无结果，已切换第3层备用源', 'info');
                 displaySongsWithPagination([backup3Song]);
                 return;
             }
@@ -2167,7 +2153,6 @@ async function search() {
                 artist: '未知歌手'
             }).catch(() => null);
             if (backup4Parsed) {
-                showToast('主解析/备用源3无结果，已切换第4层备用源', 'info');
                 displaySongsWithPagination([toSongFromParsedItem(platform, backup4Parsed)]);
                 return;
             }
