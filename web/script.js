@@ -2477,6 +2477,22 @@ function syncInlinePlayButtonState() {
     }
 }
 
+function setInlinePlayButtonLoading(index, loading) {
+    const btn = (index === null || index === undefined) ? null : document.querySelector(`button[data-index="${index}"]`);
+    if (!btn) return;
+    btn.classList.toggle('is-loading', Boolean(loading));
+    btn.setAttribute('aria-busy', String(Boolean(loading)));
+}
+
+function setGlobalPlayLoading(loading) {
+    ['homeNowPlayingBtn', 'fullPlayerToggleBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.classList.toggle('is-loading', Boolean(loading));
+        btn.setAttribute('aria-busy', String(Boolean(loading)));
+    });
+}
+
 function isSameSong(source, id) {
     return Boolean(
         currentPlayingSong &&
@@ -3867,7 +3883,11 @@ async function playSongCore(source, id, name, artist, options = {}) {
     const playRequestId = ++activePlayRequestId;
     nextTrackPreloadToken += 1;
     clearTimeout(nextTrackPreloadTimer);
-    if (btn) btn.disabled = true;
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('is-loading');
+    }
+    setGlobalPlayLoading(true);
 
     try {
         const dataSource = normalizeSongDataSource(runtimeSong?.dataSource);
@@ -3995,17 +4015,25 @@ async function playSongCore(source, id, name, artist, options = {}) {
             updateFullPlayerControlState();
         }
     } finally {
+        if (playRequestId === activePlayRequestId) {
+            if (btn) btn.classList.remove('is-loading');
+            setGlobalPlayLoading(false);
+        }
         if (btn) btn.disabled = false;
     }
 }
 
 // 播放歌曲
 async function playSong(source, id, name, artist, index) {
+    setInlinePlayButtonLoading(index, true);
+    setGlobalPlayLoading(true);
     let runtimeSong;
     try {
         runtimeSong = await resolveLookupOnlySong(getSongByIndex(Number(index)));
     } catch (error) {
         if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '无法匹配歌曲'}`, 'error');
+        setInlinePlayButtonLoading(index, false);
+        setGlobalPlayLoading(false);
         return;
     }
     source = String(runtimeSong?.platform || runtimeSong?.source || source);
