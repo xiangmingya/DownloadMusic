@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260806-02">
+    <link rel="stylesheet" href="style.css?v=20260806-03">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -302,6 +302,22 @@
                 <button id="deletePlaylistConfirmBtn" type="button">删除歌单</button>
             </div>
         </dialog>
+
+        <dialog id="welcomeDialog" class="welcome-dialog" aria-labelledby="welcomeDialogTitle" aria-describedby="welcomeDialogMessage">
+            <button id="welcomeDialogCloseBtn" class="welcome-dialog-close" type="button" aria-label="关闭欢迎弹窗">×</button>
+            <div class="welcome-dialog-mark" aria-hidden="true">音</div>
+            <p class="eyebrow">ようこそ</p>
+            <h2 id="welcomeDialogTitle">欢迎回来</h2>
+            <p id="welcomeDialogMessage" class="welcome-dialog-msg">欢迎回来。愿你在这里，找到此刻最想听的歌。</p>
+            <div class="welcome-membership-tip">
+                <strong>解锁完整体验</strong>
+                <p>开通 Linux DO 月会员，畅享高品质播放与下载，也支持这个小站持续为你服务。</p>
+            </div>
+            <div class="welcome-dialog-actions">
+                <button id="welcomeDialogDismissBtn" type="button">知道了</button>
+                <button id="welcomeDialogMembershipBtn" type="button">查看会员方案</button>
+            </div>
+        </dialog>
     </div>
 
     <script>
@@ -333,12 +349,81 @@
             document.getElementById('loginShell')?.setAttribute('aria-busy', 'false');
         }
 
+        const WELCOME_SEEN_KEY = 'dm_welcome_seen_v1';
+        const WELCOME_AUTO_CLOSE_SECONDS = 8;
+        let welcomeCountdownTimer = null;
+
+        function stopWelcomeCountdown() {
+            if (welcomeCountdownTimer) {
+                clearInterval(welcomeCountdownTimer);
+                welcomeCountdownTimer = null;
+            }
+        }
+
+        function closeWelcomeDialog() {
+            stopWelcomeCountdown();
+            const dialog = document.getElementById('welcomeDialog');
+            if (dialog && dialog.open) dialog.close();
+        }
+
+        function startWelcomeCountdown() {
+            stopWelcomeCountdown();
+            const btn = document.getElementById('welcomeDialogDismissBtn');
+            let remaining = WELCOME_AUTO_CLOSE_SECONDS;
+            const render = function () {
+                if (btn) btn.textContent = `知道了（${remaining}s）`;
+            };
+            render();
+            welcomeCountdownTimer = setInterval(function () {
+                remaining -= 1;
+                if (remaining <= 0) {
+                    closeWelcomeDialog();
+                    return;
+                }
+                render();
+            }, 1000);
+        }
+
+        function showWelcomeDialog() {
+            const dialog = document.getElementById('welcomeDialog');
+            if (!dialog) return;
+            try {
+                if (sessionStorage.getItem(WELCOME_SEEN_KEY)) return;
+                sessionStorage.setItem(WELCOME_SEEN_KEY, '1');
+            } catch {
+                // 隐私模式下 sessionStorage 可能不可用，仍允许弹出。
+            }
+            const name = String((window.APP_CONTEXT && window.APP_CONTEXT.user && window.APP_CONTEXT.user.name) || '').trim();
+            const useName = name && name !== '用户' && name !== '管理员';
+            const msg = document.getElementById('welcomeDialogMessage');
+            if (msg) {
+                msg.textContent = useName
+                    ? `${name}，欢迎回来。愿你在这里，找到此刻最想听的歌。`
+                    : '欢迎回来。愿你在这里，找到此刻最想听的歌。';
+            }
+            dialog.showModal();
+            startWelcomeCountdown();
+        }
+
+        document.getElementById('welcomeDialogCloseBtn')?.addEventListener('click', closeWelcomeDialog);
+        document.getElementById('welcomeDialogDismissBtn')?.addEventListener('click', closeWelcomeDialog);
+        document.getElementById('welcomeDialogMembershipBtn')?.addEventListener('click', function () {
+            closeWelcomeDialog();
+            document.getElementById('userChip')?.click();
+        });
+        document.getElementById('welcomeDialog')?.addEventListener('close', stopWelcomeCountdown);
+
         window.openLoginModal = function (message) {
             const shell = document.getElementById('loginShell');
             if (!shell) return;
+            revealLogin();
+            document.body.classList.remove('app-body');
+            document.body.classList.add('auth-body');
+            const app = document.getElementById('appContainer');
+            if (app) app.style.display = 'none';
             shell.style.display = '';
-            shell.setAttribute('aria-busy', 'false');
             setLoginTip(message || '登录后即可播放、下载和收藏歌曲。', false);
+            window.scrollTo(0, 0);
         };
 
         async function authFetch(path, init = {}) {
@@ -414,6 +499,7 @@
             document.getElementById('appContainer').style.display = '';
             document.getElementById('userChip').textContent = `${window.APP_CONTEXT.user.name} · 正在读取会员`;
             if (window.APP_CONTEXT.isAdmin) document.getElementById('adminViewBtn').style.display = '';
+            showWelcomeDialog();
 
             if (!appScriptLoaded && !appScriptLoading) {
                 appScriptLoading = true;
@@ -476,6 +562,11 @@
             await authFetch('/logout', {
                 method: 'POST'
             });
+            try {
+                sessionStorage.removeItem(WELCOME_SEEN_KEY);
+            } catch {
+                // ignore
+            }
             window.location.href = window.location.origin + window.location.pathname;
         }
 
@@ -512,7 +603,7 @@
         (async function init() {
             const loggedIn = await checkLoginAndStart();
             if (loggedIn) return;
-            mountApp({ auth_type: 'guest', user: { id: '', name: '游客', linuxdo_id: '', avatar: '' }, membership: {} });
+            revealLogin();
             void checkLinuxdoStatus();
         })();
     })();
