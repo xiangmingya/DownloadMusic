@@ -3190,6 +3190,15 @@ function renderMembership(data) {
         hint.textContent = '';
         return;
     }
+    if (data.is_admin) {
+        chip.textContent = `${userName} · 管理员`;
+        badge.textContent = '管理员';
+        status.textContent = '管理员账号无需开通会员，可直接播放与下载。';
+        button.hidden = true;
+        button.disabled = true;
+        hint.textContent = '';
+        return;
+    }
     chip.textContent = `${userName} · ${data.active ? '已开通' : '待开通'}`;
     badge.textContent = data.active ? '已开通' : '待开通';
     status.textContent = data.active ? `有效至 ${new Date(data.expires_at).toLocaleString()}` : '当前未开通会员。';
