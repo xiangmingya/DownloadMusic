@@ -3898,6 +3898,7 @@ function bindSongMeta(song) {
         backup3: cloneBackup3Meta(song?.backup3)
     };
     currentLyrics = currentPlayingSong.lyrics;
+    lastLyricIndex = -1;
     syncNowPlayingViews();
 }
 
@@ -4625,6 +4626,9 @@ function updateFullPlayerProgress() {
     fillEl.style.width = `${Math.max(0, Math.min(100, ratio))}%`;
 }
 
+let lastLyricIndex = -1;
+let lyricSwapToken = 0;
+
 function updateFullPlayerLyric(currentTime) {
     const currentLyricEl = document.getElementById('fullPlayerCurrentLyric');
     const nextLyricEl = document.getElementById('fullPlayerNextLyric');
@@ -4633,6 +4637,7 @@ function updateFullPlayerLyric(currentTime) {
     if (!currentLyrics.length) {
         currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '';
         nextLyricEl.textContent = '';
+        lastLyricIndex = -1;
         return;
     }
 
@@ -4645,8 +4650,49 @@ function updateFullPlayerLyric(currentTime) {
         }
     }
 
-    currentLyricEl.textContent = currentLyrics[activeIndex]?.text || '';
-    nextLyricEl.textContent = currentLyrics[activeIndex + 1]?.text || '';
+    if (activeIndex === lastLyricIndex) return;
+    const hadPrevious = lastLyricIndex !== -1;
+    lastLyricIndex = activeIndex;
+    const token = ++lyricSwapToken;
+
+    const currentText = currentLyrics[activeIndex]?.text || '';
+    const nextText = currentLyrics[activeIndex + 1]?.text || '';
+
+    if (!hadPrevious) {
+        currentLyricEl.textContent = currentText;
+        nextLyricEl.textContent = nextText;
+        return;
+    }
+
+    // 下一句：从下方放大滚动进中间；当前句：向上缩小淡出。
+    nextLyricEl.animate(
+        [
+            { transform: 'translateY(64px) scale(.55)', opacity: 0 },
+            { transform: 'translateY(0) scale(1)', opacity: 1 },
+        ],
+        { duration: 360, easing: 'cubic-bezier(.22,.61,.36,1)', fill: 'forwards' }
+    );
+    currentLyricEl.animate(
+        [
+            { transform: 'translateY(0) scale(1)', opacity: 1 },
+            { transform: 'translateY(-46px) scale(.6)', opacity: 0.25 },
+        ],
+        { duration: 360, easing: 'cubic-bezier(.22,.61,.36,1)', fill: 'forwards' }
+    );
+
+    window.setTimeout(() => {
+        if (token !== lyricSwapToken) return;
+        currentLyricEl.textContent = nextText;
+        nextLyricEl.textContent = currentLyrics[activeIndex + 2]?.text || '';
+        currentLyricEl.animate(
+            [{ transform: 'translateY(0) scale(1)', opacity: 1 }],
+            { duration: 0, fill: 'forwards' }
+        );
+        nextLyricEl.animate(
+            [{ transform: 'translateY(0) scale(1)', opacity: 1 }],
+            { duration: 0, fill: 'forwards' }
+        );
+    }, 360);
 }
 
 async function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
