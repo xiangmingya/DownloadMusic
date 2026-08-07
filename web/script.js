@@ -4553,7 +4553,8 @@ function updateFullPlayerMeta() {
         titleEl.textContent = '未播放';
         artistEl.textContent = '请选择歌曲';
         coverEl.src = '';
-        updateFullPlayerLyric(0);
+        document.getElementById('fullPlayerCurrentLyric').textContent = '';
+        document.getElementById('fullPlayerNextLyric').textContent = '';
         updatePlayerFabPreview();
         return;
     }
@@ -4627,29 +4628,15 @@ function updateFullPlayerProgress() {
 
 let lastLyricIndex = -1;
 let lyricSwapToken = 0;
-const fullPlayerLyricSlots = [
-    document.getElementById('fullPlayerLyricL1'),
-    document.getElementById('fullPlayerLyricL2'),
-    document.getElementById('fullPlayerLyricL3'),
-].filter(Boolean);
-let fullPlayerLyricRole = { prev: 0, current: 1, next: 2 };
-
-function applyLyricRoleClasses() {
-    fullPlayerLyricSlots.forEach((el, index) => {
-        el.classList.remove('is-prev', 'is-current', 'is-next', 'is-exiting');
-        const role = Object.keys(fullPlayerLyricRole).find(key => fullPlayerLyricRole[key] === index);
-        if (role) el.classList.add(`is-${role}`);
-    });
-}
 
 function updateFullPlayerLyric(currentTime) {
-    if (fullPlayerLyricSlots.length !== 3) return;
+    const currentLyricEl = document.getElementById('fullPlayerCurrentLyric');
+    const nextLyricEl = document.getElementById('fullPlayerNextLyric');
+    if (!currentLyricEl || !nextLyricEl) return;
 
     if (!currentLyrics.length) {
-        fullPlayerLyricSlots[fullPlayerLyricRole.current].textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '';
-        fullPlayerLyricSlots[fullPlayerLyricRole.prev].textContent = '';
-        fullPlayerLyricSlots[fullPlayerLyricRole.next].textContent = '';
-        applyLyricRoleClasses();
+        currentLyricEl.textContent = currentPlayingSong ? (currentPlayingSong.name || '播放中') : '';
+        nextLyricEl.textContent = '';
         lastLyricIndex = -1;
         return;
     }
@@ -4668,46 +4655,44 @@ function updateFullPlayerLyric(currentTime) {
     lastLyricIndex = activeIndex;
     const token = ++lyricSwapToken;
 
+    const currentText = currentLyrics[activeIndex]?.text || '';
+    const nextText = currentLyrics[activeIndex + 1]?.text || '';
+
     if (!hadPrevious) {
-        fullPlayerLyricSlots[fullPlayerLyricRole.prev].textContent = activeIndex > 0 ? (currentLyrics[activeIndex - 1]?.text || '') : '';
-        fullPlayerLyricSlots[fullPlayerLyricRole.current].textContent = currentLyrics[activeIndex]?.text || '';
-        fullPlayerLyricSlots[fullPlayerLyricRole.next].textContent = currentLyrics[activeIndex + 1]?.text || '';
-        applyLyricRoleClasses();
+        currentLyricEl.textContent = currentText;
+        nextLyricEl.textContent = nextText;
         return;
     }
 
-    const nextText = currentLyrics[activeIndex + 1]?.text || '';
-    const oldPrev = fullPlayerLyricSlots[fullPlayerLyricRole.prev];
-    const oldCurrent = fullPlayerLyricSlots[fullPlayerLyricRole.current];
-    const oldNext = fullPlayerLyricSlots[fullPlayerLyricRole.next];
-
-    // 旧 prev 淡出离开顶部。
-    oldPrev.classList.remove('is-prev');
-    oldPrev.classList.add('is-exiting');
-
-    // 角色轮转：oldNext→current（放大滚入中间），oldCurrent→prev（上移缩小）。
-    fullPlayerLyricRole = {
-        prev: fullPlayerLyricSlots.indexOf(oldCurrent),
-        current: fullPlayerLyricSlots.indexOf(oldNext),
-        next: fullPlayerLyricSlots.indexOf(oldPrev),
-    };
-    oldNext.classList.remove('is-next');
-    oldNext.classList.add('is-current');
-    oldCurrent.classList.remove('is-current');
-    oldCurrent.classList.add('is-prev');
+    // 下一句：从下方放大滚动进中间；当前句：向上缩小淡出。
+    nextLyricEl.animate(
+        [
+            { transform: 'translateY(64px) scale(.55)', opacity: 0 },
+            { transform: 'translateY(0) scale(1)', opacity: 1 },
+        ],
+        { duration: 360, easing: 'cubic-bezier(.22,.61,.36,1)', fill: 'forwards' }
+    );
+    currentLyricEl.animate(
+        [
+            { transform: 'translateY(0) scale(1)', opacity: 1 },
+            { transform: 'translateY(-46px) scale(.6)', opacity: 0.25 },
+        ],
+        { duration: 360, easing: 'cubic-bezier(.22,.61,.36,1)', fill: 'forwards' }
+    );
 
     window.setTimeout(() => {
         if (token !== lyricSwapToken) return;
-        // 旧 prev 落到 next 位置并载入新文本淡入。
-        oldPrev.classList.add('no-transition');
-        oldPrev.classList.remove('is-exiting');
-        oldPrev.classList.add('is-next');
-        oldPrev.textContent = nextText;
-        oldPrev.style.opacity = '0';
-        oldPrev.classList.remove('no-transition');
-        void oldPrev.offsetHeight;
-        oldPrev.style.opacity = '';
-    }, 380);
+        currentLyricEl.textContent = nextText;
+        nextLyricEl.textContent = currentLyrics[activeIndex + 2]?.text || '';
+        currentLyricEl.animate(
+            [{ transform: 'translateY(0) scale(1)', opacity: 1 }],
+            { duration: 0, fill: 'forwards' }
+        );
+        nextLyricEl.animate(
+            [{ transform: 'translateY(0) scale(1)', opacity: 1 }],
+            { duration: 0, fill: 'forwards' }
+        );
+    }, 360);
 }
 
 async function addSongToPlaylist(source, id, name, artist, album = '', cover = '', index = null) {
