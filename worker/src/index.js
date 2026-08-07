@@ -131,6 +131,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
+    if (url.pathname === "/api/admin/monitoring/sources" && request.method === "PUT") {
+      return withCors(request, env, await handleAdminSourceToggle(request, env));
+    }
     if (url.pathname.startsWith("/api/proxy/")) {
       const sessionAuth = await requireSession(request, env);
       if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
@@ -1152,6 +1155,7 @@ async function handleAdminMonitoring(request, env) {
     const summaryBySource = new Map((summaryResult.results || []).map((row) => [String(row.source || "unknown"), row]));
     const catalogBySource = new Map(MONITORING_SERVICE_CATALOG.map((item) => [item.source, item]));
     const allSources = [...MONITORING_SERVICE_CATALOG, ...Array.from(summaryBySource.keys()).filter((source) => !catalogBySource.has(source)).map((source, index) => ({ source, category: "other", order: 1000 + index }))];
+    const disabledSources = new Set(await getDisabledSources(env));
     const services = allSources.map((catalog) => {
       const row = summaryBySource.get(catalog.source) || {};
       const latest = latestBySource.get(catalog.source) || {};
@@ -1161,6 +1165,7 @@ async function handleAdminMonitoring(request, env) {
       const health = serviceHealth({ ...row, requests, successes, failures }, now);
       return {
         source: String(catalog.source || "unknown"),
+        disabled: disabledSources.has(String(catalog.source || "")),
         category: catalog.category,
         catalog_order: catalog.order,
         name: String(catalog.name || "未分类接口"),
@@ -1206,6 +1211,65 @@ async function handleAdminMonitoring(request, env) {
   } catch {
     return apiError("服务监控表尚未初始化，请先执行最新 schema.sql", 503);
   }
+}
+
+let disabledSourcesCache = { at: 0, value: null };
+
+async function getDisabledSources(env) {
+  const now = Date.now();
+  if (Array.isArray(disabledSourcesCache.value) && now - disabledSourcesCache.at < 10000) {
+    return disabledSourcesCache.value;
+  }
+  const db = getDatabase(env);
+  let list = [];
+  if (db) {
+    try {
+      const row = await db.prepare("SELECT value FROM app_settings WHERE key = 'disabled_sources'").first();
+      const parsed = JSON.parse(String(row?.value || "[]"));
+      list = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      list = [];
+    }
+  }
+  disabledSourcesCache = { at: now, value: list };
+  return list;
+}
+
+async function isSourceDisabled(env, source) {
+  const list = await getDisabledSources(env);
+  return list.includes(String(source || ""));
+}
+
+async function setSourceDisabled(env, source, disabled) {
+  const db = getDatabase(env);
+  if (!db) return false;
+  const current = await getDisabledSources(env);
+  const next = new Set(current);
+  if (disabled) {
+    next.add(String(source || ""));
+  } else {
+    next.delete(String(source || ""));
+  }
+  await db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('disabled_sources', ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+    .bind(JSON.stringify([...next]))
+    .run();
+  disabledSourcesCache = { at: 0, value: null };
+  return true;
+}
+
+async function handleAdminSourceToggle(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const body = await parseJsonBody(request);
+  const source = String(body.source || "").trim();
+  if (!source) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: source" });
+  }
+  const disabled = Boolean(body.disabled);
+  await setSourceDisabled(env, source, disabled);
+  return jsonResponse(200, { code: 0, message: "Success", data: { source, disabled } });
 }
 
 async function handleMembership(request, env) {
@@ -1922,6 +1986,9 @@ async function callToplist(platform, id) {
 async function handleToplists(request, env) {
   const platform = String(new URL(request.url).searchParams.get("platform") || "").trim();
   if (!platform) return jsonResponse(400, { code: -1, message: "缺少参数: platform" });
+  if (await isSourceDisabled(env, platform)) {
+    return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
+  }
   try {
     const data = await monitoredServiceCall(env, { source: platform, operation: "toplists" }, () => callToplists(platform));
     return jsonResponse(200, { code: 0, message: "Success", data });
@@ -1935,6 +2002,9 @@ async function handleToplist(request, env) {
   const platform = String(url.searchParams.get("platform") || "").trim();
   const id = String(url.searchParams.get("id") || "").trim();
   if (!platform || !id) return jsonResponse(400, { code: -1, message: "缺少参数: platform / id" });
+  if (await isSourceDisabled(env, platform)) {
+    return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
+  }
   try {
     const data = await monitoredServiceCall(env, { source: platform, operation: "toplist" }, () => callToplist(platform, id));
     return jsonResponse(200, { code: 0, message: "Success", data });
@@ -2017,6 +2087,9 @@ async function callPlaylists(platform) {
 async function handlePlaylists(request, env) {
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "netease").trim();
+  if (await isSourceDisabled(env, platform)) {
+    return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
+  }
   try {
     const playlists = await monitoredServiceCall(env, { source: platform, operation: "playlists" }, () => callPlaylists(platform));
     return jsonResponse(200, { code: 0, message: "Success", data: { playlists } });
@@ -2032,6 +2105,9 @@ async function handleMethod(request, env) {
   const functionName = String(url.searchParams.get("functionName") || "").trim();
   if (!platform || !functionName) {
     return jsonResponse(400, { code: -1, message: "缺少参数: platform / functionName" });
+  }
+  if (await isSourceDisabled(env, platform)) {
+    return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
   }
 
   try {
@@ -2069,6 +2145,9 @@ async function handleBackup(request, env) {
   if (types !== "search" && types !== "pic") {
     const auth = await requireMusicAccess(request, env);
     if (!auth.ok) return auth.response;
+  }
+  if (await isSourceDisabled(env, "gdstudio")) {
+    return jsonResponse(503, { code: -1, message: "该源已被管理员禁用" });
   }
 
   const backupUrl = new URL(BACKUP_API_URL);
@@ -2325,6 +2404,9 @@ async function handleBackup3(request, env) {
   if (filter !== "name") {
     const auth = await requireMusicAccess(request, env);
     if (!auth.ok) return auth.response;
+  }
+  if (await isSourceDisabled(env, "qq_backup3")) {
+    return jsonResponse(503, { code: -1, message: "该源已被管理员禁用" });
   }
 
   const startedAt = Date.now();
@@ -3016,6 +3098,9 @@ function backup4RoutingHash(value) {
 // at the end of the fallback chain and distribute traffic across healthy ones.
 async function prioritizeBackupChain(env, chain, operation, routingKey) {
   if (!Array.isArray(chain) || chain.length < 2) return chain;
+  const disabledSet = new Set(await getDisabledSources(env));
+  chain = chain.filter((item) => !disabledSet.has(item.source));
+  if (chain.length < 2) return chain;
   const db = getDatabase(env);
   if (!db) return chain;
 

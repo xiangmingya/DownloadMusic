@@ -3315,7 +3315,8 @@ function monitoringHealthOrder(health) {
 }
 
 function renderMonitoringServiceRow(item) {
-    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${escapeHtml(item.detail || '内部服务')}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(item.endpoint || '仅管理员可见')}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
+    const toggleButton = `<button type="button" class="secondary-quiet-btn monitoring-toggle-btn${item.disabled ? ' is-disabled' : ''}" data-monitoring-toggle="${escapeHtml(item.source)}"${item.disabled ? ' data-disabled="1"' : ''}>${item.disabled ? '启用' : '禁用'}</button>`;
+    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${escapeHtml(item.detail || '内部服务')}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(item.endpoint || '仅管理员可见')}</small></div><div class="monitoring-health-cell"><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span>${toggleButton}</div><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl><p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
 }
 
 function monitorPercent(value) {
@@ -3686,6 +3687,24 @@ function initHomeInterface() {
     });
     document.getElementById('monitoringRange')?.addEventListener('change', () => void loadAdminMonitoring());
     document.getElementById('refreshMonitoringBtn')?.addEventListener('click', () => void loadAdminMonitoring());
+    document.getElementById('monitoringServiceList')?.addEventListener('click', async (event) => {
+        const button = event.target.closest('[data-monitoring-toggle]');
+        if (!button) return;
+        const source = button.getAttribute('data-monitoring-toggle');
+        const disabled = !button.hasAttribute('data-disabled');
+        button.disabled = true;
+        try {
+            await getJson(`${APP_API_ROOT}/admin/monitoring/sources`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source, disabled })
+            });
+            showToast(disabled ? `已禁用 ${source}` : `已启用 ${source}`, 'success');
+            await loadAdminMonitoring();
+        } catch (error) {
+            showToast(error.message || '操作失败', 'error');
+        }
+    });
     document.getElementById('homeSearchForm')?.addEventListener('submit', event => {
         event.preventDefault();
         runHomeSearch(document.getElementById('homeSearchInput')?.value);
