@@ -46,7 +46,7 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "qq_backup3", category: "resolve", order: 50, name: "雨糖小屋 QQ 接口", detail: "QQ 音乐专用接口 · 搜索与播放链接解析", endpoint: "api.yutangxiaowu.cn" },
   { source: "yutang_netease", category: "resolve", order: 51, name: "雨糖小屋 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "api.yutangxiaowu.cn" },
   { source: "yutang_kuwo", category: "resolve", order: 52, name: "雨糖小屋 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "api.yutangxiaowu.cn" },
-  { source: "jkapi", category: "resolve", order: 60, name: "JKAPI 音乐接口", detail: "网易云 / QQ 音乐接口 · 播放链接解析", endpoint: "d-hk-01.aaapi.top/api/music" },
+  { source: "jkapi", category: "resolve", order: 60, name: "JKAPI 音乐接口", detail: "网易云 / QQ 音乐接口 · 播放链接解析", endpoint: "jkapi.com/api/music" },
   { source: "oiapi_music163", category: "resolve", order: 70, name: "OIAPI 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
   { source: "oiapi_kuwo", category: "resolve", order: 80, name: "OIAPI 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
   { source: "chksz_163", category: "resolve", order: 90, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
