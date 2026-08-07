@@ -2983,8 +2983,6 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
       { source: "yutang_netease", run: backup4TryYutangNetease },
-      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
-      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
       { source: "chksz_163", run: (p, id, quality) => backup4TryChkszMusic163(p, id, quality, env) },
@@ -3332,6 +3330,12 @@ async function handleMedia(request, env) {
       code: -1,
       message: err instanceof Error ? err.message : "媒体请求失败",
     });
+  }
+
+  const contentType = String(upstream.headers.get("Content-Type") || "").toLowerCase();
+  const contentLength = Number(upstream.headers.get("Content-Length") || 0);
+  if (contentType.startsWith("audio/") && contentLength > 0 && contentLength < 102400) {
+    return jsonResponse(502, { code: -1, message: "音频内容异常，请尝试其他音质或稍后重试" });
   }
 
   const extraHeaders = {};
