@@ -318,13 +318,30 @@
                 <button id="welcomeDialogMembershipBtn" type="button">查看会员方案</button>
             </div>
         </dialog>
+
+        <dialog id="membershipDialog" class="welcome-dialog membership-dialog" aria-labelledby="membershipDialogTitle" aria-describedby="membershipDialogMessage">
+            <button id="membershipDialogCloseBtn" class="welcome-dialog-close" type="button" aria-label="关闭会员提示弹窗">×</button>
+            <div class="welcome-dialog-mark" aria-hidden="true">会</div>
+            <p class="eyebrow">MEMBERSHIP</p>
+            <h2 id="membershipDialogTitle">需要开通月会员</h2>
+            <p id="membershipDialogMessage" class="welcome-dialog-msg">当前账号尚未开通会员，开通后即可畅享完整播放与下载体验。</p>
+            <ul class="membership-dialog-benefits">
+                <li>高品质播放，多源解析自动兜底</li>
+                <li>支持下载歌曲，随时离线畅听</li>
+                <li>收藏与歌单跨设备同步</li>
+            </ul>
+            <div class="welcome-dialog-actions">
+                <button id="membershipDialogLaterBtn" type="button">暂不开通</button>
+                <button id="membershipDialogBuyBtn" type="button">开通会员</button>
+            </div>
+        </dialog>
     </div>
 
     <script>
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-17';
+        const APP_ASSET_VERSION = '20260806-18';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -412,6 +429,24 @@
             document.getElementById('userChip')?.click();
         });
         document.getElementById('welcomeDialog')?.addEventListener('close', stopWelcomeCountdown);
+
+        window.openMembershipModal = function () {
+            const dialog = document.getElementById('membershipDialog');
+            if (!dialog || dialog.open) return;
+            dialog.showModal();
+        };
+
+        document.getElementById('membershipDialogCloseBtn')?.addEventListener('click', function () {
+            document.getElementById('membershipDialog')?.close();
+        });
+        document.getElementById('membershipDialogLaterBtn')?.addEventListener('click', function () {
+            document.getElementById('membershipDialog')?.close();
+        });
+        document.getElementById('membershipDialogBuyBtn')?.addEventListener('click', function () {
+            const dialog = document.getElementById('membershipDialog');
+            if (dialog && dialog.open) dialog.close();
+            document.getElementById('userChip')?.click();
+        });
 
         window.openLoginModal = function (message) {
             const shell = document.getElementById('loginShell');

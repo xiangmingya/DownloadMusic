@@ -497,6 +497,7 @@ async function apiFetch(url, init = {}) {
             ...fetchInit
         });
         if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
+        if (response.status === 402) window.openMembershipModal?.();
         return response;
     }
 
@@ -509,6 +510,7 @@ async function apiFetch(url, init = {}) {
             signal: controller.signal
         });
         if (response.status === 401) window.openLoginModal?.('登录后即可播放、下载和收藏歌曲。');
+        if (response.status === 402) window.openMembershipModal?.();
         return response;
     } finally {
         clearTimeout(timer);
@@ -2424,13 +2426,19 @@ async function downloadSong(source, id, name, artist, index = null, songObj = nu
             try {
                 parsed = await ensureParsedSong(source, id, quality);
             } catch (primaryError) {
-                parsed = await resolveBackup4Parsed(source, id, quality, {
-                    name,
-                    artist,
-                    cover: runtimeSong?.cover || ''
-                }).catch(() => null);
+                let backupError = null;
+                try {
+                    parsed = await resolveBackup4Parsed(source, id, quality, {
+                        name,
+                        artist,
+                        cover: runtimeSong?.cover || ''
+                    });
+                } catch (error) {
+                    backupError = error;
+                    parsed = null;
+                }
                 if (!parsed) {
-                    throw primaryError;
+                    throw backupError || primaryError;
                 }
             }
             mediaUrl = normalizeMediaUrl(parsed?.url || '');
@@ -3822,13 +3830,19 @@ async function playSongCore(source, id, name, artist, options = {}) {
             try {
                 parsed = await ensureParsedSong(source, id, quality);
             } catch (primaryError) {
-                parsed = await resolveBackup4Parsed(source, id, quality, {
-                    name,
-                    artist,
-                    cover: runtimeSong?.cover || options.cover || ''
-                }).catch(() => null);
+                let backupError = null;
+                try {
+                    parsed = await resolveBackup4Parsed(source, id, quality, {
+                        name,
+                        artist,
+                        cover: runtimeSong?.cover || options.cover || ''
+                    });
+                } catch (error) {
+                    backupError = error;
+                    parsed = null;
+                }
                 if (!parsed) {
-                    throw primaryError;
+                    throw backupError || primaryError;
                 }
             }
             if (playRequestId !== activePlayRequestId) return;
