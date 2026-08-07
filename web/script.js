@@ -1328,9 +1328,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
             return { songs: backup3Songs, provider: 'backup3' };
         }
     } catch (backup3Error) {
-        if (!silentFallback && backupError) {
-            toastBackupUnavailableOnce();
-        }
         // ignore backup3 errors
     }
 
@@ -1347,6 +1344,10 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
         }
     } catch (backup4Error) {
         // ignore backup4 errors
+    }
+
+    if (!silentFallback && backupError) {
+        toastBackupUnavailableOnce();
     }
 
     if (primaryError) {
