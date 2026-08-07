@@ -2765,27 +2765,40 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
   const source = backup4JkapiPlatformCode(platform);
   const title = String(name || "").trim();
   const singer = String(artist || "").trim();
-  const keyword = [title, singer]
-    .filter((item) => item && item !== "未知歌手" && item !== "未知歌曲" && !item.startsWith("ID "))
-    .join(" ")
-    .trim();
-
   // JKAPI 的 Key 必须由本 Worker 的管理员配置；未配置时静默跳过该备用源。
-  if (!apiKey || !source || !keyword) return null;
+  if (!apiKey || !source) return null;
 
-  const endpoint = new URL(String(env.JKAPI_API_URL || BACKUP4_JKAPI_URL).trim());
-  endpoint.searchParams.set("plat", source);
-  endpoint.searchParams.set("type", "json");
-  endpoint.searchParams.set("apiKey", apiKey);
-  endpoint.searchParams.set("name", keyword);
+  const candidates = [];
+  const pushIfUsable = (value) => {
+    const text = String(value || "").trim();
+    if (!text || text === "未知歌手" || text === "未知歌曲" || text.startsWith("ID ")) return;
+    if (!candidates.includes(text)) candidates.push(text);
+  };
+  pushIfUsable(title);
+  pushIfUsable(`${title} ${singer}`);
+  pushIfUsable(`${singer} ${title}`);
 
-  const response = await backup4Json(endpoint.toString());
-  const parsed = response.json;
-  const url = normalizeMediaUrl(parsed?.music_url || parsed?.data?.music_url || parsed?.data?.url || "");
-  if (response.ok && Number(parsed?.code) === 1 && url) {
-    return { url, provider: "jkapi" };
+  // JKAPI 的 name 参数主要按歌名匹配；带歌手组合失败时逐个降级尝试。
+  let lastError = null;
+  for (const keyword of candidates) {
+    try {
+      const endpoint = new URL(String(env.JKAPI_API_URL || BACKUP4_JKAPI_URL).trim());
+      endpoint.searchParams.set("plat", source);
+      endpoint.searchParams.set("type", "json");
+      endpoint.searchParams.set("apiKey", apiKey);
+      endpoint.searchParams.set("name", keyword);
+      const response = await backup4Json(endpoint.toString());
+      const parsed = response.json;
+      const url = normalizeMediaUrl(parsed?.music_url || parsed?.data?.music_url || parsed?.data?.url || "");
+      if (response.ok && Number(parsed?.code) === 1 && url) {
+        return { url, provider: "jkapi" };
+      }
+      lastError = new Error(String(parsed?.msg || parsed?.message || `jkapi failed (${response.status})`));
+    } catch (err) {
+      lastError = err;
+    }
   }
-  throw new Error(String(parsed?.msg || parsed?.message || `jkapi failed (${response.status})`));
+  throw lastError || new Error("jkapi 无结果");
 }
 
 async function backup4TryQqBackup3(platform, id) {
