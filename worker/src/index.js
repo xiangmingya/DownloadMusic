@@ -171,6 +171,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/proxy/cover" && request.method === "GET") {
       return withCors(request, env, await handleCover(request, env));
     }
+    if (url.pathname === "/api/proxy/lyric" && request.method === "GET") {
+      return withCors(request, env, await handleLyric(request, env));
+    }
     if (url.pathname === "/api/proxy/backup" && request.method === "GET") {
       return withCors(request, env, await handleBackup(request, env));
     }
@@ -3477,6 +3480,56 @@ async function handleCover(request, env) {
     return jsonResponse(400, { code: -1, message: "该地址不是图片资源" });
   }
   return buildUpstreamProxyResponse(upstream);
+}
+
+async function handleLyric(request, env) {
+  const reqUrl = new URL(request.url);
+  const platform = String(reqUrl.searchParams.get("platform") || "").trim();
+  const id = String(reqUrl.searchParams.get("id") || "").trim();
+  if (!platform || !id) {
+    return jsonResponse(400, { code: -1, message: "缺少参数: platform / id" });
+  }
+
+  // 网易云优先使用 CHKSZ 免费歌词接口。
+  if (platform === "netease") {
+    const chkszKey = String(env.CHKSZ_API_KEY || "").trim();
+    if (chkszKey) {
+      try {
+        const endpoint = new URL(`${BACKUP4_CHKSZ_API_URL}/163_lyric`);
+        endpoint.searchParams.set("id", id);
+        endpoint.searchParams.set("apikey", chkszKey);
+        const response = await backup4Json(endpoint.toString(), {
+          headers: {
+            Accept: "application/json, text/plain, */*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          },
+        });
+        const lyric = String(response.json?.data?.lrc || response.json?.lrc || "").trim();
+        if (response.ok && Number(response.json?.code) === 200 && lyric) {
+          return jsonResponse(200, { code: 0, message: "Success", data: { lyric } });
+        }
+      } catch {
+        // 继续尝试通用备用歌词源。
+      }
+    }
+  }
+
+  // 通用兜底：GDStudio 歌词。
+  try {
+    const endpoint = new URL(BACKUP_API_URL);
+    endpoint.searchParams.set("types", "lyric");
+    endpoint.searchParams.set("source", platform === "qq" ? "tencent" : platform);
+    endpoint.searchParams.set("id", id);
+    const response = await backup4Json(endpoint.toString());
+    const lyric = String(response.json?.lyric || response.json?.data?.lyric || "").trim();
+    if (response.ok && lyric) {
+      return jsonResponse(200, { code: 0, message: "Success", data: { lyric } });
+    }
+  } catch {
+    // ignore
+  }
+
+  return jsonResponse(404, { code: -1, message: "未找到歌词" });
 }
 
 async function handleParse(request, env) {

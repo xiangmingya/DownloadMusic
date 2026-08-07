@@ -8,6 +8,7 @@ const API_ROUTES = {
     methods: `${API_BASE}/methods`,
     media: `${API_BASE}/media`,
     cover: `${API_BASE}/cover`,
+    lyric: `${API_BASE}/lyric`,
     backup: `${API_BASE}/backup`,
     backup3: `${API_BASE}/backup3`,
     backup4: `${API_BASE}/backup4`,
@@ -743,6 +744,26 @@ async function fetchSongMeta(platform, id) {
     const meta = data.data || {};
     metaCache.set(key, meta);
     return meta;
+}
+
+const lyricFallbackCache = new Map();
+
+async function fetchSongLyrics(platform, id) {
+    const cacheKey = `${String(platform || '')}:${String(id || '')}`;
+    if (lyricFallbackCache.has(cacheKey)) {
+        return lyricFallbackCache.get(cacheKey);
+    }
+    const url = new URL(API_ROUTES.lyric, window.location.href);
+    url.searchParams.set('platform', String(platform || ''));
+    url.searchParams.set('id', String(id || ''));
+    const response = await apiFetch(url.toString(), { timeoutMs: 12000 });
+    const data = parseResponseText(await response.text());
+    if (!response.ok || Number(data.code) !== 0) {
+        throw new Error(getApiErrorMessage(data, response.status, '获取歌词失败'));
+    }
+    const lyric = String(data.data?.lyric || '');
+    lyricFallbackCache.set(cacheKey, lyric);
+    return lyric;
 }
 
 async function callPlatformMethod(platform, functionName, vars = {}, options = {}) {
@@ -4041,6 +4062,21 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
         await audio.play();
         bindSongMeta(songMeta);
+        if (!parsedLyrics.length) {
+            const lyricRequestId = playRequestId;
+            const lyricPlatform = songPlatform;
+            const lyricId = id;
+            void fetchSongLyrics(lyricPlatform, lyricId).then(lyricText => {
+                if (!lyricText) return;
+                if (lyricRequestId !== activePlayRequestId) return;
+                const fallbackLyrics = parseLyrics(lyricText);
+                if (!fallbackLyrics.length) return;
+                currentLyrics = fallbackLyrics;
+                if (currentPlayingSong) currentPlayingSong.lyrics = lyricText;
+                updateFullPlayerLyric(audio.currentTime || 0);
+                updateLyrics(audio.currentTime || 0);
+            }).catch(() => {});
+        }
         syncInlinePlayButtonState();
         scheduleNextTrackPreload();
     } catch (error) {
