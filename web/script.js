@@ -643,9 +643,11 @@ async function resolveBackup4Parsed(platform, id, quality, options = {}) {
     }
 
     const cacheKey = parsedCacheKey(normalizedPlatform, songId, quality);
-    const cached = parseCache.get(cacheKey);
-    if (cached?.success && normalizeMediaUrl(cached?.url || '')) {
-        return cached;
+    if (!options.bypassCache) {
+        const cached = parseCache.get(cacheKey);
+        if (cached?.success && normalizeMediaUrl(cached?.url || '')) {
+            return cached;
+        }
     }
 
     const payload = await callBackup4Api({
@@ -1577,12 +1579,12 @@ async function fetchBackupPicUrl(song) {
     return url;
 }
 
-async function ensureBackupPlayableData(song, quality) {
+async function ensureBackupPlayableData(song, quality, options = {}) {
     if (!song || song.dataSource !== 'backup') {
         throw new Error('备用歌曲数据无效');
     }
     const cacheKey = backupSongDataCacheKey(song, quality);
-    if (backupDataCache.has(cacheKey)) {
+    if (!options.bypassCache && backupDataCache.has(cacheKey)) {
         return backupDataCache.get(cacheKey);
     }
 
@@ -1834,12 +1836,12 @@ async function fetchSongByIdBackup3(platform, songId, options = {}) {
     return null;
 }
 
-async function ensureBackup3PlayableData(song) {
+async function ensureBackup3PlayableData(song, options = {}) {
     if (!song || song.dataSource !== 'backup3') {
         throw new Error('备用源3歌曲数据无效');
     }
     const cacheKey = backup3DataCacheKey(song);
-    if (backup3DataCache.has(cacheKey)) {
+    if (!options.bypassCache && backup3DataCache.has(cacheKey)) {
         return backup3DataCache.get(cacheKey);
     }
 
@@ -2459,55 +2461,110 @@ async function downloadSong(source, id, name, artist, index = null, songObj = nu
         id = String(runtimeSong?.id || id);
         name = String(runtimeSong?.name || name);
         artist = String(runtimeSong?.artist || artist);
-        let mediaUrl = '';
-        if (runtimeSong?.dataSource === 'backup') {
-            const backupData = await ensureBackupPlayableData(runtimeSong, quality);
-            mediaUrl = normalizeMediaUrl(backupData.url || '');
-            if (!mediaUrl) {
-                throw new Error('备用源未获取到下载链接');
+        const filename = buildDownloadFilename(name, artist, quality);
+        const mediaUrl = await resolveDownloadMedia(source, id, name, artist, runtimeSong, quality);
+        const downloadOnce = async (url) => {
+            const response = await fetch(url, { credentials: 'include' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
             }
-        } else if (runtimeSong?.dataSource === 'backup3') {
-            const backup3Data = await ensureBackup3PlayableData(runtimeSong);
-            mediaUrl = normalizeMediaUrl(backup3Data.url || '');
-            if (!mediaUrl) {
-                throw new Error('备用源3未获取到下载链接');
+            const blob = await response.blob();
+            if (!blob.size) {
+                throw new Error('下载内容为空');
             }
-        } else {
-            let parsed = null;
-            try {
-                parsed = await ensureParsedSong(source, id, quality);
-            } catch (primaryError) {
-                let backupError = null;
-                try {
-                    parsed = await resolveBackup4Parsed(source, id, quality, {
-                        name,
-                        artist,
-                        cover: runtimeSong?.cover || ''
-                    });
-                } catch (error) {
-                    backupError = error;
-                    parsed = null;
-                }
-                if (!parsed) {
-                    throw backupError || primaryError;
-                }
+            return blob;
+        };
+
+        try {
+            const blob = await downloadOnce(buildMediaProxyUrl(mediaUrl, { download: true, filename }));
+            triggerBlobDownload(blob, filename);
+        } catch (firstError) {
+            // 签名链接可能已过期（酷我等平台常见），重新解析一次再试。
+            showToast('链接可能已失效，正在重新解析…', 'info');
+            const freshUrl = await resolveDownloadMedia(source, id, name, artist, runtimeSong, quality, { bypassCache: true });
+            if (!freshUrl || freshUrl === mediaUrl) {
+                throw firstError;
             }
-            mediaUrl = normalizeMediaUrl(parsed?.url || '');
-            if (!mediaUrl) {
-                throw new Error(localizeErrorMessage(parsed?.error, '未获取到下载链接'));
-            }
+            const blob = await downloadOnce(buildMediaProxyUrl(freshUrl, { download: true, filename }));
+            triggerBlobDownload(blob, filename);
         }
-        const url = buildMediaProxyUrl(mediaUrl, {
-            download: true,
-            filename: buildDownloadFilename(name, artist, quality)
-        });
-        if (!url) {
-            throw new Error('下载链接无效');
-        }
-        window.open(url, '_blank');
     } catch (error) {
         showToast(`下载失败: ${error.message || '未知错误'}`, 'error');
     }
+}
+
+async function resolveDownloadMedia(source, id, name, artist, runtimeSong, quality, options = {}) {
+    if (runtimeSong?.dataSource === 'backup') {
+        const backupData = await ensureBackupPlayableData(runtimeSong, quality, options);
+        const mediaUrl = normalizeMediaUrl(backupData.url || '');
+        if (!mediaUrl) {
+            throw new Error('备用源未获取到下载链接');
+        }
+        return mediaUrl;
+    }
+    if (runtimeSong?.dataSource === 'backup3') {
+        const backup3Data = await ensureBackup3PlayableData(runtimeSong, options);
+        const mediaUrl = normalizeMediaUrl(backup3Data.url || '');
+        if (!mediaUrl) {
+            throw new Error('备用源3未获取到下载链接');
+        }
+        return mediaUrl;
+    }
+
+    let parsed = null;
+    try {
+        parsed = await ensureParsedSong(source, id, quality);
+    } catch (primaryError) {
+        let backupError = null;
+        try {
+            parsed = await resolveBackup4Parsed(source, id, quality, {
+                name,
+                artist,
+                cover: runtimeSong?.cover || '',
+                bypassCache: Boolean(options.bypassCache)
+            });
+        } catch (error) {
+            backupError = error;
+            parsed = null;
+        }
+        if (!parsed) {
+            throw backupError || primaryError;
+        }
+    }
+    const mediaUrl = normalizeMediaUrl(parsed?.url || '');
+    if (!mediaUrl) {
+        throw new Error(localizeErrorMessage(parsed?.error, '未获取到下载链接'));
+    }
+    return mediaUrl;
+}
+
+function triggerBlobDownload(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
+}
+
+async function resolveFreshPlaybackUrl(platform, id, name, artist, quality, runtimeSong) {
+    if (runtimeSong?.dataSource === 'backup') {
+        const data = await ensureBackupPlayableData(runtimeSong, quality, { bypassCache: true });
+        return normalizeMediaUrl(data?.url || '');
+    }
+    if (runtimeSong?.dataSource === 'backup3') {
+        const data = await ensureBackup3PlayableData(runtimeSong, { bypassCache: true });
+        return normalizeMediaUrl(data?.url || '');
+    }
+    const parsed = await resolveBackup4Parsed(platform, id, quality, {
+        name,
+        artist,
+        cover: runtimeSong?.cover || '',
+        bypassCache: true
+    }).catch(() => null);
+    return normalizeMediaUrl(parsed?.url || '');
 }
 
 function resetInlinePlaybackUi(keepIndex = null) {
@@ -4231,7 +4288,28 @@ async function playSongCore(source, id, name, artist, options = {}) {
             player.style.display = 'flex';
         }
 
-        await audio.play();
+        try {
+            await audio.play();
+        } catch (playError) {
+            // 媒体签名链接可能已失效（酷我等平台常见），重新解析一次再试。
+            if (playRequestId === activePlayRequestId) {
+                const freshUrl = await resolveFreshPlaybackUrl(songPlatform, id, name, artist, quality, runtimeSong).catch(() => '');
+                if (playRequestId === activePlayRequestId && freshUrl && freshUrl !== mediaUrl) {
+                    const freshProxied = buildMediaProxyUrl(freshUrl);
+                    if (freshProxied) {
+                        audio.src = freshProxied;
+                        await audio.play();
+                        mediaUrl = freshUrl;
+                    } else {
+                        throw playError;
+                    }
+                } else {
+                    throw playError;
+                }
+            } else {
+                throw playError;
+            }
+        }
         bindSongMeta(songMeta);
         if (!parsedLyrics.length) {
             const lyricRequestId = playRequestId;
