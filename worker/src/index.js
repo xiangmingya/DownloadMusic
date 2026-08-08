@@ -137,8 +137,23 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/admin/monitoring/sources" && request.method === "PUT") {
       return withCors(request, env, await handleAdminSourceToggle(request, env));
     }
+    if (url.pathname === "/api/keys" && request.method === "GET") {
+      return withCors(request, env, await handleKeysStatus(request, env));
+    }
+    if (url.pathname === "/api/keys" && request.method === "POST") {
+      return withCors(request, env, await handleKeysCreate(request, env));
+    }
+    if (url.pathname === "/api/keys/reset" && request.method === "POST") {
+      return withCors(request, env, await handleKeysReset(request, env));
+    }
+    if (url.pathname === "/api/keys/unbind" && request.method === "POST") {
+      return withCors(request, env, await handleKeysUnbind(request, env));
+    }
+    if (url.pathname === "/api/client/bind" && request.method === "POST") {
+      return withCors(request, env, await handleClientBind(request, env));
+    }
     if (url.pathname.startsWith("/api/proxy/")) {
-      const sessionAuth = await requireSession(request, env);
+      const sessionAuth = await requireClientAuth(request, env);
       if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
     }
     const membershipRequiredRoutes = new Set(["/api/proxy/parse", "/api/proxy/media"]);
@@ -225,7 +240,10 @@ function withCors(request, env, response) {
   }
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
-  headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Tunehub-Key");
+  headers.set(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, X-Tunehub-Key, X-DM-Key, X-DM-Device-Id, X-DM-Device-Name, X-DM-Mi-Uid, X-DM-Device-Token",
+  );
   headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 
   return new Response(response.body, {
@@ -508,6 +526,156 @@ async function requireSession(request, env) {
   return { ok: true, session };
 }
 
+function getApiKeyFromRequest(request) {
+  return String(request.headers.get("X-DM-Key") || "").trim();
+}
+
+function getApiDeviceId(request) {
+  return String(request.headers.get("X-DM-Device-Id") || "").trim();
+}
+
+function getApiDeviceName(request) {
+  return String(request.headers.get("X-DM-Device-Name") || "").trim().slice(0, 60);
+}
+
+function getApiMiUid(request) {
+  return String(request.headers.get("X-DM-Mi-Uid") || "").trim();
+}
+
+function getApiDeviceToken(request) {
+  return String(request.headers.get("X-DM-Device-Token") || "").trim();
+}
+
+function generateApiKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `xm_${hex}`;
+}
+
+function generateDeviceToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function maskApiKey(key) {
+  const value = String(key || "");
+  if (value.length <= 10) return value;
+  return `${value.slice(0, 7)}${"*".repeat(value.length - 11)}${value.slice(-4)}`;
+}
+
+function maskMiUid(uid) {
+  const value = String(uid || "").trim();
+  if (!value) return "";
+  return value.length <= 4 ? "****" : `****${value.slice(-4)}`;
+}
+
+async function lookupApiKeyRecord(key, env) {
+  const db = getDatabase(env);
+  if (!db) return null;
+  try {
+    return await db
+      .prepare(
+        "SELECT id, owner_key, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, device_token, bound_at, enabled, expires_at FROM api_keys WHERE api_key = ? LIMIT 1",
+      )
+      .bind(String(key || ""))
+      .first();
+  } catch {
+    return null;
+  }
+}
+
+async function validateApiKeyOnly(request, env) {
+  const key = getApiKeyFromRequest(request);
+  if (!key) return null;
+  const record = await lookupApiKeyRecord(key, env);
+  if (!record || Number(record.enabled) !== 1) {
+    return { error: jsonResponse(401, { code: 401, message: "API Key 无效" }) };
+  }
+  if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
+    return { error: jsonResponse(401, { code: 401, message: "API Key 已过期" }) };
+  }
+  const db = getDatabase(env);
+  if (db) db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(sqlNow(), record.id).run().catch(() => {});
+
+  return {
+    session: {
+      type: "apikey",
+      api_key_id: Number(record.id),
+      api_key_name: String(record.name || ""),
+      owner_key: String(record.owner_key || ""),
+      user: { name: String(record.name || "API Key") },
+    },
+  };
+}
+
+async function validateBoundApiKey(request, env) {
+  const key = getApiKeyFromRequest(request);
+  if (!key) return null;
+  const miUid = getApiMiUid(request);
+  const token = getApiDeviceToken(request);
+  if (!miUid) {
+    return { error: jsonResponse(400, { code: -1, message: "缺少小米账号 ID X-DM-Mi-Uid" }) };
+  }
+  if (!token) {
+    return { error: jsonResponse(400, { code: -1, message: "缺少设备令牌 X-DM-Device-Token，请先在客户端保存绑定" }) };
+  }
+  const record = await lookupApiKeyRecord(key, env);
+  if (!record || Number(record.enabled) !== 1) {
+    return { error: jsonResponse(401, { code: 401, message: "API Key 无效" }) };
+  }
+  if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
+    return { error: jsonResponse(401, { code: 401, message: "API Key 已过期" }) };
+  }
+  if (String(record.mi_uid || "").trim() !== miUid) {
+    return { error: jsonResponse(403, { code: 403, message: "小米账号与绑定不符" }) };
+  }
+  if (String(record.device_token || "").trim() !== token) {
+    return { error: jsonResponse(401, { code: 401, message: "设备令牌无效，请重新保存绑定" }) };
+  }
+  const db = getDatabase(env);
+  if (db) db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(sqlNow(), record.id).run().catch(() => {});
+  return {
+    session: {
+      type: "apikey",
+      api_key_id: Number(record.id),
+      api_key_name: String(record.name || ""),
+      owner_key: String(record.owner_key || ""),
+      mi_uid,
+      device_id: getApiDeviceId(request),
+      device_name: String(record.device_name || ""),
+      user: { name: String(record.name || "API Key") },
+    },
+  };
+}
+
+async function requireClientAuth(request, env) {
+  const key = getApiKeyFromRequest(request);
+  if (!key) {
+    const session = await getSession(request, env);
+    if (!session) {
+      return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
+    }
+    return { ok: true, session, auth_mode: "session" };
+  }
+  const bound = await validateBoundApiKey(request, env);
+  if (!bound) return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
+  if (bound.error) return { ok: false, response: bound.error };
+  return { ok: true, session: bound.session, auth_mode: "apikey" };
+}
+
+async function requireAnyAuth(request, env) {
+  const apiAuth = await validateApiKeyOnly(request, env);
+  if (apiAuth) {
+    if (apiAuth.error) return { ok: false, response: apiAuth.error };
+    return { ok: true, session: apiAuth.session, auth_mode: "apikey" };
+  }
+  const session = await getSession(request, env);
+  if (!session) {
+    return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
+  }
+  return { ok: true, session, auth_mode: "session" };
+}
+
 function getDatabase(env) {
   return env.DB && typeof env.DB.prepare === "function" ? env.DB : null;
 }
@@ -561,8 +729,12 @@ function membershipActive(record) {
 }
 
 async function getMembershipStatus(session, env) {
-  if (session?.type === "password") {
-    return { active: true, expires_at: null, source: "admin" };
+  if (session?.type === "password" || session?.type === "apikey") {
+    return {
+      active: true,
+      expires_at: null,
+      source: session?.type === "apikey" ? "apikey" : "admin",
+    };
   }
   const linuxdoId = getLinuxdoId(session);
   const db = getDatabase(env);
@@ -576,8 +748,9 @@ async function getMembershipStatus(session, env) {
 }
 
 async function requireMusicAccess(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth;
+  if (auth.session?.type === "apikey") return auth;
   if (!membershipRequired(env)) return auth;
   const membership = await getMembershipStatus(auth.session, env);
   if (membership.active) return auth;
@@ -586,6 +759,7 @@ async function requireMusicAccess(request, env) {
 }
 
 function libraryOwnerKey(session) {
+  if (session?.type === "apikey") return String(session?.owner_key || "");
   if (session?.type === "password") return "password:family";
   if (session?.type !== "linuxdo") return "";
   const id = String(session?.user?.linuxdo_id || session?.user?.id || "").trim();
@@ -612,7 +786,7 @@ function serializeLibraryDocument(value) {
 }
 
 async function handleLibraryGet(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth.response;
   const db = getDatabase(env);
   const ownerKey = libraryOwnerKey(auth.session);
@@ -634,7 +808,7 @@ async function handleLibraryGet(request, env) {
 }
 
 async function handleLibraryPut(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth.response;
   const db = getDatabase(env);
   const ownerKey = libraryOwnerKey(auth.session);
@@ -1279,7 +1453,7 @@ async function handleAdminSourceToggle(request, env) {
 }
 
 async function handleMembership(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth.response;
   const db = getDatabase(env);
   const membership = await getMembershipStatus(auth.session, env);
@@ -1458,10 +1632,9 @@ async function handleLogout(env) {
 }
 
 async function handleMe(request, env) {
-  const session = await getSession(request, env);
-  if (!session) {
-    return jsonResponse(401, { code: 401, message: "Unauthorized" });
-  }
+  const auth = await requireAnyAuth(request, env);
+  if (!auth.ok) return auth.response;
+  const session = auth.session;
   const membership = await getMembershipStatus(session, env);
   return jsonResponse(200, {
     code: 0,
@@ -1471,7 +1644,195 @@ async function handleMe(request, env) {
       user: session.user || {},
       using_server_key: session.type === "password",
       is_admin: isAdminSession(session, env),
+      api_key:
+        session.type === "apikey"
+          ? {
+              id: session.api_key_id,
+              name: session.api_key_name,
+              device_name: session.device_name || "",
+              mi_uid_tail: session.mi_uid ? maskMiUid(session.mi_uid) : null,
+            }
+          : null,
       membership,
+    },
+  });
+}
+
+function apiKeyOwnerKey(session) {
+  return libraryOwnerKey(session);
+}
+
+function apiKeyUnavailableResponse() {
+  return jsonResponse(503, { code: 503, message: "D1 数据库未配置" });
+}
+
+async function handleKeysStatus(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  const ownerKey = apiKeyOwnerKey(auth.session);
+  if (!db) return apiKeyUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  const row = await db
+    .prepare(
+      "SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at FROM api_keys WHERE owner_key = ? LIMIT 1",
+    )
+    .bind(ownerKey)
+    .first();
+  if (!row) {
+    return jsonResponse(200, { code: 0, message: "Success", data: { has_key: false } });
+  }
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: {
+      has_key: true,
+      id: row.id,
+      name: row.name || "",
+      key: row.api_key,
+      key_preview: maskApiKey(row.api_key),
+      created_at: row.created_at,
+      last_used_at: row.last_used_at,
+      mi_uid_tail: row.mi_uid ? maskMiUid(row.mi_uid) : null,
+      device_id: row.device_id || null,
+      device_name: row.device_name || null,
+      bound_at: row.bound_at || null,
+    },
+  });
+}
+
+async function handleKeysCreate(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  const ownerKey = apiKeyOwnerKey(auth.session);
+  if (!db) return apiKeyUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  const existing = await db.prepare("SELECT id FROM api_keys WHERE owner_key = ? LIMIT 1").bind(ownerKey).first();
+  if (existing) {
+    return jsonResponse(400, { code: -1, message: "该账号已申请过 Key，请使用「重新生成」" });
+  }
+  const key = generateApiKey();
+  const now = sqlNow();
+  await db
+    .prepare("INSERT INTO api_keys (owner_key, api_key, name, created_at) VALUES (?, ?, ?, ?)")
+    .bind(ownerKey, key, "默认", now)
+    .run();
+  const row = await db.prepare("SELECT id FROM api_keys WHERE owner_key = ? LIMIT 1").bind(ownerKey).first();
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: { id: row?.id, name: "默认", key, key_preview: maskApiKey(key), created_at: now },
+  });
+}
+
+async function handleKeysReset(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  const ownerKey = apiKeyOwnerKey(auth.session);
+  if (!db) return apiKeyUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  const key = generateApiKey();
+  const now = sqlNow();
+  await db
+    .prepare(
+      "INSERT INTO api_keys (owner_key, api_key, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(owner_key) DO UPDATE SET api_key = excluded.api_key, mi_uid = NULL, device_id = NULL, device_name = NULL, device_token = NULL, bound_at = NULL, enabled = 1, expires_at = NULL, last_used_at = NULL",
+    )
+    .bind(ownerKey, key, "默认", now)
+    .run();
+  const row = await db.prepare("SELECT id FROM api_keys WHERE owner_key = ? LIMIT 1").bind(ownerKey).first();
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: { id: row?.id, name: "默认", key, key_preview: maskApiKey(key), created_at: now },
+  });
+}
+
+async function handleKeysUnbind(request, env) {
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  const ownerKey = apiKeyOwnerKey(auth.session);
+  if (!db) return apiKeyUnavailableResponse();
+  if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  const result = await db
+    .prepare("UPDATE api_keys SET mi_uid = NULL, device_id = NULL, device_name = NULL, device_token = NULL, bound_at = NULL WHERE owner_key = ?")
+    .bind(ownerKey)
+    .run();
+  if (!result.meta?.changes) {
+    return jsonResponse(404, { code: 404, message: "Key 不存在或未绑定设备" });
+  }
+  return jsonResponse(200, { code: 0, message: "Success", data: { unbound: true } });
+}
+
+async function handleClientBind(request, env) {
+  const key = getApiKeyFromRequest(request);
+  if (!key) {
+    return jsonResponse(401, { code: 401, message: "缺少 API Key" });
+  }
+  const miUid = getApiMiUid(request);
+  const deviceId = getApiDeviceId(request);
+  if (!miUid) {
+    return jsonResponse(400, { code: -1, message: "缺少小米账号 ID X-DM-Mi-Uid" });
+  }
+  if (!deviceId) {
+    return jsonResponse(400, { code: -1, message: "缺少设备标识 X-DM-Device-Id" });
+  }
+  const record = await lookupApiKeyRecord(key, env);
+  const db = getDatabase(env);
+  if (!record || Number(record.enabled) !== 1) {
+    return jsonResponse(401, { code: 401, message: "API Key 无效" });
+  }
+  if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
+    return jsonResponse(401, { code: 401, message: "API Key 已过期" });
+  }
+  if (!db) {
+    return jsonResponse(503, { code: 503, message: "D1 数据库未配置" });
+  }
+
+  const now = sqlNow();
+  const deviceName = getApiDeviceName(request) || deviceId;
+  const boundMi = String(record.mi_uid || "").trim();
+  const boundDeviceId = String(record.device_id || "").trim();
+
+  if (boundMi) {
+    if (boundMi !== miUid) {
+      return jsonResponse(403, { code: 403, message: "该 Key 已绑定其他小米账号" });
+    }
+    if (boundDeviceId && boundDeviceId !== deviceId) {
+      return jsonResponse(403, { code: 403, message: "该 Key 已在其他设备绑定" });
+    }
+    await db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now, record.id).run().catch(() => {});
+    return jsonResponse(200, {
+      code: 0,
+      message: "Success",
+      data: {
+        bound: true,
+        mi_uid_tail: maskMiUid(miUid),
+        device_name: String(record.device_name || boundDeviceId || deviceId),
+        device_token: String(record.device_token || ""),
+        bound_at: record.bound_at,
+      },
+    });
+  }
+
+  const token = generateDeviceToken();
+  await db
+    .prepare(
+      "UPDATE api_keys SET mi_uid = ?, device_id = ?, device_name = ?, device_token = ?, bound_at = ?, last_used_at = ? WHERE id = ?",
+    )
+    .bind(miUid, deviceId, deviceName, token, now, now, record.id)
+    .run();
+  return jsonResponse(200, {
+    code: 0,
+    message: "Success",
+    data: {
+      bound: true,
+      mi_uid_tail: maskMiUid(miUid),
+      device_name: deviceName,
+      device_token: token,
+      bound_at: now,
     },
   });
 }
@@ -3367,7 +3728,7 @@ function keyLooksInvalid(key) {
 }
 
 function resolveTunehubKey(session, request, env) {
-  if (session.type === "password") {
+  if (session.type === "password" || session.type === "apikey") {
     return String(env.TUNEHUB_API_KEY || "").trim();
   }
   return String(request.headers.get("X-Tunehub-Key") || "").trim();
@@ -3522,7 +3883,7 @@ function buildUpstreamProxyResponse(upstream, extraHeaders = {}) {
 }
 
 async function handleMedia(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth.response;
 
   const reqUrl = new URL(request.url);
@@ -3626,7 +3987,7 @@ async function handleLyric(request, env) {
 }
 
 async function handleParse(request, env) {
-  const auth = await requireSession(request, env);
+  const auth = await requireAnyAuth(request, env);
   if (!auth.ok) return auth.response;
 
   const body = await parseJsonBody(request);
@@ -3643,7 +4004,7 @@ async function handleParse(request, env) {
   const key = resolveTunehubKey(auth.session, request, env);
   if (keyLooksInvalid(key)) {
     const message =
-      auth.session.type === "password"
+      auth.session.type === "password" || auth.session.type === "apikey"
         ? "请先在 Worker Secret 配置 TUNEHUB_API_KEY"
         : "请先在页面填写你自己的 TuneHub API Key";
     return jsonResponse(400, { code: -1, message });

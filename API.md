@@ -5,7 +5,7 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 ## 通用约定
 
 - **Base URL**：`https://musicapi.621888.xyz`
-- **鉴权**：登录成功后通过 `dm_session` Cookie 维持会话；请求需带 `credentials: 'include'`
+- **鉴权**：网页端通过 `dm_session` Cookie 维持会话（请求需带 `credentials: 'include'`）；QNAP 客户端等第三方工具使用 `X-DM-Key` + `X-DM-Device-Id` 请求头（见第七节）
 - **CORS**：仅允许 `ALLOWED_ORIGINS` 中配置的前端域名
 - **响应格式**：`{ "code": 0, "message": "Success", "data": ... }`，`code === 0` 表示成功
 - **错误码**：`-1` 通用错误、`401` 未登录、`402` 需要有效月会员、`403` 无权限、`404` 不存在、`503` 服务暂不可用
@@ -248,11 +248,69 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 
 ---
 
-## 七、Linux DO 用户私有 Key
+## 七、API Key 鉴权（客户端接入）
+
+QNAP 客户端等第三方工具通过 API Key 调用代理接口，无需浏览器 Cookie。网页端在「用户」→「API Key 接入」中申请/查看自己的 Key。
+
+### 7.1 请求头
+
+- `X-DM-Key`：API Key（必填）
+- `X-DM-Mi-Uid`：米家账号 ID（必填，绑定接口与代理接口）
+- `X-DM-Device-Id`：设备唯一 ID（必填，参与绑定）
+- `X-DM-Device-Token`：设备令牌（必填，代理接口；保存绑定时由服务端签发）
+- `X-DM-Device-Name`：设备显示名（可选）
+
+### 7.2 规则
+
+- 分接口校验：
+  - `/api/auth/me`：**只验 Key**（客户端「测试按钮」用，不触发绑定）。
+  - `/api/client/bind`：Key + 米家 UID + 设备 ID（保存绑定时调用）。
+  - `/api/proxy/*`：Key + 米家 UID + 设备令牌三层校验；无 Key 头时回退会话 Cookie（网页端行为不变）。
+- 缺少小米账号 ID / 设备令牌返回 `400`；Key 无效/过期返回 `401`；Key 已绑定其他小米账号或设备返回 `403`。
+- Key 持有者视为已授权客户端，当前策略下绕过月会员限制。
+- 一个账号一个 Key：密码登录共享 `password:family`，Linux DO 用户各自独立。
+- **保存即绑定**：客户端「保存」时调 `/api/client/bind`，服务端校验 Key + 米家 UID + 设备 ID，通过后记录绑定并签发设备令牌；同一账号同一设备重复保存幂等返回原令牌。
+- 换设备 / 换米家账号：网页端「解绑设备」清除绑定与令牌；未解绑前换账号或换设备调用返回 `403`。
+
+### 7.3 绑定接口
+
+`POST /api/client/bind`（无需网页登录，用 Key 鉴权）
+
+请求头：`X-DM-Key`、`X-DM-Mi-Uid`、`X-DM-Device-Id`（可带 `X-DM-Device-Name`）
+
+成功返回：
+```json
+{
+  "code": 0,
+  "message": "Success",
+  "data": {
+    "bound": true,
+    "mi_uid_tail": "****1234",
+    "device_name": "qnap-1",
+    "device_token": "48位十六进制令牌",
+    "bound_at": "2026-08-08T02:00:00.000Z"
+  }
+}
+```
+
+`device_token` 仅在绑定/重新绑定时返回，客户端必须保存；之后所有 `/api/proxy/*` 请求都要带上。
+
+### 7.4 Key 管理接口（需网页 Cookie 登录）
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `GET /api/keys` | GET | 查询自己的 Key（完整 Key、掩码、绑定小米账号、最近使用） |
+| `POST /api/keys` | POST | 申请 Key；已有则返回 `400` |
+| `POST /api/keys/reset` | POST | 重新生成（旧 Key 作废并解绑） |
+| `POST /api/keys/unbind` | POST | 解绑设备并作废设备令牌，保留同一把 Key |
+
+Key 当前以明文存储于 D1 `api_keys` 表（与访问密码同级保护）；后续商业化可切换哈希存储，接口与客户端不变。
+
+## 八、Linux DO 用户私有 Key
 
 Linux DO 用户在浏览器填写自己的 TuneHub Key 后，前端通过请求头 `X-Tunehub-Key` 携带，Worker 用于 TuneHub 解析。密码登录使用 Worker 的 `TUNEHUB_API_KEY`，不持久化任何用户 Key。
 
-## 八、部署相关环境变量
+## 九、部署相关环境变量
 
 - 必填 Secrets：`SESSION_SECRET`、`ADMIN_PASSWORD`、`TUNEHUB_API_KEY`、`LINUXDO_CLIENT_ID`、`LINUXDO_CLIENT_SECRET`、`LINUXDO_REDIRECT_URI`、`LDC_CLIENT_ID`、`LDC_CLIENT_SECRET`
 - 可选：`JKAPI_API_KEY`、`CHKSZ_API_KEY`、`BACKUP4_LXMUSIC_ONRENDER_KEY`、`BACKUP4_LXMUSIC_SCRIPT_MD5`、`BACKUP4_LXMUSIC_SECRET_KEY`、`NXVAV_SECRET`

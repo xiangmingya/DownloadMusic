@@ -68,6 +68,7 @@
                         <div class="membership-popover-price"><strong id="membershipPrice">—</strong><span>积分 / 30 天</span></div>
                         <button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button>
                         <p id="membershipHint" class="membership-hint"></p>
+                        <button type="button" class="membership-apikey-btn" id="apiKeyEntryBtn">API Key 接入</button>
                         <button type="button" class="membership-logout-btn" id="logoutBtn">退出登录</button>
                     </section>
                 </div>
@@ -342,6 +343,23 @@
             <div class="welcome-dialog-actions">
                 <button id="membershipDialogLaterBtn" type="button">暂不开通</button>
                 <button id="membershipDialogBuyBtn" type="button">开通会员</button>
+            </div>
+        </dialog>
+
+        <dialog id="apiKeyDialog" class="welcome-dialog api-key-dialog" aria-labelledby="apiKeyDialogTitle" aria-describedby="apiKeyDialogMessage">
+            <button id="apiKeyDialogCloseBtn" class="welcome-dialog-close" type="button" aria-label="关闭 API Key 弹窗">×</button>
+            <p class="eyebrow">DEVELOPER ACCESS</p>
+            <h2 id="apiKeyDialogTitle">API Key</h2>
+            <p id="apiKeyDialogMessage" class="welcome-dialog-msg">把 Key 填到小爱音箱 / QNAP 客户端的配置里即可调用解析服务。每个账号一个 Key，最多绑定 1 台设备。</p>
+            <div class="api-key-dialog-body">
+                <label class="sr-only" for="apiKeyInput">API Key</label>
+                <input id="apiKeyInput" class="api-key-input" type="text" readonly placeholder="还没有 Key，点击右侧「申请」" spellcheck="false" autocomplete="off">
+                <button id="apiKeyActionBtn" type="button" class="api-key-action-btn" data-mode="apply">申请</button>
+            </div>
+            <p id="apiKeyStatusLine" class="api-key-status admin-muted"></p>
+            <div class="api-key-dialog-links">
+                <button id="apiKeyResetLink" type="button" class="text-link" hidden>重新生成</button>
+                <button id="apiKeyUnbindLink" type="button" class="text-link" hidden>解绑设备</button>
             </div>
         </dialog>
     </div>

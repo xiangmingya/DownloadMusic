@@ -70,3 +70,23 @@ CREATE TABLE IF NOT EXISTS service_metrics_hourly (
 
 CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_bucket ON service_metrics_hourly (bucket_hour DESC);
 CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_source ON service_metrics_hourly (source, bucket_hour DESC);
+
+-- API Key：QNAP 客户端等第三方工具接入鉴权。
+-- owner_key 与 user_libraries 同一套归属规则：密码登录共享 password:family，Linux DO 各自独立。
+-- 一个账号一个 Key；bound_device_* 用于 1 台设备绑定（暂时）。
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_key TEXT NOT NULL UNIQUE,
+  api_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  mi_uid TEXT,
+  device_id TEXT,
+  device_name TEXT,
+  device_token TEXT,
+  bound_at TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_key);

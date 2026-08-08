@@ -3230,6 +3230,129 @@ async function getJson(url, init = {}) {
     return payload.data || {};
 }
 
+async function loadApiKeyStatus() {
+    const input = document.getElementById('apiKeyInput');
+    const actionBtn = document.getElementById('apiKeyActionBtn');
+    const status = document.getElementById('apiKeyStatusLine');
+    const resetLink = document.getElementById('apiKeyResetLink');
+    const unbindLink = document.getElementById('apiKeyUnbindLink');
+    if (!input || !actionBtn || !status || !resetLink || !unbindLink) return;
+    try {
+        const data = await getJson(`${APP_API_ROOT}/keys`);
+        if (!data.has_key) {
+            input.value = '';
+            input.placeholder = '还没有 Key，点击右侧「申请」';
+            actionBtn.textContent = '申请';
+            actionBtn.dataset.mode = 'apply';
+            status.textContent = '尚未申请 Key。';
+            resetLink.hidden = true;
+            unbindLink.hidden = true;
+            return;
+        }
+        input.value = String(data.key || data.key_preview || '');
+        input.placeholder = '';
+        actionBtn.textContent = '复制';
+        actionBtn.dataset.mode = 'copy';
+        const boundName = data.mi_uid_tail ? `已绑定小米账号 ${data.mi_uid_tail}` : '';
+        status.textContent = boundName
+            ? boundName
+            : '尚未绑定设备（在 QNAP 客户端保存配置后自动绑定）。';
+        resetLink.hidden = false;
+        unbindLink.hidden = !boundName;
+    } catch (error) {
+        status.textContent = error.message || '读取失败';
+    }
+}
+
+function copyApiKeyValue() {
+    const input = document.getElementById('apiKeyInput');
+    const value = String(input?.value || '').trim();
+    if (!value) {
+        showToast('还没有可复制的 Key', 'error');
+        return;
+    }
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(value)
+            .then(() => showToast('已复制到剪贴板', 'success'))
+            .catch(() => selectApiKeyInput());
+    } else {
+        selectApiKeyInput();
+    }
+}
+
+function selectApiKeyInput() {
+    const input = document.getElementById('apiKeyInput');
+    if (!input) return;
+    input.select();
+    showToast('请手动复制（Ctrl / ⌘ + C）', 'info');
+}
+
+async function applyApiKeyAction() {
+    const actionBtn = document.getElementById('apiKeyActionBtn');
+    if (!actionBtn || actionBtn.disabled) return;
+    if (actionBtn.dataset.mode === 'copy') {
+        copyApiKeyValue();
+        return;
+    }
+    actionBtn.disabled = true;
+    try {
+        await getJson(`${APP_API_ROOT}/keys`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        await loadApiKeyStatus();
+        showToast('Key 已生成', 'success');
+        copyApiKeyValue();
+    } catch (error) {
+        showToast(error.message || '申请失败', 'error');
+    } finally {
+        actionBtn.disabled = false;
+    }
+}
+
+async function resetApiKey() {
+    if (!window.confirm('重新生成后，旧 Key 立即失效，已绑定的设备需要重新绑定。继续吗？')) return;
+    const actionBtn = document.getElementById('apiKeyActionBtn');
+    if (actionBtn) actionBtn.disabled = true;
+    try {
+        await getJson(`${APP_API_ROOT}/keys/reset`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        await loadApiKeyStatus();
+        showToast('Key 已重新生成', 'success');
+        copyApiKeyValue();
+    } catch (error) {
+        showToast(error.message || '重新生成失败', 'error');
+    } finally {
+        if (actionBtn) actionBtn.disabled = false;
+    }
+}
+
+async function unbindApiKeyDevice() {
+    if (!window.confirm('解绑后，当前设备将无法继续使用，需在客户端重新绑定。继续吗？')) return;
+    try {
+        await getJson(`${APP_API_ROOT}/keys/unbind`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        await loadApiKeyStatus();
+        showToast('设备已解绑', 'success');
+    } catch (error) {
+        showToast(error.message || '解绑失败', 'error');
+    }
+}
+
+function openApiKeyDialog() {
+    const dialog = document.getElementById('apiKeyDialog');
+    if (!dialog) return;
+    void loadApiKeyStatus();
+    dialog.showModal();
+}
+
 function renderMembership(data) {
     const status = document.getElementById('membershipStatusText');
     const price = document.getElementById('membershipPrice');
@@ -3727,6 +3850,11 @@ function initHomeInterface() {
         }
     });
     document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
+    document.getElementById('apiKeyEntryBtn')?.addEventListener('click', openApiKeyDialog);
+    document.getElementById('apiKeyDialogCloseBtn')?.addEventListener('click', () => document.getElementById('apiKeyDialog')?.close());
+    document.getElementById('apiKeyActionBtn')?.addEventListener('click', () => void applyApiKeyAction());
+    document.getElementById('apiKeyResetLink')?.addEventListener('click', () => void resetApiKey());
+    document.getElementById('apiKeyUnbindLink')?.addEventListener('click', () => void unbindApiKeyDevice());
     document.querySelectorAll('[data-admin-tab]').forEach(button => {
         button.addEventListener('click', () => setAdminTab(button.getAttribute('data-admin-tab')));
     });
