@@ -37,7 +37,6 @@ const BACKUP4_11NA_URL = "https://api.11na.cn/v1/music";
 const PREVIEW_MAX_BYTES = 1048576;
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
-const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
 const BACKUP4_BUGPK_API_ROOT = "https://api.bugpk.com/api";
 const BACKUP4_PAUGRAM_NETEASE_URL = "https://api.paugram.com/netease/";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
@@ -3276,13 +3275,13 @@ async function backup4TryBugpk(platform, id, quality, name, artist) {
     throw error;
   }
 
-  const media = platform === "qq" ? "tencent" : "";
-  if (!media) return null;
+  if (platform !== "qq") return null;
 
-  const endpoint = new URL(BACKUP4_BUGPK_API_URL);
-  endpoint.searchParams.set("id", id);
-  endpoint.searchParams.set("media", media);
-  endpoint.searchParams.set("type", "url");
+  const endpoint = new URL(`${BACKUP4_BUGPK_API_ROOT}/qqmusic`);
+  endpoint.searchParams.set("url", `https://y.qq.com/n/ryqq/songDetail/${encodeURIComponent(String(id))}`);
+  endpoint.searchParams.set("type", "song");
+  const title = String(name || "").trim();
+  if (title && !title.startsWith("ID ")) endpoint.searchParams.set("name", title);
 
   const response = await backup4Json(endpoint.toString(), {
     headers: {
@@ -3293,9 +3292,9 @@ async function backup4TryBugpk(platform, id, quality, name, artist) {
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
   if (response.ok && isHttpUrl(url)) {
-    return { url, provider: "bugpk" };
+    return { url, provider: "bugpk", lyrics: String(parsed?.lrc_data || parsed?.lyric || "") };
   }
-  const error = new Error(String(parsed?.message || parsed?.msg || `bugpk failed (${response.status})`));
+  const error = new Error(String(parsed?.message || parsed?.msg || `bugpk qq failed (${response.status})`));
   error.status = response.status;
   throw error;
 }
