@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_key TEXT NOT NULL UNIQUE,
   api_key TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_used_at TEXT,
   mi_uid TEXT,
