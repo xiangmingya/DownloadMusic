@@ -1127,7 +1127,9 @@ async function searchSongsByKeywordPagePrimary(keyword, selectedPlatform, option
         throw new Error('暂无可用平台');
     }
 
-    const timeoutMs = 15000;
+    // 酷我主搜索对海外机房不稳定，给短超时并跳过重试，尽快交给后备源。
+    const timeoutMs = platform === 'kuwo' ? 6000 : 15000;
+    const retries = platform === 'kuwo' ? 0 : 1;
     const requestPage = Math.max(1, Number(options.page || 1));
     const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
     const result = await callPlatformMethod(platform, 'search', {
@@ -1136,7 +1138,7 @@ async function searchSongsByKeywordPagePrimary(keyword, selectedPlatform, option
         limit: requestLimit
     }, {
         timeoutMs,
-        retries: 1,
+        retries,
         retryDelayMs: 600
     });
     const list = Array.isArray(result) ? result : [];
