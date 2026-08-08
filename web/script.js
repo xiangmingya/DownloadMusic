@@ -4047,6 +4047,8 @@ async function playSongCore(source, id, name, artist, options = {}) {
 
     if (isSameSong(source, id) && !audio.paused) {
         audio.pause();
+        setPlayButtonLoading(playKey, false);
+        setGlobalPlayLoading(false);
         syncInlinePlayButtonState();
         updateFullPlayerControlState();
         return;
@@ -4056,6 +4058,8 @@ async function playSongCore(source, id, name, artist, options = {}) {
         resumeTime = Number(audio.currentTime || 0);
         try {
             await audio.play();
+            setPlayButtonLoading(playKey, false);
+            setGlobalPlayLoading(false);
             if (inlineIndex !== null && player) player.style.display = 'flex';
             if (inlineIndex !== null) currentPlayingIndex = inlineIndex;
             syncInlinePlayButtonState();
