@@ -640,7 +640,7 @@ async function validateBoundApiKey(request, env) {
       api_key_id: Number(record.id),
       api_key_name: String(record.name || ""),
       owner_key: String(record.owner_key || ""),
-      mi_uid,
+      mi_uid: miUid,
       device_id: getApiDeviceId(request),
       device_name: String(record.device_name || ""),
       user: { name: String(record.name || "API Key") },
