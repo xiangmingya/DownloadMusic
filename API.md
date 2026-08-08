@@ -246,6 +246,40 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 
 内部按健康度自动排序的解析源链：GDStudio、雨糖小屋（网易云/酷我）、LXMusic Onrender、LXMusic 签名源、OIAPI（网易云/酷我）、JKAPI、CHKSZ（网易云/QQ）、BugPK、Paugram、QQMP3、NXVAV。被管理员禁用的源会被跳过。
 
+### 6.13 小爱音箱外部搜索源（topone）
+
+`POST /api/topone?platform=<netease,qq,kuwo>`
+
+供 Songloft「智能音箱」插件的**外部搜索源**配置使用（topone 规范，6 秒超时）。只验 Key（`Authorization: Bearer <KEY>` 或 `X-DM-Key`），不做设备绑定，绑定留作后续锚点。
+
+请求体：
+
+```json
+{ "keyword": "歌名", "hint": { "title": "歌名", "artist": "歌手" }, "quality": "320k" }
+```
+
+- `platform` 查询参数可选，逗号分隔的优先级列表；缺省为 `netease,qq,kuwo`。只配置单个平台（如 `?platform=netease`）即实现「指定音源」。
+- 各平台并发搜索、按列表顺序采纳；平台内按标题匹配度优先尝试候选，整体预算 5.5 秒。
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "title": "歌曲名",
+    "artist": "歌手",
+    "album": "专辑",
+    "cover_url": "https://...",
+    "url": "https://...",
+    "source_data": { "platform": "netease", "quality": "320k", "songInfo": { "id": "123456" } }
+  }
+}
+```
+
+未命中返回 `code: 404`、`data: null`；Key 无效返回 `401`。
+
 ---
 
 ## 七、API Key 鉴权（客户端接入）
@@ -264,6 +298,7 @@ QNAP 客户端等第三方工具通过 API Key 调用代理接口，无需浏览
 
 - 分接口校验：
   - `/api/auth/me`：**只验 Key**（客户端「测试按钮」用，不触发绑定）。
+  - `/api/topone`：**只验 Key**（小爱音箱外部搜索源，接受 `Authorization: Bearer <KEY>`）。
   - `/api/client/bind`：Key + 米家 UID + 设备 ID（保存绑定时调用）。
   - `/api/proxy/*`：Key + 米家 UID + 设备令牌三层校验；无 Key 头时回退会话 Cookie（网页端行为不变）。
 - 缺少小米账号 ID / 设备令牌返回 `400`；Key 无效/过期返回 `401`；Key 已绑定其他小米账号或设备返回 `403`。

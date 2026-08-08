@@ -152,6 +152,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/client/bind" && request.method === "POST") {
       return withCors(request, env, await handleClientBind(request, env));
     }
+    if (url.pathname === "/api/topone" && request.method === "POST") {
+      return withCors(request, env, await handleTopone(request, env));
+    }
     if (url.pathname.startsWith("/api/proxy/")) {
       const sessionAuth = await requireClientAuth(request, env);
       if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
@@ -528,6 +531,21 @@ async function requireSession(request, env) {
 
 function getApiKeyFromRequest(request) {
   return String(request.headers.get("X-DM-Key") || "").trim();
+}
+
+// topone（小爱音箱外部搜索源）同时接受 Authorization: Bearer <KEY> 与 X-DM-Key。
+function getToponeApiKey(request) {
+  const headerKey = getApiKeyFromRequest(request);
+  if (headerKey) return headerKey;
+  const auth = String(request.headers.get("Authorization") || "").trim();
+  if (!auth) return "";
+  return auth.replace(/^Bearer\s+/i, "").trim();
+}
+
+function requestWithApiKeyHeader(request, key) {
+  const headers = new Headers(request.headers);
+  headers.set("X-DM-Key", String(key || "").trim());
+  return new Request("https://local/api/topone", { method: "POST", headers });
 }
 
 function getApiDeviceId(request) {
@@ -2501,6 +2519,165 @@ async function handleMethod(request, env) {
       message: err instanceof Error ? err.message : "请求失败",
     });
   }
+}
+
+// 小爱音箱外部搜索源（topone 规范，供 Songloft 智能音箱插件配置）：
+// POST /api/topone?platform=netease,qq,kuwo
+// Body: { keyword, hint?, quality? }
+// Auth: Authorization: Bearer <KEY> 或 X-DM-Key: <KEY>（只验 Key，设备绑定为后续锚点）
+// 各平台并发搜索，按平台优先级消费结果；平台内按标题匹配度优先尝试候选，
+// 取第一个能解析出播放地址的结果（整体预算 5.5 秒，单平台预算 4 秒）。
+async function handleTopone(request, env) {
+  const startedAt = Date.now();
+  const body = await parseJsonBody(request);
+  const keyword = String(body?.keyword || "").trim();
+  if (!keyword) {
+    return jsonResponse(400, { code: 400, msg: "缺少参数: keyword", data: null });
+  }
+  const quality = backup4NormalizeQuality(body?.quality || "320k");
+
+  const key = getToponeApiKey(request);
+  if (!key) {
+    return jsonResponse(401, { code: 401, msg: "缺少 API Key", data: null });
+  }
+  const auth = await validateApiKeyOnly(requestWithApiKeyHeader(request, key), env);
+  if (!auth || auth.error) {
+    const status = auth?.error?.status || 401;
+    const payload = auth?.error ? await auth.error.json().catch(() => null) : null;
+    return jsonResponse(status, { code: payload?.code ?? -1, msg: payload?.message || "API Key 无效", data: null });
+  }
+
+  const url = new URL(request.url);
+  const requested = String(url.searchParams.get("platform") || "").trim().toLowerCase();
+  const platforms = requested
+    ? requested.split(",").map(normalizeBackup4Platform).filter((p) => BACKUP4_ALLOWED_PLATFORMS.has(p))
+    : ["netease", "qq", "kuwo"];
+  if (platforms.length === 0) {
+    return jsonResponse(400, { code: 400, msg: "platform 参数无效", data: null });
+  }
+
+  const overallBudgetMs = 5500;
+  const tasks = platforms.map((platform) =>
+    runToponePlatform(platform, keyword, quality, key, env, startedAt),
+  );
+  for (let i = 0; i < tasks.length; i += 1) {
+    const result = await withTimeout(tasks[i], overallBudgetMs - (Date.now() - startedAt));
+    if (!result) continue;
+    const { hit, parseData } = result;
+    console.log(`[topone] hit platform=${result.platform} id=${hit.id} elapsed=${Date.now() - startedAt}ms`);
+    return jsonResponse(200, {
+      code: 0,
+      msg: "success",
+      data: {
+        title: hit.name,
+        artist: hit.artist,
+        album: hit.album || undefined,
+        cover_url: hit.cover || undefined,
+        url: parseData.url,
+        source_data: {
+          platform: result.platform,
+          quality,
+          songInfo: { id: hit.id },
+        },
+      },
+    });
+  }
+
+  console.log(`[topone] done 404 elapsed=${Date.now() - startedAt}ms keyword=${keyword}`);
+  return jsonResponse(404, { code: 404, msg: "未找到歌曲", data: null });
+}
+
+async function runToponePlatform(platform, keyword, quality, key, env, startedAt) {
+  if (await isSourceDisabled(env, platform)) return null;
+
+  const candidates = await withTimeout(searchToponeCandidates(platform, keyword, env), 4500);
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    console.log(`[topone] ${platform} search none keyword=${keyword}`);
+    return null;
+  }
+  const sorted = toponeSortCandidates(candidates, keyword);
+
+  const platformBudgetMs = 5000;
+  const platformStartedAt = Date.now();
+  for (const hit of sorted.slice(0, 4)) {
+    if (Date.now() - platformStartedAt > platformBudgetMs) break;
+    if (Date.now() - startedAt > 5200) break;
+    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, key, env), 1800);
+    if (parseData && parseData.url) {
+      return { platform, hit, parseData };
+    }
+  }
+  console.log(`[topone] ${platform} no parseable candidate keyword=${keyword}`);
+  return null;
+}
+
+async function searchToponeCandidates(platform, keyword, env) {
+  // 官方直连 / TuneHub 与 backup4 备用搜索链并发跑，优先采纳官方结果，
+  // 官方被上游屏蔽（返回空）时用备用链结果兜底。
+  const primary = (async () => {
+    try {
+      const list = await monitoredServiceCall(env, { source: platform, operation: "search" }, () =>
+        callSearch(platform, keyword, 1, 5),
+      );
+      return Array.isArray(list) && list.length > 0 ? list : null;
+    } catch {
+      return null;
+    }
+  })();
+  const backup = (async () => {
+    try {
+      const result = await backup4Search(platform, keyword, 1, 5, env);
+      return Array.isArray(result?.list) && result.list.length > 0 ? result.list : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const primaryResult = await withTimeout(primary, 2000);
+  if (Array.isArray(primaryResult) && primaryResult.length > 0) return primaryResult;
+  const backupResult = await withTimeout(backup, 3000);
+  if (Array.isArray(backupResult) && backupResult.length > 0) return backupResult;
+  return [];
+}
+
+async function parseToponeCandidate(platform, hit, quality, key, env) {
+  const parseUrl = new URL("https://local/api/topone");
+  parseUrl.searchParams.set("mode", "url");
+  parseUrl.searchParams.set("platform", platform);
+  parseUrl.searchParams.set("id", hit.id);
+  parseUrl.searchParams.set("quality", quality);
+  if (hit.name) parseUrl.searchParams.set("name", hit.name);
+  if (hit.artist) parseUrl.searchParams.set("artist", hit.artist);
+  const resp = await handleBackup4(
+    new Request(parseUrl.toString(), { method: "GET", headers: requestWithApiKeyHeader(new Request("https://local/api/topone", { method: "POST" }), key).headers }),
+    env,
+  );
+  if (!resp) return null;
+  const payload = await resp.json().catch(() => null);
+  return payload?.code === 0 && payload?.data?.url ? payload.data : null;
+}
+
+function toponeSortCandidates(list, keyword) {
+  const normalizedKeyword = String(keyword || "").replace(/\s+/g, "").toLowerCase();
+  return [...list].sort((a, b) => {
+    const scoreA = toponeTitleScore(a?.name, normalizedKeyword);
+    const scoreB = toponeTitleScore(b?.name, normalizedKeyword);
+    return scoreB - scoreA;
+  });
+}
+
+function toponeTitleScore(title, normalizedKeyword) {
+  const normalized = String(title || "").replace(/\s+/g, "").toLowerCase();
+  if (!normalizedKeyword) return 0;
+  if (normalized === normalizedKeyword) return 100;
+  if (normalized.startsWith(normalizedKeyword)) return 60;
+  if (normalized.includes(normalizedKeyword)) return 30;
+  return 0;
+}
+
+function withTimeout(promise, ms) {
+  const timeoutMs = Math.max(1, Math.floor(Number(ms) || 1000));
+  return Promise.race([promise, sleep(timeoutMs).then(() => null)]);
 }
 
 async function handleBackup(request, env) {
