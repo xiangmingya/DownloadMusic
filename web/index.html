@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260806-08">
+    <link rel="stylesheet" href="style.css?v=20260806-11">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -68,6 +68,15 @@
                         <div class="membership-popover-price"><strong id="membershipPrice">—</strong><span>积分 / 30 天</span></div>
                         <button id="membershipCheckoutBtn" type="button" class="membership-checkout-btn">使用 Linux DO 积分开通</button>
                         <p id="membershipHint" class="membership-hint"></p>
+                        <div class="membership-quality-row">
+                            <span class="membership-quality-label">默认音质</span>
+                            <div class="quality-presets" id="qualityPresetRow">
+                                <button type="button" data-quality-pref="128k">128k</button>
+                                <button type="button" data-quality-pref="320k">320k</button>
+                                <button type="button" data-quality-pref="flac">FLAC</button>
+                                <button type="button" data-quality-pref="flac24bit">FLAC 24bit</button>
+                            </div>
+                        </div>
                         <button type="button" class="membership-apikey-btn" id="apiKeyEntryBtn">API Key 接入</button>
                         <button type="button" class="membership-logout-btn" id="logoutBtn">退出登录</button>
                     </section>
@@ -368,7 +377,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-40';
+        const APP_ASSET_VERSION = '20260806-41';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

@@ -93,7 +93,35 @@ const playlistStorageKey = `${LOCAL_KEY_PREFIX}playlist_${AUTH_TYPE}_${linuxdoUs
 const favoriteStorageKey = `${LOCAL_KEY_PREFIX}favorites_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 const recentStorageKey = `${LOCAL_KEY_PREFIX}recent_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 const savedPlaylistStorageKey = `${LOCAL_KEY_PREFIX}saved_playlists_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
+const QUALITY_PREF_KEY = 'downloadmusic_quality_pref';
+const QUALITY_OPTIONS = ['128k', '320k', 'flac', 'flac24bit'];
 let playlistSongs = [];
+
+function syncQualityPresetButtons(value) {
+    document.querySelectorAll('[data-quality-pref]').forEach(btn => {
+        btn.classList.toggle('is-active', btn.getAttribute('data-quality-pref') === value);
+    });
+}
+
+function applyQualityPreference() {
+    const saved = String(localStorage.getItem(QUALITY_PREF_KEY) || '');
+    const quality = QUALITY_OPTIONS.includes(saved) ? saved : '320k';
+    const select = document.getElementById('quality');
+    if (select && QUALITY_OPTIONS.includes(quality)) select.value = quality;
+    syncQualityPresetButtons(quality);
+}
+
+function setQualityPreference(value) {
+    const quality = QUALITY_OPTIONS.includes(value) ? value : '320k';
+    try {
+        localStorage.setItem(QUALITY_PREF_KEY, quality);
+    } catch {
+        // ignore
+    }
+    const select = document.getElementById('quality');
+    if (select) select.value = quality;
+    syncQualityPresetButtons(quality);
+}
 let favoriteSongs = [];
 let recentSongs = [];
 let savedPlaylists = [];
@@ -272,10 +300,13 @@ function getProxiedCoverUrl(rawUrl) {
     return endpoint.toString();
 }
 
-function buildDownloadFilename(name, artist) {
+function buildDownloadFilename(name, artist, quality) {
     const n = String(name || '').trim();
     const a = String(artist || '').trim();
-    return (a && n) ? `${a} - ${n}` : (n || a || 'music');
+    const base = (a && n) ? `${a} - ${n}` : (n || a || 'music');
+    const q = String(quality || '').toLowerCase();
+    const ext = q.startsWith('flac') ? 'flac' : 'mp3';
+    return `${base}.${ext}`;
 }
 
 function parseResponseText(text) {
@@ -2468,7 +2499,7 @@ async function downloadSong(source, id, name, artist, index = null, songObj = nu
         }
         const url = buildMediaProxyUrl(mediaUrl, {
             download: true,
-            filename: buildDownloadFilename(name, artist)
+            filename: buildDownloadFilename(name, artist, quality)
         });
         if (!url) {
             throw new Error('下载链接无效');
@@ -3912,6 +3943,14 @@ function initHomeInterface() {
         event.preventDefault();
         runHomeSearch(document.getElementById('homeSearchInput')?.value);
     });
+    document.getElementById('qualityPresetRow')?.addEventListener('click', event => {
+        const btn = event.target.closest('[data-quality-pref]');
+        if (btn) setQualityPreference(btn.getAttribute('data-quality-pref'));
+    });
+    document.getElementById('quality')?.addEventListener('change', event => {
+        setQualityPreference(String(event.target.value || ''));
+    });
+    applyQualityPreference();
     document.querySelectorAll('[data-search-keyword]').forEach(button => button.addEventListener('click', () => runHomeSearch(button.getAttribute('data-search-keyword'))));
     document.querySelectorAll('[data-home-toplist]').forEach(button => button.addEventListener('click', () => {
         openToplistSongs(button.dataset.homeToplist, button.dataset.toplistId, button.dataset.toplistName);
