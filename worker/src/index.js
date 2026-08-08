@@ -38,6 +38,7 @@ const PREVIEW_MAX_BYTES = 1048576;
 // ChKSz 网易云接口；密钥只从 Worker Secret 读取。
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const BACKUP4_BUGPK_API_URL = "https://api.bugpk.com/api/music";
+const BACKUP4_BUGPK_API_ROOT = "https://api.bugpk.com/api";
 const BACKUP4_PAUGRAM_NETEASE_URL = "https://api.paugram.com/netease/";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -3250,8 +3251,32 @@ function backup4ChkszLevel(quality) {
   return "jymaster";
 }
 
-async function backup4TryBugpk(platform, id) {
-  const media = platform === "qq" ? "tencent" : platform === "netease" ? "netease" : "";
+async function backup4TryBugpk(platform, id, quality, name, artist) {
+  if (platform === "netease") {
+    const endpoint = new URL(`${BACKUP4_BUGPK_API_ROOT}/163_music`);
+    endpoint.searchParams.set("ids", String(id));
+    endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
+    endpoint.searchParams.set("type", "json");
+    const title = String(name || "").trim();
+    if (title && !title.startsWith("ID ")) endpoint.searchParams.set("s", title);
+
+    const response = await backup4Json(endpoint.toString(), {
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+    const parsed = response.json;
+    const url = normalizeMediaUrl(parsed?.url || "");
+    if (response.ok && Number(parsed?.status) === 200 && isHttpUrl(url)) {
+      return { url, provider: "bugpk", lyrics: String(parsed?.lyric || "") };
+    }
+    const error = new Error(String(parsed?.msg || parsed?.message || `bugpk netease failed (${response.status})`));
+    error.status = response.status;
+    throw error;
+  }
+
+  const media = platform === "qq" ? "tencent" : "";
   if (!media) return null;
 
   const endpoint = new URL(BACKUP4_BUGPK_API_URL);
@@ -3267,12 +3292,21 @@ async function backup4TryBugpk(platform, id) {
   });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
-  if (response.ok && url) {
+  if (response.ok && isHttpUrl(url)) {
     return { url, provider: "bugpk" };
   }
   const error = new Error(String(parsed?.message || parsed?.msg || `bugpk failed (${response.status})`));
   error.status = response.status;
   throw error;
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 async function backup4TryPaugramNetease(platform, id) {
