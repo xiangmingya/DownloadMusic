@@ -79,6 +79,9 @@ async function handleRequest(request, env) {
   const url = new URL(request.url);
 
   if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+    if (url.pathname === "/api/topone") {
+      return toponeCors(request, new Response(null, { status: 204 }));
+    }
     return withCors(request, env, new Response(null, { status: 204 }));
   }
 
@@ -153,7 +156,7 @@ async function handleRequest(request, env) {
       return withCors(request, env, await handleClientBind(request, env));
     }
     if (url.pathname === "/api/topone" && request.method === "POST") {
-      return withCors(request, env, await handleTopone(request, env));
+      return toponeCors(request, await handleTopone(request, env));
     }
     if (url.pathname.startsWith("/api/proxy/")) {
       const sessionAuth = await requireClientAuth(request, env);
@@ -246,6 +249,25 @@ function withCors(request, env, response) {
   headers.set(
     "Access-Control-Allow-Headers",
     "Authorization, Content-Type, X-Tunehub-Key, X-DM-Key, X-DM-Device-Id, X-DM-Device-Name, X-DM-Mi-Uid, X-DM-Device-Token",
+  );
+  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+
+  return new Response(response.body, {
+    status: response.status,
+    headers,
+  });
+}
+
+// topone 是 NAS 本地页面（任意内网地址）也可能调用的接口，按请求来源回显 Origin；
+// 接口本身靠 Bearer KEY 鉴权，不需要 Cookie，因此不依赖站点白名单。
+function toponeCors(request, response) {
+  const headers = new Headers(response.headers);
+  const requestOrigin = request.headers.get("Origin");
+  headers.set("Access-Control-Allow-Origin", requestOrigin || "*");
+  headers.set("Vary", "Origin");
+  headers.set(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, X-DM-Key, X-DM-Device-Id, X-DM-Device-Name, X-DM-Mi-Uid, X-DM-Device-Token",
   );
   headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 
