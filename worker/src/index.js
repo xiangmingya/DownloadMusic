@@ -3435,7 +3435,7 @@ async function backup4TryQqBackup3(platform, id) {
   const result = await callQqBackup3ParseBySongmid(id, 6000);
   const url = normalizeMediaUrl(result?.parsed?.url?.url || result?.parsed?.url || "");
   if (result?.response?.ok && result?.parsed?.success && url) {
-    return { url, provider: "qq_backup3_parse" };
+    return { url, provider: "qq_backup3_parse", lyrics: String(result?.parsed?.lyric || "") };
   }
   throw new Error(String(result?.parsed?.errMsg || "qq backup3 parse failed"));
 }
