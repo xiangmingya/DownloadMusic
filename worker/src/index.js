@@ -2547,7 +2547,7 @@ async function handleMethod(request, env) {
 // POST /api/topone?platform=netease,qq,kuwo
 // Body: { keyword, hint?, quality? }
 // Auth: Authorization: Bearer <KEY> 或 X-DM-Key: <KEY>（只验 Key，设备绑定为后续锚点）
-// 各平台并发搜索，按平台优先级消费结果；平台内按标题匹配度优先尝试候选，
+// 各平台并发搜索，按平台优先级消费结果；平台内按标题匹配度 + 歌手提示优先尝试候选，
 // 取第一个能解析出播放地址的结果（整体预算 5.5 秒，单平台预算 4 秒）。
 async function handleTopone(request, env) {
   const startedAt = Date.now();
@@ -2557,6 +2557,10 @@ async function handleTopone(request, env) {
     return jsonResponse(400, { code: 400, msg: "缺少参数: keyword", data: null });
   }
   const quality = backup4NormalizeQuality(body?.quality || "320k");
+  const hintTitle = String(body?.hint?.title || "").trim();
+  const hintArtist = String(body?.hint?.artist || "").trim();
+  // 带歌手提示时把「歌名 + 歌手」拼进搜索词，平台侧更容易命中原唱版本。
+  const searchKeyword = hintArtist ? `${hintTitle || keyword} ${hintArtist}` : keyword;
 
   const key = getToponeApiKey(request);
   if (!key) {
@@ -2580,7 +2584,7 @@ async function handleTopone(request, env) {
 
   const overallBudgetMs = 5500;
   const tasks = platforms.map((platform) =>
-    runToponePlatform(platform, keyword, quality, key, env, startedAt),
+    runToponePlatform(platform, searchKeyword, keyword, hintArtist, quality, key, env, startedAt),
   );
   for (let i = 0; i < tasks.length; i += 1) {
     const result = await withTimeout(tasks[i], overallBudgetMs - (Date.now() - startedAt));
@@ -2609,27 +2613,27 @@ async function handleTopone(request, env) {
   return jsonResponse(404, { code: 404, msg: "未找到歌曲", data: null });
 }
 
-async function runToponePlatform(platform, keyword, quality, key, env, startedAt) {
+async function runToponePlatform(platform, searchKeyword, title, artist, quality, key, env, startedAt) {
   if (await isSourceDisabled(env, platform)) return null;
 
-  const candidates = await withTimeout(searchToponeCandidates(platform, keyword, env), 4500);
+  const candidates = await withTimeout(searchToponeCandidates(platform, searchKeyword, env), 4000);
   if (!Array.isArray(candidates) || candidates.length === 0) {
-    console.log(`[topone] ${platform} search none keyword=${keyword}`);
+    console.log(`[topone] ${platform} search none keyword=${searchKeyword}`);
     return null;
   }
-  const sorted = toponeSortCandidates(candidates, keyword);
+  const sorted = toponeSortCandidates(candidates, title, artist);
 
-  const platformBudgetMs = 5000;
+  const platformBudgetMs = 4000;
   const platformStartedAt = Date.now();
   for (const hit of sorted.slice(0, 4)) {
     if (Date.now() - platformStartedAt > platformBudgetMs) break;
     if (Date.now() - startedAt > 5200) break;
-    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, key, env), 1800);
+    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, key, env), 1500);
     if (parseData && parseData.url) {
       return { platform, hit, parseData };
     }
   }
-  console.log(`[topone] ${platform} no parseable candidate keyword=${keyword}`);
+  console.log(`[topone] ${platform} no parseable candidate keyword=${searchKeyword}`);
   return null;
 }
 
@@ -2679,22 +2683,34 @@ async function parseToponeCandidate(platform, hit, quality, key, env) {
   return payload?.code === 0 && payload?.data?.url ? payload.data : null;
 }
 
-function toponeSortCandidates(list, keyword) {
-  const normalizedKeyword = String(keyword || "").replace(/\s+/g, "").toLowerCase();
+function toponeSortCandidates(list, title, artist) {
+  const normalizedTitle = String(title || "").replace(/\s+/g, "").toLowerCase();
+  const artistTokens = String(artist || "")
+    .replace(/\s+/g, "")
+    .toLowerCase()
+    .split(/[,，/、&]/)
+    .filter(Boolean);
   return [...list].sort((a, b) => {
-    const scoreA = toponeTitleScore(a?.name, normalizedKeyword);
-    const scoreB = toponeTitleScore(b?.name, normalizedKeyword);
+    const scoreA = toponeCandidateScore(a, normalizedTitle, artistTokens);
+    const scoreB = toponeCandidateScore(b, normalizedTitle, artistTokens);
     return scoreB - scoreA;
   });
 }
 
-function toponeTitleScore(title, normalizedKeyword) {
+function toponeCandidateScore(item, normalizedTitle, artistTokens) {
+  const title = String(item?.name || "");
   const normalized = String(title || "").replace(/\s+/g, "").toLowerCase();
-  if (!normalizedKeyword) return 0;
-  if (normalized === normalizedKeyword) return 100;
-  if (normalized.startsWith(normalizedKeyword)) return 60;
-  if (normalized.includes(normalizedKeyword)) return 30;
-  return 0;
+  let score = 0;
+  if (normalizedTitle) {
+    if (normalized === normalizedTitle) score += 100;
+    else if (normalized.startsWith(normalizedTitle)) score += 60;
+    else if (normalized.includes(normalizedTitle)) score += 30;
+  }
+  const candidateArtist = String(item?.artist || "").replace(/\s+/g, "").toLowerCase();
+  if (artistTokens.length > 0 && artistTokens.some((token) => token && candidateArtist.includes(token))) {
+    score += 50;
+  }
+  return score;
 }
 
 function withTimeout(promise, ms) {
