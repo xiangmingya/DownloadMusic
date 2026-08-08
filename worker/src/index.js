@@ -3933,6 +3933,12 @@ async function handleBackup4(request, env) {
     try {
       const result = await runner.run(platform, id, quality, name, artist);
       if (result?.url) {
+        const probe = await probeMediaUrl(result.url);
+        if (!probe.ok) {
+          await recordServiceMetric(env, { source: runner.source, operation: "parse", success: false, status: Number(probe.status || 0), durationMs: Date.now() - startedAt, error: "链接失效" });
+          errors.push(`${runner.source} 链接失效 (${probe.status || "timeout"})`);
+          continue;
+        }
         await recordServiceMetric(env, { source: runner.source, operation: "parse", success: true, status: 200, durationMs: Date.now() - startedAt });
         await recordServiceMetric(env, { source: `platform_${platform}`, operation: "platform_parse", success: true, status: 200, durationMs: Date.now() - startedAt });
         await recordFinalParseHit(env, result.provider || runner.source, Date.now() - startedAt);
@@ -3965,6 +3971,20 @@ async function handleBackup4(request, env) {
     message: "备用源4全部失败",
     errors,
   });
+}
+
+async function probeMediaUrl(url) {
+  try {
+    const response = await fetch(String(url || ""), {
+      method: "GET",
+      headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(6000),
+    });
+    return { ok: response.ok, status: response.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }
 
 function keyLooksInvalid(key) {
