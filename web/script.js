@@ -673,8 +673,6 @@ async function resolveSongMedia(song, quality, options = {}) {
             artist: String(song?.artist || '未知歌手'),
             album: String(song?.album || '')
         },
-        fallback_provider: String(data.provider || 'resolver_v2'),
-        cached: Boolean(data.cached)
     };
     cacheParsedItem(platform, quality, parsed);
     return parsed;

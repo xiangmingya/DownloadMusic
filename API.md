@@ -237,7 +237,7 @@ Worker 先调用主搜索，失败后在服务端内部使用多源搜索兜底�
 { "platform": "netease", "id": "123456", "quality": "320k", "name": "歌曲名", "artist": "歌手" }
 ```
 
-Worker 会缓存短期链接、合并同一歌曲的并发解析、按健康度排序 provider，并以最多两个并发来源进行延迟竞速。返回 `data.url`、`provider`、`cached`、`attempt_count` 与 `elapsed_ms`。
+Worker 会缓存短期链接、合并同一歌曲的并发解析、按健康度排序内部来源，并以最多两个并发来源进行延迟竞速。为避免暴露内部服务链路，对外仅返回 `data.url`、`cover` 与 `lyrics`。
 
 旧 `/api/proxy/backup`、`backup3`、`backup4` 已移除。
 

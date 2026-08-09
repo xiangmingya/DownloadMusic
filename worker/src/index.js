@@ -216,7 +216,9 @@ async function handleRequest(request, env, ctx) {
       env,
       jsonResponse(500, {
         code: 500,
-        message: err instanceof Error ? err.message : "Internal Error",
+        // Do not reflect runtime or upstream errors to callers. They can include
+        // provider names, URLs, or implementation details.
+        message: "服务暂时不可用，请稍后重试",
       }),
     );
   }
@@ -2561,16 +2563,16 @@ async function handleSearch(request, env) {
   try {
     const list = await monitoredServiceCall(env, { source: platform, operation: "search" }, () => callSearch(platform, keyword, page, limit));
     if (Array.isArray(list) && list.length) {
-      return jsonResponse(200, { code: 0, message: "Success", data: list, provider: "primary" }, { "Cache-Control": "no-store" });
+      return jsonResponse(200, { code: 0, message: "Success", data: list }, { "Cache-Control": "no-store" });
     }
   } catch {
     // Continue to the internal fallback chain.
   }
   try {
     const fallback = await backup4Search(platform, keyword, page, limit, env);
-    return jsonResponse(200, { code: 0, message: "Success", data: fallback.list || [], provider: "resolver_search" }, { "Cache-Control": "no-store" });
-  } catch (error) {
-    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "搜索失败", data: [] });
+    return jsonResponse(200, { code: 0, message: "Success", data: fallback.list || [] }, { "Cache-Control": "no-store" });
+  } catch {
+    return jsonResponse(502, { code: -1, message: "搜索服务暂时不可用，请稍后重试", data: [] });
   }
 }
 
@@ -3969,6 +3971,33 @@ async function putResolverCache(key, data, ttlSeconds) {
   return value;
 }
 
+// The browser only needs media content. Provider selection, cache lifecycle and
+// timing data are operational details and must stay inside the Worker.
+function publicResolverData(data) {
+  return {
+    url: normalizeMediaUrl(data?.url || ""),
+    cover: normalizeMediaUrl(data?.cover || ""),
+    lyrics: String(data?.lyrics || ""),
+  };
+}
+
+function publicParseItems(items) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item?.id || ""),
+    success: Boolean(item?.success),
+    url: normalizeMediaUrl(item?.url || ""),
+    cover: normalizeMediaUrl(item?.cover || item?.pic || ""),
+    pic: normalizeMediaUrl(item?.pic || item?.cover || ""),
+    lyrics: String(item?.lyrics || ""),
+    error: item?.success ? "" : "解析失败",
+    info: {
+      name: String(item?.info?.name || ""),
+      artist: String(item?.info?.artist || ""),
+      album: String(item?.info?.album || ""),
+    },
+  }));
+}
+
 function resolverHealthKey(platform, source) {
   return `${platform}:${source}`;
 }
@@ -4129,7 +4158,7 @@ async function handleResolve(request, env, ctx) {
   const key = resolverCacheKey(input);
   if (!body.bypass_cache) {
     const cached = await getResolverCache(key);
-    if (cached?.url) return jsonResponse(200, { code: 0, message: "Success", data: cached });
+    if (cached?.url) return jsonResponse(200, { code: 0, message: "Success", data: publicResolverData(cached) });
   }
   let task = resolverInflight.get(key);
   if (!task) {
@@ -4140,9 +4169,9 @@ async function handleResolve(request, env, ctx) {
   }
   try {
     const data = await task;
-    return jsonResponse(200, { code: 0, message: "Success", data });
-  } catch (error) {
-    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "统一解析失败" });
+    return jsonResponse(200, { code: 0, message: "Success", data: publicResolverData(data) });
+  } catch {
+    return jsonResponse(502, { code: -1, message: "暂时无法解析这首歌，请稍后重试" });
   }
 }
 
@@ -4575,11 +4604,13 @@ async function handleParse(request, env) {
       error: apiSuccess ? "" : `TuneHub 请求失败 (${resp.status})`,
     });
     if (hasPlayableItem) await recordFinalParseHit(env, "tunehub", durationMs);
-    return new Response(text, {
-      status: resp.status,
-      headers: {
-        "Content-Type": resp.headers.get("Content-Type") || "application/json; charset=utf-8",
-      },
+    if (!apiSuccess) {
+      return jsonResponse(502, { code: -1, message: "解析服务暂时不可用，请稍后重试" });
+    }
+    return jsonResponse(200, {
+      code: 0,
+      message: "Success",
+      data: { data: publicParseItems(parsedItems) },
     });
   } catch (error) {
     await recordServiceMetric(env, {
@@ -4590,7 +4621,7 @@ async function handleParse(request, env) {
       durationMs: Date.now() - startedAt,
       error,
     });
-    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "TuneHub 解析请求失败" });
+    return jsonResponse(502, { code: -1, message: "解析服务暂时不可用，请稍后重试" });
   }
 }
 

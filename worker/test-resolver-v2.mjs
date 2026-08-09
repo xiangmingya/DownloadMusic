@@ -26,6 +26,7 @@ const env = {
   RESOLVER_TOTAL_BUDGET_MS: "3000",
   RESOLVER_HEDGE_DELAY_MS: "1000",
   RESOLVER_MAX_ATTEMPTS: "2",
+  TUNEHUB_API_KEY: "th_test-tunehub-key",
 };
 
 const login = await worker.fetch(new Request("https://api.example.com/api/auth/login/password", {
@@ -50,6 +51,15 @@ globalThis.fetch = async (input) => {
   if (url === "https://cdn.example.test/music.mp3") {
     return new Response("a", { status: 206, headers: { "Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/2000000" } });
   }
+  if (url === "https://tunehub.sayqz.com/api/v1/parse") {
+    return new Response(JSON.stringify({
+      code: 0,
+      message: "Success",
+      provider: "tunehub-internal",
+      debug: { endpoint: "private.example.test" },
+      data: { data: [{ id: "123", success: true, url: "https://cdn.example.test/music.mp3", provider: "upstream-provider", token: "not-for-client" }] },
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   throw new Error(`unexpected upstream request: ${url}`);
 };
 
@@ -65,14 +75,27 @@ try {
   ]);
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
-  assert.equal((await first.json()).data.url, "https://cdn.example.test/music.mp3");
-  assert.equal((await second.json()).data.url, "https://cdn.example.test/music.mp3");
+  const firstPayload = await first.json();
+  const secondPayload = await second.json();
+  assert.equal(firstPayload.data.url, "https://cdn.example.test/music.mp3");
+  assert.equal(secondPayload.data.url, "https://cdn.example.test/music.mp3");
+  assert.deepEqual(Object.keys(firstPayload.data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "identical concurrent resolves should share one upstream request");
 
   const cached = await worker.fetch(createResolveRequest(), env);
   assert.equal(cached.status, 200);
-  assert.equal((await cached.json()).data.cached, true);
+  assert.deepEqual(Object.keys((await cached.json()).data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "a cache hit should not call upstream again");
+
+  const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", ids: "123", quality: "320k" }),
+  }), env);
+  const parsePayload = await parseResponse.json();
+  assert.equal(parseResponse.status, 200);
+  assert.deepEqual(Object.keys(parsePayload).sort(), ["code", "data", "message"]);
+  assert.deepEqual(Object.keys(parsePayload.data.data[0]).sort(), ["cover", "error", "id", "info", "lyrics", "pic", "success", "url"]);
 
   const retiredRoute = await worker.fetch(new Request("https://api.example.com/api/proxy/backup4?mode=url", {
     headers: { Cookie: cookie },
