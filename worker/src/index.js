@@ -3813,17 +3813,27 @@ function probeTotalSize(response) {
   return Number(response.headers.get("Content-Length") || 0);
 }
 
+function resolverSourceConfigured(source, env) {
+  if (source === "onrender") return Boolean(String(env.BACKUP4_LXMUSIC_ONRENDER_KEY || "").trim());
+  if (source === "lxmusic_signed") {
+    return Boolean(String(env.BACKUP4_LXMUSIC_SCRIPT_MD5 || "").trim() && String(env.BACKUP4_LXMUSIC_SECRET_KEY || "").trim());
+  }
+  if (source === "chksz_163" || source === "chksz_qq") return Boolean(String(env.CHKSZ_API_KEY || "").trim());
+  if (source === "jkapi") return Boolean(String(env.JKAPI_API_KEY || "").trim());
+  return true;
+}
+
 function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
     return [
+      { source: "qq_backup3", run: backup4TryQqBackup3 },
+      { source: "bugpk", run: backup4TryBugpk },
+      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
+      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
       { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
       { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
-      { source: "bugpk", run: backup4TryBugpk },
-      { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
-      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
-      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
     ];
   }
   if (platform === "netease") {
@@ -4059,6 +4069,7 @@ function queueResolverMetric(ctx, env, metric) {
 async function getResolverCandidates(platform, env) {
   const disabled = new Set(await getDisabledSources(env));
   return getBackup4ProviderChain(platform, env)
+    .filter((item) => resolverSourceConfigured(item.source, env))
     .filter((item) => !disabled.has(item.source) && Date.now() >= getResolverHealth(platform, item.source).circuitUntil)
     .map((item, index) => ({ ...item, baseIndex: index, score: resolverScore(platform, item.source, index) }))
     .sort((a, b) => b.score - a.score || a.baseIndex - b.baseIndex);
