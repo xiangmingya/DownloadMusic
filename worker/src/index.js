@@ -3813,17 +3813,27 @@ function probeTotalSize(response) {
   return Number(response.headers.get("Content-Length") || 0);
 }
 
+function resolverSourceConfigured(source, env) {
+  if (source === "onrender") return Boolean(String(env.BACKUP4_LXMUSIC_ONRENDER_KEY || "").trim());
+  if (source === "lxmusic_signed") {
+    return Boolean(String(env.BACKUP4_LXMUSIC_SCRIPT_MD5 || "").trim() && String(env.BACKUP4_LXMUSIC_SECRET_KEY || "").trim());
+  }
+  if (source === "chksz_163" || source === "chksz_qq") return Boolean(String(env.CHKSZ_API_KEY || "").trim());
+  if (source === "jkapi") return Boolean(String(env.JKAPI_API_KEY || "").trim());
+  return true;
+}
+
 function getBackup4ProviderChain(platform, env) {
   if (platform === "qq") {
     return [
+      { source: "qq_backup3", run: backup4TryQqBackup3 },
+      { source: "bugpk", run: backup4TryBugpk },
+      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
+      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
       { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
       { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
       { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
-      { source: "bugpk", run: backup4TryBugpk },
-      { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
-      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
-      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
     ];
   }
   if (platform === "netease") {
@@ -3920,7 +3930,6 @@ function resolverConfig(env) {
     enabled: String(env.RESOLVER_V2_ENABLED || "true").toLowerCase() !== "false",
     totalBudgetMs: int(env.RESOLVER_TOTAL_BUDGET_MS, 7000, 2000, 15000),
     hedgeDelayMs: int(env.RESOLVER_HEDGE_DELAY_MS, 700, 150, 3000),
-    maxAttempts: int(env.RESOLVER_MAX_ATTEMPTS, 4, 1, 8),
     maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
@@ -4059,6 +4068,7 @@ function queueResolverMetric(ctx, env, metric) {
 async function getResolverCandidates(platform, env) {
   const disabled = new Set(await getDisabledSources(env));
   return getBackup4ProviderChain(platform, env)
+    .filter((item) => resolverSourceConfigured(item.source, env))
     .filter((item) => !disabled.has(item.source) && Date.now() >= getResolverHealth(platform, item.source).circuitUntil)
     .map((item, index) => ({ ...item, baseIndex: index, score: resolverScore(platform, item.source, index) }))
     .sort((a, b) => b.score - a.score || a.baseIndex - b.baseIndex);
@@ -4107,7 +4117,10 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
   const config = Number.isFinite(budgetMs)
     ? { ...baseConfig, totalBudgetMs: Math.max(300, Math.min(baseConfig.totalBudgetMs, Math.floor(budgetMs))) }
     : baseConfig;
-  const candidates = (await getResolverCandidates(input.platform, env)).slice(0, config.maxAttempts);
+  // After removing disabled and unconfigured providers, walk every remaining
+  // source until one succeeds or the overall request budget is exhausted.
+  // The deadline and concurrency cap still prevent an unbounded request.
+  const candidates = await getResolverCandidates(input.platform, env);
   if (!candidates.length) throw new Error("当前平台没有可用解析源");
   const startedAt = Date.now();
   const deadlineAt = startedAt + config.totalBudgetMs;

@@ -25,7 +25,6 @@ const env = {
   DB,
   RESOLVER_TOTAL_BUDGET_MS: "3000",
   RESOLVER_HEDGE_DELAY_MS: "1000",
-  RESOLVER_MAX_ATTEMPTS: "8",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
 };
 
@@ -40,6 +39,7 @@ const originalFetch = globalThis.fetch;
 let resolverUpstreamCalls = 0;
 let losslessRequested = false;
 let qualityFallbackUsed = false;
+let unconfiguredProviderCalls = 0;
 globalThis.fetch = async (input) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
@@ -65,6 +65,16 @@ globalThis.fetch = async (input) => {
   }
   if (url === "https://cdn.example.test/short-prompt.mp3") {
     return new Response("a", { status: 206, headers: { "Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/500000" } });
+  }
+  if (url.startsWith("https://lxmusicapi.onrender.com/")) {
+    unconfiguredProviderCalls += 1;
+    throw new Error("unconfigured provider should not be called");
+  }
+  if (url.startsWith("https://api.yutangxiaowu.cn/api/v1/qqmusic/music")) {
+    return new Response(JSON.stringify({ success: true, url: "https://cdn.example.test/music.mp3" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }
   if (url === "https://tunehub.sayqz.com/api/v1/parse") {
     return new Response(JSON.stringify({
@@ -126,6 +136,14 @@ try {
   const shortAudioPayload = await shortAudio.json();
   assert.equal(shortAudio.status, 502, "a suspiciously short audio result must be retried instead of returned");
   assert.equal(shortAudioPayload.message, "暂时无法解析这首歌，请稍后重试");
+
+  const qq = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "qq", id: "003jIJwK09Kchl", quality: "320k" }),
+  }), env);
+  assert.equal(qq.status, 200);
+  assert.equal(unconfiguredProviderCalls, 0, "unconfigured QQ providers should be skipped before resolving");
 
   const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
     method: "POST",
