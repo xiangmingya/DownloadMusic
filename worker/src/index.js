@@ -4102,8 +4102,11 @@ async function runResolverProvider(candidate, input, env, config) {
   }
 }
 
-async function resolveWithHedging(input, env, ctx) {
-  const config = resolverConfig(env);
+async function resolveWithHedging(input, env, ctx, budgetMs = null) {
+  const baseConfig = resolverConfig(env);
+  const config = Number.isFinite(budgetMs)
+    ? { ...baseConfig, totalBudgetMs: Math.max(300, Math.min(baseConfig.totalBudgetMs, Math.floor(budgetMs))) }
+    : baseConfig;
   const candidates = (await getResolverCandidates(input.platform, env)).slice(0, config.maxAttempts);
   if (!candidates.length) throw new Error("当前平台没有可用解析源");
   const startedAt = Date.now();
@@ -4161,10 +4164,19 @@ async function resolveWithQualityFallback(input, env, ctx) {
   const qualities = requestedQuality.startsWith("flac")
     ? [requestedQuality, "320k", "128k"]
     : [requestedQuality];
+  const deadlineAt = Date.now() + resolverConfig(env).totalBudgetMs;
   let lastError = null;
-  for (const quality of qualities) {
+  for (let index = 0; index < qualities.length; index += 1) {
+    const quality = qualities[index];
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 300) break;
+    // Reserve part of the original resolver budget for lower qualities. This
+    // keeps FLAC fallback within the frontend's 10-second request timeout.
+    const attemptBudgetMs = index === qualities.length - 1
+      ? remainingMs
+      : Math.floor(remainingMs * (index === 0 ? 0.3 : 0.72));
     try {
-      return await resolveWithHedging({ ...input, quality }, env, ctx);
+      return await resolveWithHedging({ ...input, quality }, env, ctx, attemptBudgetMs);
     } catch (error) {
       lastError = error;
     }
