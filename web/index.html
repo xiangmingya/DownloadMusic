@@ -193,11 +193,11 @@
                 </div>
                 <div class="admin-tabs" role="tablist" aria-label="管理中心内容">
                     <button id="adminMembersTab" class="admin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="adminMembersPanel" data-admin-tab="members">会员管理</button>
-                    <button id="adminMonitoringTab" class="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="adminMonitoringPanel" data-admin-tab="monitoring">D1 聚合统计</button>
+                    <button id="adminMonitoringTab" class="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="adminMonitoringPanel" data-admin-tab="monitoring">实时服务监控</button>
                 </div>
                 <section id="adminMembersPanel" class="admin-card admin-members-card admin-tab-panel" role="tabpanel" aria-labelledby="adminMembersTab" data-admin-tab-panel="members"><div class="section-heading admin-members-heading"><div><p class="eyebrow">会员管理</p><h2 id="adminMembersTitle">有效会员</h2><p class="admin-muted">显示最近登录、注册和会员有效期；支持按 Linux DO ID 或昵称查找。</p></div><div class="admin-member-toolbar"><label class="sr-only" for="adminMemberSearch">查找会员</label><input id="adminMemberSearch" type="search" placeholder="搜索昵称或 Linux DO ID"><button id="refreshMembersBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div><div id="adminMemberList" class="admin-member-list">正在读取…</div></section>
                 <section id="adminMonitoringPanel" class="admin-monitoring admin-tab-panel" role="tabpanel" aria-labelledby="adminMonitoringTab" data-admin-tab-panel="monitoring" hidden>
-                    <div class="section-heading admin-monitoring-heading"><div><p class="eyebrow">D1 聚合统计</p><h2 id="monitoringTitle">服务监控</h2><p id="monitoringSummaryText" class="admin-muted">正在读取最近服务状态…</p></div><div class="monitoring-actions"><label class="sr-only" for="monitoringRange">统计范围</label><select id="monitoringRange" aria-label="统计范围"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select><button id="refreshMonitoringBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div>
+                    <div class="section-heading admin-monitoring-heading"><div><p class="eyebrow">用户真实调用数据 · 每 30 秒刷新</p><h2 id="monitoringTitle">服务实时监控</h2><p id="monitoringSummaryText" class="admin-muted">正在读取最近服务状态…</p></div><div class="monitoring-actions"><label class="sr-only" for="monitoringRange">统计范围</label><select id="monitoringRange" aria-label="统计范围"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select><button id="refreshMonitoringBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div>
                     <div id="monitoringKpis" class="monitoring-kpis" aria-live="polite"></div>
                     <div class="monitoring-overview-grid"><section class="monitoring-panel"><div class="monitoring-panel-heading"><h3>最近 24 小时趋势</h3><span>请求 / 成功 / 失败</span></div><div id="monitoringTrend" class="monitoring-trend"></div></section><section class="monitoring-panel"><div class="monitoring-panel-heading"><h3>最终解析来源</h3><span>只统计成功返回播放链接</span></div><div id="monitoringFinalSources" class="monitoring-final-sources"></div></section></div>
                     <section class="monitoring-panel monitoring-service-panel"><div class="monitoring-panel-heading"><h3>接口健康明细</h3><span>调用次数、成功率、平均响应与最近状态</span></div><div id="monitoringServiceList" class="monitoring-service-list">正在读取…</div></section>
@@ -208,11 +208,22 @@
         <audio id="audio"></audio>
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+        <dialog id="serviceStatusDialog" class="uptime-dialog" aria-labelledby="uptimeDialogTitle">
+            <div class="uptime-dialog-head">
+                <div><p class="eyebrow">Cloudflare Cron 主动检测</p><h2 id="uptimeDialogTitle">播放服务 Uptime</h2><p id="uptimeDialogSummary">正在读取最近 24 小时状态…</p></div>
+                <form method="dialog"><button class="uptime-dialog-close" type="submit" aria-label="关闭服务状态"></button></form>
+            </div>
+            <div id="uptimePlatformList" class="uptime-platform-list"></div>
+            <p class="uptime-dialog-note">每 5 分钟检测一个平台，三个平台轮换；检测包含解析链接和音频有效性验证。这里不展示内部解析源。</p>
+        </dialog>
+
         <footer>
             <div class="footer-meta">
                 <div class="status">
-                    <span id="serviceStatus">服务状态：<span class="loading">检测中…</span></span>
-                    <span id="healthStatus"><small>实时检测中…</small></span>
+                    <button id="serviceStatusButton" class="footer-status-button" type="button" aria-haspopup="dialog" aria-controls="serviceStatusDialog">
+                        <span id="serviceStatus">播放服务：<span class="loading">检测中…</span></span>
+                        <span id="healthStatus"><small>主动检测准备中…</small></span>
+                    </button>
                 </div>
                 <div class="source-links"><span>解析服务：多源自动切换</span></div>
             </div>

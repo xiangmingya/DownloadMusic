@@ -71,6 +71,21 @@ CREATE TABLE IF NOT EXISTS service_metrics_hourly (
 CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_bucket ON service_metrics_hourly (bucket_hour DESC);
 CREATE INDEX IF NOT EXISTS idx_service_metrics_hourly_source ON service_metrics_hourly (source, bucket_hour DESC);
 
+-- 公开 Uptime：仅保存 Worker Cron 的主动探测，不与用户真实调用统计混合。
+CREATE TABLE IF NOT EXISTS service_uptime_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  checked_at TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('netease', 'qq', 'kuwo')),
+  success INTEGER NOT NULL DEFAULT 0 CHECK (success IN (0, 1)),
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  status_code INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT,
+  canary_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_uptime_checks_platform_time ON service_uptime_checks (platform, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_service_uptime_checks_time ON service_uptime_checks (checked_at DESC);
+
 -- API Key：QNAP 客户端等第三方工具接入鉴权。
 -- owner_key 与 user_libraries 同一套归属规则：密码登录共享 password:family，Linux DO 各自独立。
 -- 一个账号一个 Key；bound_device_* 用于 1 台设备绑定（暂时）。
