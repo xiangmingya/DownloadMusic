@@ -4153,6 +4153,25 @@ async function resolveWithHedging(input, env, ctx) {
   throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
 }
 
+// Lossless availability varies by platform and provider. Preserve the user's
+// preferred quality first, then gracefully fall back rather than leaving a
+// song unplayable. Every fallback still goes through the same media checks.
+async function resolveWithQualityFallback(input, env, ctx) {
+  const requestedQuality = backup4NormalizeQuality(input.quality);
+  const qualities = requestedQuality.startsWith("flac")
+    ? [requestedQuality, "320k", "128k"]
+    : [requestedQuality];
+  let lastError = null;
+  for (const quality of qualities) {
+    try {
+      return await resolveWithHedging({ ...input, quality }, env, ctx);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("解析失败");
+}
+
 async function handleResolve(request, env, ctx) {
   if (!resolverConfig(env).enabled) return jsonResponse(503, { code: -1, message: "统一解析器暂未启用" });
   const body = await parseJsonBody(request);
@@ -4175,7 +4194,7 @@ async function handleResolve(request, env, ctx) {
   }
   let task = resolverInflight.get(key);
   if (!task) {
-    task = resolveWithHedging(input, env, ctx)
+    task = resolveWithQualityFallback(input, env, ctx)
       .then((data) => putResolverCache(key, { ...data, platform: input.platform, id: input.id, quality: input.quality }, resolverConfig(env).cacheTtlSeconds))
       .finally(() => resolverInflight.delete(key));
     resolverInflight.set(key, task);
