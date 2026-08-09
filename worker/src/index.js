@@ -70,6 +70,7 @@ const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
 let lastServiceMetricsCleanupAt = 0;
 const resolverInflight = new Map();
 const resolverMemoryCache = new Map();
+const resolverNegativeCache = new Map();
 const resolverProviderHealth = new Map();
 const resolverProviderInFlight = new Map();
 
@@ -2930,13 +2931,13 @@ async function callQqBackup3Search({ keyword, page, limit }) {
   return { response, text, parsed: parseJsonText(text) };
 }
 
-async function callQqBackup3ParseBySongmid(songmid, timeoutMs = QQ_BACKUP3_TIMEOUT_MS) {
+async function callQqBackup3ParseBySongmid(songmid, timeoutMs = QQ_BACKUP3_TIMEOUT_MS, signal) {
   const endpoint = new URL(QQ_BACKUP3_PARSE_URL);
   endpoint.searchParams.set("songmid", String(songmid || ""));
   const response = await fetch(endpoint.toString(), {
     method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: resolverAbortSignal(timeoutMs, signal),
     headers: {
       Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0",
@@ -3162,12 +3163,18 @@ function backup4ExtractLinkFromMessage(message) {
   return normalizeMediaUrl(matched?.[1] || "");
 }
 
-async function backup4Json(url, { headers, timeoutMs = BACKUP4_TIMEOUT_MS } = {}) {
+function resolverAbortSignal(timeoutMs, signal) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!signal) return timeoutSignal;
+  return AbortSignal.any([signal, timeoutSignal]);
+}
+
+async function backup4Json(url, { headers, timeoutMs = BACKUP4_TIMEOUT_MS, signal } = {}) {
   const result = await upstreamJson(url, {
     method: "GET",
     headers: headers || { Accept: "application/json, text/plain, */*" },
     redirect: "follow",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: resolverAbortSignal(timeoutMs, signal),
   });
   return {
     ...result,
@@ -3176,7 +3183,7 @@ async function backup4Json(url, { headers, timeoutMs = BACKUP4_TIMEOUT_MS } = {}
   };
 }
 
-async function backup4TryGdstudio(platform, id, quality) {
+async function backup4TryGdstudio(platform, id, quality, _name, _artist, signal) {
   if (platform !== "netease" && platform !== "kuwo") return null;
 
   const source = platform === "netease" ? "netease" : "kuwo";
@@ -3186,7 +3193,7 @@ async function backup4TryGdstudio(platform, id, quality) {
   endpoint.searchParams.set("id", id);
   endpoint.searchParams.set("br", String(backup4BrFromQuality(quality)));
 
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || "");
   if (response.ok && url) {
@@ -3195,7 +3202,7 @@ async function backup4TryGdstudio(platform, id, quality) {
   throw new Error(String(parsed?.detail || parsed?.message || `gdstudio failed (${response.status})`));
 }
 
-async function backup4TryOnrender(platform, id, quality, env) {
+async function backup4TryOnrender(platform, id, quality, env, signal) {
   const source = backup4PlatformCode(platform);
   if (!source) return null;
   const requestKey = String(env.BACKUP4_LXMUSIC_ONRENDER_KEY || "").trim();
@@ -3203,6 +3210,7 @@ async function backup4TryOnrender(platform, id, quality, env) {
 
   const endpoint = `${BACKUP4_LXMUSIC_ONRENDER_URL}/url/${source}/${encodeURIComponent(id)}/${backup4NormalizeQuality(quality)}`;
   const response = await backup4Json(endpoint, {
+    signal,
     headers: {
       "Content-Type": "application/json",
       "X-Request-Key": requestKey,
@@ -3217,7 +3225,7 @@ async function backup4TryOnrender(platform, id, quality, env) {
   throw new Error(String(parsed?.msg || parsed?.message || `onrender failed (${response.status})`));
 }
 
-async function backup4TryLxmusicSigned(platform, id, quality, env) {
+async function backup4TryLxmusicSigned(platform, id, quality, env, signal) {
   const source = backup4PlatformCode(platform);
   if (!source) return null;
   const scriptMd5 = String(env.BACKUP4_LXMUSIC_SCRIPT_MD5 || "").trim();
@@ -3230,6 +3238,7 @@ async function backup4TryLxmusicSigned(platform, id, quality, env) {
   const endpoint = `${BACKUP4_LXMUSIC_SIGNED_URL}${requestPath}?sign=${sign}`;
 
   const response = await backup4Json(endpoint, {
+    signal,
     headers: {
       Accept: "application/json",
       "x-request-key": "lxmusic",
@@ -3244,13 +3253,13 @@ async function backup4TryLxmusicSigned(platform, id, quality, env) {
   throw new Error(String(parsed?.msg || parsed?.message || `lxmusic signed failed (${response.status})`));
 }
 
-async function backup4TryOiapiMusic163(platform, id) {
+async function backup4TryOiapiMusic163(platform, id, _quality, _name, _artist, signal) {
   if (platform !== "netease") return null;
 
   const endpoint = new URL(BACKUP4_OIAPI_MUSIC163_URL);
   endpoint.searchParams.set("id", id);
 
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const first = Array.isArray(parsed?.data) ? parsed.data[0] : null;
   const url = normalizeMediaUrl(first?.url || "");
@@ -3260,7 +3269,7 @@ async function backup4TryOiapiMusic163(platform, id) {
   throw new Error(String(parsed?.message || `oiapi music163 failed (${response.status})`));
 }
 
-async function backup4TryChkszMusic163(platform, id, quality, env) {
+async function backup4TryChkszMusic163(platform, id, quality, env, signal) {
   if (platform !== "netease") return null;
   const apiKey = String(env.CHKSZ_API_KEY || "").trim();
   if (!apiKey) return null;
@@ -3270,7 +3279,7 @@ async function backup4TryChkszMusic163(platform, id, quality, env) {
   endpoint.searchParams.set("level", backup4ChkszLevel(quality));
   endpoint.searchParams.set("apikey", apiKey);
 
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.data?.url || "");
   if (response.ok && Number(parsed?.code) === 200 && url) {
@@ -3286,7 +3295,7 @@ function backup4ChkszLevel(quality) {
   return "jymaster";
 }
 
-async function backup4TryBugpk(platform, id, quality, name, artist) {
+async function backup4TryBugpk(platform, id, quality, name, artist, signal) {
   if (platform === "netease") {
     const endpoint = new URL(`${BACKUP4_BUGPK_API_ROOT}/163_music`);
     endpoint.searchParams.set("ids", String(id));
@@ -3296,6 +3305,7 @@ async function backup4TryBugpk(platform, id, quality, name, artist) {
     if (title && !title.startsWith("ID ")) endpoint.searchParams.set("s", title);
 
     const response = await backup4Json(endpoint.toString(), {
+      signal,
       headers: {
         Accept: "application/json, text/plain, */*",
         "User-Agent": "Mozilla/5.0",
@@ -3320,6 +3330,7 @@ async function backup4TryBugpk(platform, id, quality, name, artist) {
   if (title && !title.startsWith("ID ")) endpoint.searchParams.set("name", title);
 
   const response = await backup4Json(endpoint.toString(), {
+    signal,
     headers: {
       Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0",
@@ -3344,12 +3355,13 @@ function isHttpUrl(value) {
   }
 }
 
-async function backup4TryPaugramNetease(platform, id) {
+async function backup4TryPaugramNetease(platform, id, _quality, _name, _artist, signal) {
   if (platform !== "netease") return null;
 
   const endpoint = new URL(BACKUP4_PAUGRAM_NETEASE_URL);
   endpoint.searchParams.set("id", id);
   const response = await backup4Json(endpoint.toString(), {
+    signal,
     headers: {
       Accept: "application/json, text/plain, */*",
       "User-Agent": "Mozilla/5.0",
@@ -3365,7 +3377,7 @@ async function backup4TryPaugramNetease(platform, id) {
   throw error;
 }
 
-async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
+async function backup4TryOiapiKuwo(platform, id, quality, name, artist, signal) {
   if (platform !== "kuwo") return null;
 
   const keyword = backup4BuildKuwoKeyword(name, artist, id);
@@ -3376,7 +3388,7 @@ async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   endpoint.searchParams.set("n", "1");
   endpoint.searchParams.set("br", backup4NormalizeQuality(quality) === "128k" ? "7" : "5");
 
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.data?.url || backup4ExtractLinkFromMessage(parsed?.message || ""));
   if (response.ok && Number(parsed?.code) === 1 && url) {
@@ -3385,7 +3397,7 @@ async function backup4TryOiapiKuwo(platform, id, quality, name, artist) {
   throw new Error(String(parsed?.message || `oiapi kuwo failed (${response.status})`));
 }
 
-async function backup4TryQqmp3(platform, id) {
+async function backup4TryQqmp3(platform, id, _quality, _name, _artist, signal) {
   if (platform !== "kuwo") return null;
 
   const songId = String(id || "").trim();
@@ -3402,6 +3414,7 @@ async function backup4TryQqmp3(platform, id) {
     try {
       const response = await backup4Json(endpoint.toString(), {
         timeoutMs: BACKUP4_QQMP3_TIMEOUT_MS,
+        signal,
       });
       const parsed = response.json;
       const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || parsed?.data?.play_url || "");
@@ -3411,6 +3424,7 @@ async function backup4TryQqmp3(platform, id) {
       }
       errors.push(String(parsed?.msg || parsed?.message || `qqmp3 failed (${response.status})`));
     } catch (err) {
+      if (signal?.aborted) throw err;
       errors.push(err instanceof Error ? err.message : "qqmp3 request failed");
     }
   }
@@ -3418,7 +3432,7 @@ async function backup4TryQqmp3(platform, id) {
   throw new Error(errors.join("; ") || "qqmp3 failed");
 }
 
-async function backup4TryJkapi(platform, id, quality, name, artist, env) {
+async function backup4TryJkapi(platform, id, quality, name, artist, env, signal) {
   const apiKey = String(env.JKAPI_API_KEY || "").trim();
   const source = backup4JkapiPlatformCode(platform);
   const title = String(name || "").trim();
@@ -3446,6 +3460,7 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
       endpoint.searchParams.set("apiKey", apiKey);
       endpoint.searchParams.set("name", keyword);
       const response = await backup4Json(endpoint.toString(), {
+        signal,
         headers: {
           Accept: "application/json, text/plain, */*",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -3459,16 +3474,17 @@ async function backup4TryJkapi(platform, id, quality, name, artist, env) {
       }
       lastError = new Error(String(parsed?.msg || parsed?.message || `jkapi failed (${response.status})`));
     } catch (err) {
+      if (signal?.aborted) throw err;
       lastError = err;
     }
   }
   throw lastError || new Error("jkapi 无结果");
 }
 
-async function backup4TryQqBackup3(platform, id) {
+async function backup4TryQqBackup3(platform, id, _quality, _name, _artist, signal) {
   if (platform !== "qq") return null;
 
-  const result = await callQqBackup3ParseBySongmid(id, 6000);
+  const result = await callQqBackup3ParseBySongmid(id, 6000, signal);
   const url = normalizeMediaUrl(result?.parsed?.url?.url || result?.parsed?.url || "");
   if (result?.response?.ok && result?.parsed?.success && url) {
     return { url, provider: "qq_backup3_parse", lyrics: String(result?.parsed?.lyric || "") };
@@ -3476,13 +3492,13 @@ async function backup4TryQqBackup3(platform, id) {
   throw new Error(String(result?.parsed?.errMsg || "qq backup3 parse failed"));
 }
 
-async function backup4TryYutangNetease(platform, id, quality) {
+async function backup4TryYutangNetease(platform, id, quality, _name, _artist, signal) {
   if (platform !== "netease") return null;
   const endpoint = new URL(`${YUTANG_API_ROOT}/api/music/Song_V1`);
   endpoint.searchParams.set("url", `https://music.163.com/song?id=${encodeURIComponent(id)}`);
   endpoint.searchParams.set("level", backup4NormalizeQuality(quality) === "128k" ? "standard" : "lossless");
   endpoint.searchParams.set("type", "json");
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || "");
   if (response.ok && Number(parsed?.status || response.status) === 200 && url) {
@@ -3491,11 +3507,11 @@ async function backup4TryYutangNetease(platform, id, quality) {
   throw new Error(String(parsed?.msg || parsed?.message || `yutang netease failed (${response.status})`));
 }
 
-async function backup4TryYutangKuwo(platform, id) {
+async function backup4TryYutangKuwo(platform, id, _quality, _name, _artist, signal) {
   if (platform !== "kuwo") return null;
   const endpoint = new URL(`${YUTANG_API_ROOT}/api/music/kuwo`);
   endpoint.searchParams.set("url", `https://www.kuwo.cn/play_detail/${encodeURIComponent(id)}`);
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const data = parsed?.data || {};
   const url = normalizeMediaUrl(data?.music_url || "");
@@ -3709,7 +3725,7 @@ async function backup4SearchViaNxvav(platform, keyword) {
   throw new Error(`nxvav search empty (${platform})`);
 }
 
-async function backup4TryNxvav(platform, id, quality, name, artist, env) {
+async function backup4TryNxvav(platform, id, quality, name, artist, env, signal) {
   const server = nxvavServer(platform);
   if (!server || !id) throw new Error("nxvav 不支持该平台");
   const token = await nxvavToken(server, "url", String(id), nxvavSecret(env));
@@ -3721,12 +3737,13 @@ async function backup4TryNxvav(platform, id, quality, name, artist, env) {
   const probe = await fetch(endpoint.toString(), {
     headers: { Range: "bytes=0-1023" },
     redirect: "follow",
-    signal: AbortSignal.timeout(12000),
+    signal: resolverAbortSignal(12000, signal),
   });
   if (!probe.ok) {
     throw new Error(`nxvav url failed (${probe.status})`);
   }
   const totalBytes = probeTotalSize(probe);
+  void probe.body?.cancel().catch(() => {});
   if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
     throw new Error(`nxvav 疑似试听片段 (${totalBytes} bytes)`);
   }
@@ -3778,7 +3795,7 @@ async function backup4SearchVia11na(platform, keyword) {
   throw new Error(`11na search empty (${platform})`);
 }
 
-async function backup4Try11na(platform, id, quality, name, artist) {
+async function backup4Try11na(platform, id, quality, name, artist, signal) {
   const server = music11naServer(platform);
   if (!server || !id) throw new Error("11na 不支持该平台");
   const token = await nxvavToken(server, "url", String(id));
@@ -3790,7 +3807,7 @@ async function backup4Try11na(platform, id, quality, name, artist) {
   const probe = await fetch(endpoint.toString(), {
     headers: { Range: "bytes=0-1023", "User-Agent": "Mozilla/5.0" },
     redirect: "follow",
-    signal: AbortSignal.timeout(12000),
+    signal: resolverAbortSignal(12000, signal),
   });
   if (!probe.ok) {
     throw new Error(`11na url failed (${probe.status})`);
@@ -3800,6 +3817,7 @@ async function backup4Try11na(platform, id, quality, name, artist) {
     throw new Error("11na url 不是音频内容");
   }
   const totalBytes = probeTotalSize(probe);
+  void probe.body?.cancel().catch(() => {});
   if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
     throw new Error(`11na 疑似试听片段 (${totalBytes} bytes)`);
   }
@@ -3828,12 +3846,12 @@ function getBackup4ProviderChain(platform, env) {
     return [
       { source: "qq_backup3", run: backup4TryQqBackup3 },
       { source: "bugpk", run: backup4TryBugpk },
-      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
-      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
-      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
-      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
-      { source: "chksz_163", run: (p, id, quality, name, artist) => backup4TryChkszQq(p, id, quality, name, artist, env) },
-      { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
+      { source: "nxvav", run: (p, id, quality, name, artist, signal) => backup4TryNxvav(p, id, quality, name, artist, env, signal) },
+      { source: "11na", run: (p, id, quality, name, artist, signal) => backup4Try11na(p, id, quality, name, artist, signal) },
+      { source: "onrender", run: (p, id, quality, _name, _artist, signal) => backup4TryOnrender(p, id, quality, env, signal) },
+      { source: "lxmusic_signed", run: (p, id, quality, _name, _artist, signal) => backup4TryLxmusicSigned(p, id, quality, env, signal) },
+      { source: "chksz_163", run: (p, id, quality, name, artist, signal) => backup4TryChkszQq(p, id, quality, name, artist, env, signal) },
+      { source: "jkapi", run: (p, id, quality, name, artist, signal) => backup4TryJkapi(p, id, quality, name, artist, env, signal) },
     ];
   }
   if (platform === "netease") {
@@ -3841,23 +3859,23 @@ function getBackup4ProviderChain(platform, env) {
       { source: "gdstudio", run: backup4TryGdstudio },
       { source: "yutang_netease", run: backup4TryYutangNetease },
       { source: "oiapi_music163", run: backup4TryOiapiMusic163 },
-      { source: "jkapi", run: (p, id, quality, name, artist) => backup4TryJkapi(p, id, quality, name, artist, env) },
-      { source: "chksz_163", run: (p, id, quality) => backup4TryChkszMusic163(p, id, quality, env) },
+      { source: "jkapi", run: (p, id, quality, name, artist, signal) => backup4TryJkapi(p, id, quality, name, artist, env, signal) },
+      { source: "chksz_163", run: (p, id, quality, _name, _artist, signal) => backup4TryChkszMusic163(p, id, quality, env, signal) },
       { source: "bugpk", run: backup4TryBugpk },
       { source: "paugram_netease", run: backup4TryPaugramNetease },
-      { source: "nxvav", run: (p, id, quality, name, artist) => backup4TryNxvav(p, id, quality, name, artist, env) },
-      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
+      { source: "nxvav", run: (p, id, quality, name, artist, signal) => backup4TryNxvav(p, id, quality, name, artist, env, signal) },
+      { source: "11na", run: (p, id, quality, name, artist, signal) => backup4Try11na(p, id, quality, name, artist, signal) },
     ];
   }
   if (platform === "kuwo") {
     return [
       { source: "gdstudio", run: backup4TryGdstudio },
       { source: "yutang_kuwo", run: backup4TryYutangKuwo },
-      { source: "onrender", run: (p, id, quality) => backup4TryOnrender(p, id, quality, env) },
-      { source: "lxmusic_signed", run: (p, id, quality) => backup4TryLxmusicSigned(p, id, quality, env) },
+      { source: "onrender", run: (p, id, quality, _name, _artist, signal) => backup4TryOnrender(p, id, quality, env, signal) },
+      { source: "lxmusic_signed", run: (p, id, quality, _name, _artist, signal) => backup4TryLxmusicSigned(p, id, quality, env, signal) },
       { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
       { source: "qqmp3", run: backup4TryQqmp3 },
-      { source: "11na", run: (p, id, quality, name, artist) => backup4Try11na(p, id, quality, name, artist) },
+      { source: "11na", run: (p, id, quality, name, artist, signal) => backup4Try11na(p, id, quality, name, artist, signal) },
     ];
   }
   return [];
@@ -3933,6 +3951,7 @@ function resolverConfig(env) {
     maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
+    negativeCacheTtlSeconds: int(env.RESOLVER_NEGATIVE_CACHE_TTL_SECONDS, 20, 5, 60),
     minMediaBytes: int(env.RESOLVER_MIN_MEDIA_BYTES, 1024 * 1024, 0, 50 * 1024 * 1024),
   };
 }
@@ -3945,6 +3964,10 @@ function resolverCacheKey(input) {
 
 function resolverCacheRequest(key) {
   return new Request(`https://resolver-cache.internal/${encodeURIComponent(key)}`);
+}
+
+function resolverNegativeCacheRequest(key) {
+  return new Request(`https://resolver-negative-cache.internal/${encodeURIComponent(key)}`);
 }
 
 async function getResolverCache(key) {
@@ -3985,6 +4008,55 @@ async function putResolverCache(key, data, ttlSeconds) {
     // Cache API is an optimization. A cache write failure must not reject playback.
   }
   return value;
+}
+
+async function getResolverNegativeCache(key) {
+  const now = Date.now();
+  const memoryExpiresAt = Number(resolverNegativeCache.get(key) || 0);
+  if (memoryExpiresAt > now) return true;
+  if (memoryExpiresAt) resolverNegativeCache.delete(key);
+  if (typeof caches === "undefined" || !caches.default) return false;
+  try {
+    const response = await caches.default.match(resolverNegativeCacheRequest(key));
+    if (!response) return false;
+    const data = await response.json();
+    const expiresAt = Number(data?.expires_at || 0);
+    if (expiresAt <= now) return false;
+    resolverNegativeCache.set(key, expiresAt);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function putResolverNegativeCache(key, ttlSeconds) {
+  const expiresAt = Date.now() + ttlSeconds * 1000;
+  if (resolverNegativeCache.size >= 1000) {
+    const oldestKey = resolverNegativeCache.keys().next().value;
+    if (oldestKey) resolverNegativeCache.delete(oldestKey);
+  }
+  resolverNegativeCache.set(key, expiresAt);
+  if (typeof caches === "undefined" || !caches.default) return;
+  try {
+    await caches.default.put(
+      resolverNegativeCacheRequest(key),
+      new Response(JSON.stringify({ expires_at: expiresAt }), {
+        headers: { "Content-Type": "application/json", "Cache-Control": `max-age=${ttlSeconds}` },
+      }),
+    );
+  } catch {
+    // A negative cache write is optional and must not delay error handling.
+  }
+}
+
+async function clearResolverNegativeCache(key) {
+  resolverNegativeCache.delete(key);
+  if (typeof caches === "undefined" || !caches.default) return;
+  try {
+    await caches.default.delete(resolverNegativeCacheRequest(key));
+  } catch {
+    // A stale negative cache naturally expires after a few seconds.
+  }
 }
 
 // The browser only needs media content. Provider selection, cache lifecycle and
@@ -4074,7 +4146,7 @@ async function getResolverCandidates(platform, env) {
     .sort((a, b) => b.score - a.score || a.baseIndex - b.baseIndex);
 }
 
-async function runResolverProvider(candidate, input, env, config) {
+async function runResolverProvider(candidate, input, env, config, signal) {
   const source = candidate.source;
   const active = Number(resolverProviderInFlight.get(source) || 0);
   if (active >= config.providerConcurrency) {
@@ -4083,12 +4155,12 @@ async function runResolverProvider(candidate, input, env, config) {
   resolverProviderInFlight.set(source, active + 1);
   const startedAt = Date.now();
   try {
-    const result = await candidate.run(input.platform, input.id, input.quality, input.name, input.artist);
+    const result = await candidate.run(input.platform, input.id, input.quality, input.name, input.artist, signal);
     const url = normalizeMediaUrl(result?.url || "");
     if (!url) return { ok: false, source, status: 502, error: "empty_url", durationMs: Date.now() - startedAt };
     const validated = Boolean(result?.validated);
     if (!validated) {
-      const probe = await probeMediaUrl(url, { timeoutMs: 1800 });
+      const probe = await probeMediaUrl(url, { timeoutMs: 1800, signal });
       if (!probe.ok) return { ok: false, source, status: Number(probe.status || 502), error: "invalid_media", durationMs: Date.now() - startedAt };
       // A short spoken prompt is worse than a skipped song. Reject a reported
       // sub-threshold result and continue with another source. Unknown sizes
@@ -4127,11 +4199,15 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
   let nextIndex = 0;
   const active = new Map();
   const errors = [];
+  const abortActive = () => {
+    active.forEach((entry) => entry.controller.abort());
+  };
   const start = () => {
     if (nextIndex >= candidates.length || active.size >= config.maxConcurrent) return false;
     const candidate = candidates[nextIndex++];
-    const promise = runResolverProvider(candidate, input, env, config).then((result) => ({ candidate, result }));
-    active.set(candidate.source, promise);
+    const controller = new AbortController();
+    const promise = runResolverProvider(candidate, input, env, config, controller.signal).then((result) => ({ candidate, result }));
+    active.set(candidate.source, { promise, controller });
     return true;
   };
   start();
@@ -4140,7 +4216,7 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
   while (active.size > 0 && Date.now() < deadlineAt) {
     const waitMs = Math.max(1, Math.min(deadlineAt - Date.now(), nextHedgeAt - Date.now()));
     const raced = await Promise.race([
-      ...active.values(),
+      ...[...active.values()].map((entry) => entry.promise),
       sleep(waitMs).then(() => ({ timer: true })),
     ]);
     if (raced?.timer) {
@@ -4150,22 +4226,27 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
     }
     active.delete(raced.candidate.source);
     const { result } = raced;
-    updateResolverHealth(input.platform, result.source, result.ok, Number(result.durationMs || 0), Number(result.status || 200));
-    queueResolverMetric(ctx, env, {
-      source: result.source,
-      operation: "resolve_v2",
-      success: result.ok,
-      status: result.ok ? 200 : Number(result.status || 502),
-      durationMs: Number(result.durationMs || 0),
-      error: result.ok ? "" : result.error,
-    });
+    const providerBusy = result.error === "provider_busy";
+    if (!providerBusy) {
+      updateResolverHealth(input.platform, result.source, result.ok, Number(result.durationMs || 0), Number(result.status || 200));
+      queueResolverMetric(ctx, env, {
+        source: result.source,
+        operation: "resolve_v2",
+        success: result.ok,
+        status: result.ok ? 200 : Number(result.status || 502),
+        durationMs: Number(result.durationMs || 0),
+        error: result.ok ? "" : result.error,
+      });
+    }
     if (result.ok) {
+      abortActive();
       queueResolverMetric(ctx, env, { source: result.data.provider, operation: "final_parse", success: true, status: 200, durationMs: Date.now() - startedAt });
       return { ...result.data, attempt_count: nextIndex - active.size, elapsed_ms: Date.now() - startedAt };
     }
     errors.push(`${result.source}:${result.error}`);
     start();
   }
+  abortActive();
   throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
 }
 
@@ -4198,7 +4279,8 @@ async function resolveWithQualityFallback(input, env, ctx) {
 }
 
 async function handleResolve(request, env, ctx) {
-  if (!resolverConfig(env).enabled) return jsonResponse(503, { code: -1, message: "统一解析器暂未启用" });
+  const config = resolverConfig(env);
+  if (!config.enabled) return jsonResponse(503, { code: -1, message: "统一解析器暂未启用" });
   const body = await parseJsonBody(request);
   const input = {
     platform: normalizeBackup4Platform(body.platform),
@@ -4216,11 +4298,19 @@ async function handleResolve(request, env, ctx) {
   if (!body.bypass_cache) {
     const cached = await getResolverCache(key);
     if (cached?.url) return jsonResponse(200, { code: 0, message: "Success", data: publicResolverData(cached) });
+    if (await getResolverNegativeCache(key)) {
+      return jsonResponse(502, { code: -1, message: "暂时无法解析这首歌，请稍后重试" });
+    }
   }
   let task = resolverInflight.get(key);
   if (!task) {
     task = resolveWithQualityFallback(input, env, ctx)
-      .then((data) => putResolverCache(key, { ...data, platform: input.platform, id: input.id, quality: input.quality }, resolverConfig(env).cacheTtlSeconds))
+      .then(async (data) => {
+        const stored = await putResolverCache(key, { ...data, platform: input.platform, id: input.id, quality: input.quality }, config.cacheTtlSeconds);
+        if (ctx?.waitUntil) ctx.waitUntil(clearResolverNegativeCache(key));
+        else void clearResolverNegativeCache(key);
+        return stored;
+      })
       .finally(() => resolverInflight.delete(key));
     resolverInflight.set(key, task);
   }
@@ -4228,6 +4318,7 @@ async function handleResolve(request, env, ctx) {
     const data = await task;
     return jsonResponse(200, { code: 0, message: "Success", data: publicResolverData(data) });
   } catch {
+    await putResolverNegativeCache(key, config.negativeCacheTtlSeconds);
     return jsonResponse(502, { code: -1, message: "暂时无法解析这首歌，请稍后重试" });
   }
 }
@@ -4336,9 +4427,11 @@ async function probeMediaUrl(url, { timeoutMs = 6000, signal } = {}) {
       method: "GET",
       headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" },
       redirect: "follow",
-      signal: signal || AbortSignal.timeout(timeoutMs),
+      signal: resolverAbortSignal(timeoutMs, signal),
     });
-    return { ok: response.ok, status: response.status, totalBytes: probeTotalSize(response) };
+    const result = { ok: response.ok, status: response.status, totalBytes: probeTotalSize(response) };
+    void response.body?.cancel().catch(() => {});
+    return result;
   } catch {
     return { ok: false, status: 0, totalBytes: 0 };
   }
@@ -4365,7 +4458,7 @@ function getMediaAllowedHosts(env) {
     .filter(Boolean);
 }
 
-async function backup4TryChkszQq(platform, id, quality, name, artist, env) {
+async function backup4TryChkszQq(platform, id, quality, name, artist, env, signal) {
   if (platform !== "qq") return null;
   const apiKey = String(env.CHKSZ_API_KEY || "").trim();
   if (!apiKey) return null;
@@ -4373,7 +4466,7 @@ async function backup4TryChkszQq(platform, id, quality, name, artist, env) {
   endpoint.searchParams.set("mid", id);
   endpoint.searchParams.set("type", "json");
   endpoint.searchParams.set("apikey", apiKey);
-  const response = await backup4Json(endpoint.toString());
+  const response = await backup4Json(endpoint.toString(), { signal });
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
   if (response.ok && url) return { url, provider: "chksz_qq" };

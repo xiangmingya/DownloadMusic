@@ -77,7 +77,6 @@ const audio = document.getElementById('audio');
 let nextTrackPreloadTimer = 0;
 let nextTrackPreloadToken = 0;
 let nextTrackPreloadKey = '';
-let nextTrackPreloadAudio = null;
 
 // 缓存
 const parseCache = new Map();
@@ -94,6 +93,8 @@ const recentStorageKey = `${LOCAL_KEY_PREFIX}recent_${AUTH_TYPE}_${linuxdoUserId
 const savedPlaylistStorageKey = `${LOCAL_KEY_PREFIX}saved_playlists_${AUTH_TYPE}_${linuxdoUserId || 'default'}`;
 const QUALITY_PREF_KEY = 'downloadmusic_quality_pref';
 const QUALITY_OPTIONS = ['128k', '320k', 'flac', 'flac24bit'];
+const PARSED_CACHE_TTL_MS = 8 * 60 * 1000;
+const NEXT_TRACK_WARMUP_BYTES = 512 * 1024;
 let playlistSongs = [];
 
 function syncQualityPresetButtons(value) {
@@ -588,7 +589,20 @@ function metaCacheKey(platform, id) {
 
 function cacheParsedItem(platform, quality, item) {
     if (!item || !item.id || !item.success) return;
-    parseCache.set(parsedCacheKey(platform, item.id, quality), item);
+    parseCache.set(parsedCacheKey(platform, item.id, quality), {
+        item,
+        expiresAt: Date.now() + PARSED_CACHE_TTL_MS
+    });
+}
+
+function getCachedParsedItem(platform, id, quality) {
+    const key = parsedCacheKey(platform, id, quality);
+    const cached = parseCache.get(key);
+    if (cached?.item?.success && Number(cached.expiresAt || 0) > Date.now()) {
+        return cached.item;
+    }
+    if (cached) parseCache.delete(key);
+    return null;
 }
 
 function normalizeParsedItems(platform, quality, parseResp) {
@@ -614,10 +628,8 @@ function toSongFromParsedItem(platform, item) {
 async function ensureParsedSong(platform, id, quality) {
     // TuneHub has been retired; playback goes straight to the managed resolver chain.
     throw new Error('主解析服务未启用');
-    const cacheKey = parsedCacheKey(platform, id, quality);
-    if (parseCache.has(cacheKey)) {
-        return parseCache.get(cacheKey);
-    }
+    const cached = getCachedParsedItem(platform, id, quality);
+    if (cached) return cached;
 
     const parseResp = await parseSongs(platform, String(id), quality);
     const items = normalizeParsedItems(platform, quality, parseResp);
@@ -640,15 +652,11 @@ async function resolveSongMedia(song, quality, options = {}) {
     const id = String(song?.id || '').trim();
     if (!platform || !id) throw new Error('歌曲参数缺失');
     const normalizedQuality = quality || '320k';
-    const cacheKey = parsedCacheKey(platform, id, normalizedQuality);
-
     // 下一首已在后台解析成功时，切歌直接复用结果，避免再次等待一次 resolve 请求。
     // 重新播放失败时仍会通过 bypassCache 强制获取新链接，处理短时签名链接过期的情况。
     if (!options.bypassCache) {
-        const cached = parseCache.get(cacheKey);
-        if (cached?.success && normalizeMediaUrl(cached.url || '')) {
-            return cached;
-        }
+        const cached = getCachedParsedItem(platform, id, normalizedQuality);
+        if (cached && normalizeMediaUrl(cached.url || '')) return cached;
     }
 
     const response = await apiFetch(API_ROUTES.resolve, {
@@ -697,12 +705,9 @@ async function resolveBackup4Parsed(platform, id, quality, options = {}) {
         return null;
     }
 
-    const cacheKey = parsedCacheKey(normalizedPlatform, songId, quality);
     if (!options.bypassCache) {
-        const cached = parseCache.get(cacheKey);
-        if (cached?.success && normalizeMediaUrl(cached?.url || '')) {
-            return cached;
-        }
+        const cached = getCachedParsedItem(normalizedPlatform, songId, quality);
+        if (cached && normalizeMediaUrl(cached.url || '')) return cached;
     }
 
     const payload = await callBackup4Api({
@@ -741,12 +746,11 @@ async function resolveBackup4Parsed(platform, id, quality, options = {}) {
     return parsedItem;
 }
 
-function nextTrackForPreload() {
+function upcomingTracksForPreload() {
     if (currentPlayMode !== 'list') return null;
     const currentIndex = resolveCurrentPlaylistIndex();
-    const nextIndex = currentIndex + 1;
-    if (currentIndex < 0 || nextIndex >= playlistSongs.length) return null;
-    return playlistSongs[nextIndex] || null;
+    if (currentIndex < 0) return [];
+    return playlistSongs.slice(currentIndex + 1, currentIndex + 3);
 }
 
 function shouldPreloadNextTrack() {
@@ -762,29 +766,52 @@ async function resolvePreloadMediaUrl(song, quality) {
     return normalizeMediaUrl(parsed?.url || '');
 }
 
+async function warmMediaPrefix(mediaUrl, maxBytes = NEXT_TRACK_WARMUP_BYTES) {
+    const proxiedUrl = buildMediaProxyUrl(mediaUrl);
+    if (!proxiedUrl) return;
+    const response = await apiFetch(proxiedUrl, {
+        headers: { Range: `bytes=0-${maxBytes - 1}` },
+        timeoutMs: 8000
+    });
+    if (!response.ok || !response.body) return;
+
+    const reader = response.body.getReader();
+    let received = 0;
+    try {
+        while (received < maxBytes) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            received += value?.byteLength || 0;
+        }
+    } finally {
+        await reader.cancel().catch(() => {});
+    }
+}
+
 function scheduleNextTrackPreload() {
     clearTimeout(nextTrackPreloadTimer);
     if (!shouldPreloadNextTrack()) return;
 
-    const nextSong = nextTrackForPreload();
-    if (!nextSong) return;
+    const upcomingSongs = upcomingTracksForPreload();
+    if (!upcomingSongs?.length) return;
     const quality = String(document.getElementById('quality')?.value || '320k');
-    const targetKey = `${songIdentity(nextSong)}:${quality}`;
+    const targetKey = `${upcomingSongs.map(songIdentity).join('|')}:${quality}`;
     if (targetKey === nextTrackPreloadKey) return;
 
     const token = ++nextTrackPreloadToken;
     nextTrackPreloadTimer = setTimeout(async () => {
         try {
-            const mediaUrl = await resolvePreloadMediaUrl(nextSong, quality);
-            if (token !== nextTrackPreloadToken || !mediaUrl) return;
-            const proxiedUrl = buildMediaProxyUrl(mediaUrl);
-            if (!proxiedUrl) return;
+            // 下一首：先解析链接，再只预取开头 512KB，避免隐藏播放器下载整首歌。
+            const mediaUrl = await resolvePreloadMediaUrl(upcomingSongs[0], quality);
+            if (token !== nextTrackPreloadToken) return;
+            if (mediaUrl) await warmMediaPrefix(mediaUrl).catch(() => {});
+            if (token !== nextTrackPreloadToken) return;
 
-            nextTrackPreloadAudio?.pause();
-            nextTrackPreloadAudio = new Audio();
-            nextTrackPreloadAudio.preload = 'auto';
-            nextTrackPreloadAudio.src = proxiedUrl;
-            nextTrackPreloadAudio.load();
+            // 下下首：只解析并缓存链接，不提前下载音频数据。
+            if (upcomingSongs[1]) {
+                await resolvePreloadMediaUrl(upcomingSongs[1], quality);
+                if (token !== nextTrackPreloadToken) return;
+            }
             nextTrackPreloadKey = targetKey;
         } catch {
             // Preloading is opportunistic and must never interrupt current playback.

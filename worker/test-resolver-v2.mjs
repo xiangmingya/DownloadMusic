@@ -40,10 +40,23 @@ let resolverUpstreamCalls = 0;
 let losslessRequested = false;
 let qualityFallbackUsed = false;
 let unconfiguredProviderCalls = 0;
-globalThis.fetch = async (input) => {
+let cancelledHedgedRequests = 0;
+globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
+    if (url.includes("id=cancel-hedge")) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 1000);
+        const abort = () => {
+          clearTimeout(timer);
+          cancelledHedgedRequests += 1;
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        if (init.signal?.aborted) abort();
+        else init.signal?.addEventListener("abort", abort, { once: true });
+      });
+    }
     const smallAudio = url.includes("id=small-audio");
     if (url.includes("id=flac-ok")) losslessRequested = url.includes("br=999");
     const flacFallback = url.includes("id=flac-fallback");
@@ -72,6 +85,12 @@ globalThis.fetch = async (input) => {
   }
   if (url.startsWith("https://api.yutangxiaowu.cn/api/v1/qqmusic/music")) {
     return new Response(JSON.stringify({ success: true, url: "https://cdn.example.test/music.mp3" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (url.startsWith("https://api.yutangxiaowu.cn/api/music/Song_V1") && url.includes("cancel-hedge")) {
+    return new Response(JSON.stringify({ status: 200, url: "https://cdn.example.test/music.mp3" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -112,6 +131,14 @@ try {
   assert.deepEqual(Object.keys((await cached.json()).data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "a cache hit should not call upstream again");
 
+  const hedged = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "cancel-hedge", quality: "320k" }),
+  }), { ...env, RESOLVER_HEDGE_DELAY_MS: "150" });
+  assert.equal(hedged.status, 200);
+  assert.equal(cancelledHedgedRequests, 1, "a slower provider should be aborted after a hedged provider succeeds");
+
   const flac = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie },
@@ -128,14 +155,19 @@ try {
   assert.equal(flacFallback.status, 200);
   assert.equal(qualityFallbackUsed, true, "unavailable lossless audio should fall back to 320k");
 
-  const shortAudio = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+  const createShortAudioRequest = () => new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie },
     body: JSON.stringify({ platform: "netease", id: "small-audio", quality: "320k" }),
-  }), env);
+  });
+  const shortAudio = await worker.fetch(createShortAudioRequest(), env);
   const shortAudioPayload = await shortAudio.json();
   assert.equal(shortAudio.status, 502, "a suspiciously short audio result must be retried instead of returned");
   assert.equal(shortAudioPayload.message, "暂时无法解析这首歌，请稍后重试");
+  const callsAfterShortAudioFailure = resolverUpstreamCalls;
+  const repeatedShortAudio = await worker.fetch(createShortAudioRequest(), env);
+  assert.equal(repeatedShortAudio.status, 502);
+  assert.equal(resolverUpstreamCalls, callsAfterShortAudioFailure, "a recent resolver failure should be cached briefly");
 
   const qq = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
