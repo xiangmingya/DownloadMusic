@@ -639,6 +639,18 @@ async function resolveSongMedia(song, quality, options = {}) {
     const platform = toPrimaryPlatform(song?.platform || song?.source);
     const id = String(song?.id || '').trim();
     if (!platform || !id) throw new Error('歌曲参数缺失');
+    const normalizedQuality = quality || '320k';
+    const cacheKey = parsedCacheKey(platform, id, normalizedQuality);
+
+    // 下一首已在后台解析成功时，切歌直接复用结果，避免再次等待一次 resolve 请求。
+    // 重新播放失败时仍会通过 bypassCache 强制获取新链接，处理短时签名链接过期的情况。
+    if (!options.bypassCache) {
+        const cached = parseCache.get(cacheKey);
+        if (cached?.success && normalizeMediaUrl(cached.url || '')) {
+            return cached;
+        }
+    }
+
     const response = await apiFetch(API_ROUTES.resolve, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -647,7 +659,7 @@ async function resolveSongMedia(song, quality, options = {}) {
         body: JSON.stringify({
             platform,
             id,
-            quality: quality || '320k',
+            quality: normalizedQuality,
             name: String(song?.name || '').trim(),
             artist: String(song?.artist || '').trim(),
             album: String(song?.album || '').trim(),
@@ -674,7 +686,7 @@ async function resolveSongMedia(song, quality, options = {}) {
             album: String(song?.album || '')
         },
     };
-    cacheParsedItem(platform, quality, parsed);
+    cacheParsedItem(platform, normalizedQuality, parsed);
     return parsed;
 }
 
