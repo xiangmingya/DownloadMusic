@@ -3137,11 +3137,15 @@ function backup4JkapiPlatformCode(platform) {
 
 function backup4NormalizeQuality(quality) {
   const text = String(quality || "").trim().toLowerCase();
+  if (text.startsWith("flac")) return text.includes("24") ? "flac24bit" : "flac";
   return text.startsWith("128") ? "128k" : "320k";
 }
 
 function backup4BrFromQuality(quality) {
-  return backup4NormalizeQuality(quality) === "128k" ? 128 : 320;
+  const normalized = backup4NormalizeQuality(quality);
+  if (normalized === "128k") return 128;
+  if (normalized.startsWith("flac")) return 999;
+  return 320;
 }
 
 function backup4BuildKuwoKeyword(name, artist, fallbackId) {
@@ -3920,6 +3924,7 @@ function resolverConfig(env) {
     maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
+    minLosslessBytes: int(env.RESOLVER_MIN_LOSSLESS_BYTES, 1024 * 1024, 0, 50 * 1024 * 1024),
   };
 }
 
@@ -4073,6 +4078,12 @@ async function runResolverProvider(candidate, input, env, config) {
     if (!validated) {
       const probe = await probeMediaUrl(url, { timeoutMs: 1800 });
       if (!probe.ok) return { ok: false, source, status: Number(probe.status || 502), error: "invalid_media", durationMs: Date.now() - startedAt };
+      // Short speech prompts are frequently returned as a false "FLAC" result.
+      // Reject only when the server reports a total size, so chunked legitimate
+      // recordings are not discarded merely because their size is unknown.
+      if (input.quality.startsWith("flac") && probe.totalBytes > 0 && probe.totalBytes < config.minLosslessBytes) {
+        return { ok: false, source, status: 422, error: "lossless_media_too_small", durationMs: Date.now() - startedAt };
+      }
     }
     return {
       ok: true,
@@ -4281,9 +4292,9 @@ async function probeMediaUrl(url, { timeoutMs = 6000, signal } = {}) {
       redirect: "follow",
       signal: signal || AbortSignal.timeout(timeoutMs),
     });
-    return { ok: response.ok, status: response.status };
+    return { ok: response.ok, status: response.status, totalBytes: probeTotalSize(response) };
   } catch {
-    return { ok: false, status: 0 };
+    return { ok: false, status: 0, totalBytes: 0 };
   }
 }
 
