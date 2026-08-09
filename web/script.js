@@ -77,6 +77,8 @@ const audio = document.getElementById('audio');
 let nextTrackPreloadTimer = 0;
 let nextTrackPreloadToken = 0;
 let nextTrackPreloadKey = '';
+let latestPublicServiceStatus = null;
+let adminMonitoringLoading = false;
 
 // 缓存
 const parseCache = new Map();
@@ -261,6 +263,7 @@ function initStaticIcons() {
     setButtonIcon(document.getElementById('playerFabPrevBtn'), 'prev', 20);
     setButtonIcon(document.getElementById('playerFabToggleBtn'), 'play', 20);
     setButtonIcon(document.getElementById('playerFabNextBtn'), 'next', 20);
+    setButtonIcon(document.querySelector('.uptime-dialog-close'), 'close', 18);
 
     setIconHtml(document.getElementById('fullPlayerBrowserFullscreenIcon'), 'fullscreen-enter', 20);
 
@@ -3065,16 +3068,48 @@ function setAppView(view) {
 }
 
 function footerStatusLabel(state) {
-    return ({ healthy: '正常', unstable: '波动', down: '维护中', unknown: '检测中' })[String(state || '')] || '检测中';
+    return ({ healthy: '正常', slow: '较慢', unstable: '波动', down: '不可用', unknown: '待检测' })[String(state || '')] || '待检测';
 }
 
 function footerStatusClass(state) {
-    return ({ healthy: 'status-healthy', unstable: 'status-unstable', down: 'status-down', unknown: 'status-unknown' })[String(state || '')] || 'status-unknown';
+    return ({ healthy: 'status-healthy', slow: 'status-slow', unstable: 'status-unstable', down: 'status-down', unknown: 'status-unknown' })[String(state || '')] || 'status-unknown';
+}
+
+function renderUptimeHistory(history) {
+    const rows = Array.isArray(history) ? history.slice(-24) : [];
+    const padded = [...Array(Math.max(0, 24 - rows.length)).fill(null), ...rows];
+    return `<span class="uptime-history" aria-label="最近 24 小时主动检测记录">${padded.map(item => {
+        const state = String(item?.state || 'unknown');
+        const hour = item?.bucket_hour ? new Date(item.bucket_hour).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '暂无检测';
+        const checks = Number(item?.checks || 0);
+        const rate = item?.success_rate === null || item?.success_rate === undefined ? '暂无样本' : `${Math.round(Number(item.success_rate) * 100)}% 成功`;
+        return `<i class="${footerStatusClass(state)}" title="${escapeHtml(`${hour} · ${checks} 次检测 · ${rate}`)}"></i>`;
+    }).join('')}</span>`;
+}
+
+function renderPublicUptimeDialog(data) {
+    const summary = document.getElementById('uptimeDialogSummary');
+    const list = document.getElementById('uptimePlatformList');
+    if (!summary || !list) return;
+    const platforms = Array.isArray(data?.platforms) ? data.platforms : [];
+    summary.textContent = `${data?.overall_label || '等待主动检测'} · 最近 ${Number(data?.window_hours || 24)} 小时`;
+    list.innerHTML = platforms.map(item => {
+        const availability = item.availability === null || item.availability === undefined ? '—' : `${(Number(item.availability) * 100).toFixed(1)}%`;
+        const average = Number(item.average_duration_ms || 0);
+        return `<article class="uptime-platform-card"><div class="uptime-platform-head"><strong>${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)}</strong><span class="${footerStatusClass(item.state)}">${escapeHtml(item.label || footerStatusLabel(item.state))}</span></div>${renderUptimeHistory(item.history)}<div class="uptime-platform-meta"><span>24 小时可用率 <b>${escapeHtml(availability)}</b></span><span>平均解析 <b>${average ? `${average.toLocaleString()} ms` : '—'}</b></span><span>${escapeHtml(formatStatusUpdatedAt(item.last_checked_at))}</span></div></article>`;
+    }).join('') || '<p class="monitoring-empty">等待第一次 Cron 主动检测。</p>';
+}
+
+function openPublicUptimeDialog() {
+    const dialog = document.getElementById('serviceStatusDialog');
+    if (!dialog) return;
+    renderPublicUptimeDialog(latestPublicServiceStatus || {});
+    if (!dialog.open) dialog.showModal();
 }
 
 function formatStatusUpdatedAt(value) {
     const time = Date.parse(value || '');
-    if (!Number.isFinite(time)) return '实时检测中';
+    if (!Number.isFinite(time)) return '尚无检测记录';
     const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
     return minutes < 1 ? '刚刚更新' : `最后更新 ${minutes} 分钟前`;
 }
@@ -3088,13 +3123,16 @@ async function loadPublicServiceStatus() {
         const payload = await response.json();
         if (!response.ok || Number(payload?.code) !== 0 || !payload?.data) throw new Error('status unavailable');
         const data = payload.data;
+        latestPublicServiceStatus = data;
         const platforms = Array.isArray(data.platforms) ? data.platforms : [];
-        const latest = platforms.map(item => item.last_updated_at).filter(Boolean).sort().at(-1) || data.generated_at;
-        serviceStatus.innerHTML = `服务状态：${platforms.map(item => `<span class="footer-platform-status ${footerStatusClass(item.state)}">${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)} ${escapeHtml(item.label || footerStatusLabel(item.state))}</span>`).join('<i aria-hidden="true">·</i>')}`;
-        healthStatus.innerHTML = `<small>实时检测 · ${escapeHtml(formatStatusUpdatedAt(latest))}</small>`;
+        const latest = platforms.map(item => item.last_checked_at).filter(Boolean).sort().at(-1) || null;
+        serviceStatus.innerHTML = `播放服务：${platforms.map(item => `<span class="footer-platform-status ${footerStatusClass(item.state)}">${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)} ${escapeHtml(item.label || footerStatusLabel(item.state))}</span>`).join('<i aria-hidden="true">·</i>')}`;
+        healthStatus.innerHTML = `<small>Cron 主动检测 · ${escapeHtml(latest ? formatStatusUpdatedAt(latest) : '等待首次检测')} · 点击查看 Uptime</small>`;
+        if (document.getElementById('serviceStatusDialog')?.open) renderPublicUptimeDialog(data);
     } catch {
-        serviceStatus.innerHTML = '服务状态：<span class="status-unknown">检测暂不可用</span>';
-        healthStatus.innerHTML = '<small>实时检测将在网络恢复后更新</small>';
+        latestPublicServiceStatus = null;
+        serviceStatus.innerHTML = '播放服务：<span class="status-unknown">检测暂不可用</span>';
+        healthStatus.innerHTML = '<small>主动检测状态将在网络恢复后更新</small>';
     }
 }
 
@@ -3114,6 +3152,7 @@ function setAdminTab(tabName) {
     document.querySelectorAll('[data-admin-tab-panel]').forEach(panel => {
         panel.hidden = panel.getAttribute('data-admin-tab-panel') !== active;
     });
+    if (active === 'monitoring') void loadAdminMonitoring();
 }
 
 async function getJson(url, init = {}) {
@@ -3406,7 +3445,8 @@ function monitoringHealthOrder(health) {
 
 function renderMonitoringServiceRow(item) {
     const toggleButton = `<button type="button" class="monitoring-toggle-btn${item.disabled ? ' is-disabled' : ''}" data-monitoring-toggle="${escapeHtml(item.source)}"${item.disabled ? ' data-disabled="1"' : ''} title="${item.disabled ? '点击启用' : '点击禁用'}">${item.disabled ? '已禁用' : '已启用'}</button>`;
-    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${escapeHtml(item.detail || '内部服务')}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(item.endpoint || '仅管理员可见')}</small></div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl>${toggleButton}<p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
+    const platformSummary = (Array.isArray(item.platforms) ? item.platforms : []).map(row => `<span>${escapeHtml(defaultPlatformNameMap[row.platform] || row.platform)} ${row.success_rate === null ? '—' : monitorPercent(row.success_rate)} · ${Number(row.average_duration_ms || 0).toLocaleString()} ms</span>`).join('');
+    return `<article class="monitoring-service-row"><div class="monitoring-service-title"><strong>${escapeHtml(item.name || '未分类接口')}</strong><small>${escapeHtml(item.detail || '内部服务')}</small><small class="monitoring-service-endpoint">接口地址：${escapeHtml(item.endpoint || '仅管理员可见')}</small>${platformSummary ? `<div class="monitoring-platform-breakdown">${platformSummary}</div>` : ''}</div><span class="monitoring-health monitoring-health-${escapeHtml(item.health)}">${escapeHtml(item.health_label)}</span><dl><div><dt>调用</dt><dd>${Number(item.requests || 0).toLocaleString()}</dd></div><div><dt>成功率</dt><dd>${item.success_rate === null ? '—' : monitorPercent(item.success_rate)}</dd></div><div><dt>平均响应</dt><dd>${Number(item.average_duration_ms || 0).toLocaleString()} ms</dd></div><div><dt>最近成功</dt><dd>${escapeHtml(monitorTime(item.last_success_at))}</dd></div></dl>${toggleButton}<p class="monitoring-service-note">${item.last_failure_at ? `最近失败：${escapeHtml(monitorTime(item.last_failure_at))}${item.last_status ? ` · HTTP ${Number(item.last_status)}` : ''}${item.last_error ? ` · ${escapeHtml(item.last_error)}` : ''}` : (Number(item.requests || 0) ? `接口标识：${escapeHtml(item.source)}` : '暂未产生调用记录')}</p></article>`;
 }
 
 function monitorPercent(value) {
@@ -3471,7 +3511,8 @@ function renderAdminMonitoring(data) {
 async function loadAdminMonitoring() {
     const range = document.getElementById('monitoringRange');
     const serviceList = document.getElementById('monitoringServiceList');
-    if (!range || !serviceList) return;
+    if (!range || !serviceList || adminMonitoringLoading) return;
+    adminMonitoringLoading = true;
     try {
         const data = await getJson(`${APP_API_ROOT}/admin/monitoring?days=${encodeURIComponent(range.value)}`);
         renderAdminMonitoring(data);
@@ -3482,6 +3523,8 @@ async function loadAdminMonitoring() {
         document.getElementById('monitoringTrend').innerHTML = '<p class="monitoring-empty">暂无趋势数据。</p>';
         document.getElementById('monitoringFinalSources').innerHTML = '<p class="monitoring-empty">暂无来源数据。</p>';
         serviceList.textContent = message;
+    } finally {
+        adminMonitoringLoading = false;
     }
 }
 
@@ -3744,6 +3787,7 @@ function initHomeInterface() {
     });
     document.getElementById('membershipCheckoutBtn')?.addEventListener('click', startMembershipCheckout);
     document.getElementById('apiKeyEntryBtn')?.addEventListener('click', openApiKeyDialog);
+    document.getElementById('serviceStatusButton')?.addEventListener('click', openPublicUptimeDialog);
     document.getElementById('apiKeyDialogCloseBtn')?.addEventListener('click', () => document.getElementById('apiKeyDialog')?.close());
     document.getElementById('apiKeyActionBtn')?.addEventListener('click', () => void applyApiKeyAction());
     document.getElementById('apiKeyResetLink')?.addEventListener('click', () => void resetApiKey());
@@ -5001,3 +5045,8 @@ updatePlayModeButtonState();
 updateBrowserFullscreenButtonState();
 refreshServiceStatus();
 setInterval(refreshServiceStatus, 60000);
+setInterval(() => {
+    const adminViewVisible = document.getElementById('adminView')?.style.display !== 'none';
+    const monitoringVisible = !document.getElementById('adminMonitoringPanel')?.hidden;
+    if (APP_CONTEXT.isAdmin && adminViewVisible && monitoringVisible) void loadAdminMonitoring();
+}, 30000);

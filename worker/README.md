@@ -7,7 +7,8 @@
 - 跨设备资料库同步：D1 保存收藏、最近播放与自建歌单（不保存音频、封面文件或 TuneHub Key）
 - Linux DO 月会员：Linux DO Credit 积分购买 30 天会员，价格由管理员在页面内调整
 - Linux DO 白名单管理员：只有 `ADMIN_LINUXDO_IDS` 中的账号能进入管理页；密码登录不具备管理权限
-- 管理员服务监控：D1 按小时聚合各主源和备用源的调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
+- 公开 Uptime：Cloudflare Cron 每 5 分钟轮换探测一个平台，独立保存 7 天，不暴露内部解析源
+- 管理员服务监控：D1 只聚合用户真实流量中的各主源和备用源调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/search` `/api/proxy/resolve` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - `/api/proxy/search`：主搜索失败时在 Worker 内部走多源兜底
   - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两源延迟竞速
@@ -84,6 +85,8 @@ wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 ## 管理员服务监控
 
 管理员用 Linux DO 白名单账号登录后，右上角会出现“管理”。服务监控仅在这个页面显示，普通用户无法请求接口。
+
+公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
 
 - 统计范围可切换最近 24 小时、7 天或 30 天；最近 24 小时会显示按小时趋势。
 - “最终解析来源”只统计成功返回可播放链接的 TuneHub、GDStudio、QQ 备用解析和备用源 4，不把内部搜索请求混进去。

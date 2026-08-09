@@ -1,21 +1,40 @@
 import assert from "node:assert/strict";
 import worker from "./src/index.js";
 
+const uptimeRows = [];
 const DB = {
   prepare(sql) {
     return {
-      bind() {
+      bind(...args) {
         return {
           async first() {
             if (sql.includes("FROM app_settings")) return null;
             return null;
           },
+          async all() {
+            if (sql.includes("FROM service_uptime_checks")) return { results: [...uptimeRows] };
+            return { results: [] };
+          },
           async run() {
+            if (sql.startsWith("INSERT INTO service_uptime_checks")) {
+              uptimeRows.push({
+                checked_at: args[0],
+                platform: args[1],
+                success: args[2],
+                duration_ms: args[3],
+                status_code: args[4],
+                error_code: args[5],
+                canary_id: args[6],
+              });
+            }
             return { meta: { changes: 1 } };
           },
         };
       },
     };
+  },
+  async batch(statements) {
+    return Promise.all(statements.map((statement) => statement.run()));
   },
 };
 
@@ -176,6 +195,22 @@ try {
   }), env);
   assert.equal(qq.status, 200);
   assert.equal(unconfiguredProviderCalls, 0, "unconfigured QQ providers should be skipped before resolving");
+
+  let scheduledTask = null;
+  await worker.scheduled({ scheduledTime: 15 * 60 * 1000 }, env, {
+    waitUntil(task) { scheduledTask = task; },
+  });
+  await scheduledTask;
+  assert.equal(uptimeRows.length, 1, "one Cron trigger should persist one isolated uptime check");
+  assert.equal(uptimeRows[0].platform, "netease");
+  assert.equal(uptimeRows[0].success, 1);
+
+  const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
+  const publicStatusPayload = await publicStatus.json();
+  assert.equal(publicStatus.status, 200);
+  assert.equal(publicStatusPayload.data.platforms[0].state, "healthy");
+  assert.equal(publicStatusPayload.data.platforms[0].history.length, 24);
+  assert.equal("provider" in publicStatusPayload.data.platforms[0], false, "public uptime must not expose resolver sources");
 
   const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
     method: "POST",

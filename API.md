@@ -71,7 +71,9 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 ### 2.1 服务状态
 `GET /api/public/service-status`（公开）
 
-返回最近 24 小时各平台（netease/qq/kuwo）与解析服务健康度，用于前端页脚。
+返回 Cloudflare Cron 主动探测产生的最近 24 小时平台 Uptime，包括当前状态、可用率、平均耗时和逐小时状态条。公开数据只包含 netease/qq/kuwo 平台汇总，不包含内部解析源。
+
+Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟完成一次“解析链接 + 音频有效性验证”。探测结果写入独立的 `service_uptime_checks` 表，不与管理员页面中的用户真实调用统计混合。
 
 ---
 

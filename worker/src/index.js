@@ -41,6 +41,22 @@ const BACKUP4_BUGPK_API_ROOT = "https://api.bugpk.com/api";
 const BACKUP4_PAUGRAM_NETEASE_URL = "https://api.paugram.com/netease/";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPTIME_CHECK_RETENTION_DAYS = 7;
+const UPTIME_PLATFORMS = ["netease", "qq", "kuwo"];
+const DEFAULT_UPTIME_CANARIES = {
+  netease: [
+    { id: "108914", name: "江南", artist: "林俊杰" },
+    { id: "66842", name: "十年", artist: "陈奕迅" },
+  ],
+  qq: [
+    { id: "0039MnYb0qxYhV", name: "晴天", artist: "周杰伦" },
+    { id: "000pgbEQ1C4Hsv", name: "晴天", artist: "刘瑞琦" },
+  ],
+  kuwo: [
+    { id: "228908", name: "晴天", artist: "周杰伦" },
+    { id: "78932517", name: "晴天", artist: "蓝心羽" },
+  ],
+};
 const MONITORING_SERVICE_CATALOG = [
   { source: "gdstudio", category: "resolve", order: 20, name: "GDStudio", detail: "备用解析服务 · 网易云 / 酷我 / QQ 音乐", endpoint: "music-api.gdstudio.xyz" },
   { source: "onrender", category: "resolve", order: 30, name: "LXMusic Onrender", detail: "多平台备用 · 网易云 / 酷我 / QQ 音乐", endpoint: "lxmusicapi.onrender.com" },
@@ -62,11 +78,6 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "qq", category: "data", order: 20, name: "QQ 音乐", detail: "QQ 音乐平台接口 · 搜索 / 歌单", endpoint: "y.qq.com" },
   { source: "kuwo", category: "data", order: 30, name: "酷我音乐", detail: "酷我音乐平台接口 · 搜索 / 歌单", endpoint: "kuwo.cn" },
 ];
-const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
-  netease: ["gdstudio", "onrender", "lxmusic_signed", "jkapi", "oiapi_music163", "chksz_163", "bugpk", "paugram_netease"],
-  qq: ["gdstudio", "onrender", "lxmusic_signed", "qq_backup3", "jkapi", "chksz_163", "bugpk"],
-  kuwo: ["gdstudio", "onrender", "lxmusic_signed", "oiapi_kuwo", "qqmp3"],
-};
 let lastServiceMetricsCleanupAt = 0;
 const resolverInflight = new Map();
 const resolverMemoryCache = new Map();
@@ -77,6 +88,9 @@ const resolverProviderInFlight = new Map();
 export default {
   async fetch(request, env, ctx) {
     return handleRequest(request, env, ctx);
+  },
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runScheduledUptimeCheck(controller, env, ctx));
   },
 };
 
@@ -1240,53 +1254,87 @@ async function handleAdminOverview(request, env) {
   } });
 }
 
-function publicPlatformHealth(row, now) {
-  const requests = Number(row?.requests || 0);
-  const successes = Number(row?.successes || 0);
-  const failures = Number(row?.failures || 0);
-  const lastUpdatedAt = row?.last_updated_at || null;
-  if (!requests) return { state: "unknown", label: "检测中", last_updated_at: lastUpdatedAt };
-  if (!successes) return { state: "down", label: "维护中", last_updated_at: lastUpdatedAt };
-  const successRate = successes / requests;
-  const stale = lastUpdatedAt && (now - Date.parse(lastUpdatedAt)) > 6 * 60 * 60 * 1000;
-  if (stale || failures > 0 || successRate < 0.8) return { state: "unstable", label: "波动", last_updated_at: lastUpdatedAt };
-  return { state: "healthy", label: "正常", last_updated_at: lastUpdatedAt };
+function uptimeStateLabel(state) {
+  return ({ healthy: "正常", slow: "较慢", unstable: "波动", down: "不可用", unknown: "待检测" })[state] || "待检测";
 }
 
-function aggregatePublicPlatformHealth(platform, platformRows, resolveRows, now) {
-  const direct = platformRows.get(`platform_${platform}`);
-  if (Number(direct?.requests || 0) > 0) return publicPlatformHealth(direct, now);
-  const candidates = (PUBLIC_PLATFORM_RESOLVE_SOURCES[platform] || []).map((source) => resolveRows.get(source)).filter(Boolean);
-  const latest = candidates.map((row) => row.last_updated_at).filter(Boolean).sort().at(-1) || null;
-  if (!candidates.length) return { state: "unknown", label: "检测中", last_updated_at: latest };
-  const healths = candidates.map((row) => publicPlatformHealth(row, now));
-  if (healths.some((item) => item.state === "healthy")) return { state: "healthy", label: "正常", last_updated_at: latest };
-  if (healths.some((item) => item.state === "unstable")) return { state: "unstable", label: "波动", last_updated_at: latest };
-  if (healths.some((item) => item.state === "down")) return { state: "down", label: "维护中", last_updated_at: latest };
-  return { state: "unknown", label: "检测中", last_updated_at: latest };
+function uptimeHistoryState(rows) {
+  if (!rows.length) return "unknown";
+  const successRate = rows.filter((row) => Number(row.success) === 1).length / rows.length;
+  if (successRate === 1) return "healthy";
+  if (successRate >= 0.5) return "unstable";
+  return "down";
+}
+
+function aggregatePublicUptime(platform, allRows, now) {
+  const rows = allRows
+    .filter((row) => String(row.platform || "") === platform)
+    .sort((a, b) => Date.parse(a.checked_at || "") - Date.parse(b.checked_at || ""));
+  const latest = rows.at(-1) || null;
+  const lastCheckedAt = latest?.checked_at || null;
+  const lastCheckedMs = Date.parse(lastCheckedAt || "");
+  const recent = rows.filter((row) => now - Date.parse(row.checked_at || "") <= 60 * 60 * 1000).slice(-4);
+  const recentSuccesses = recent.filter((row) => Number(row.success) === 1).length;
+  const recentAverageMs = recent.length
+    ? Math.round(recent.reduce((sum, row) => sum + Number(row.duration_ms || 0), 0) / recent.length)
+    : 0;
+
+  let state = "unknown";
+  if (Number.isFinite(lastCheckedMs) && now - lastCheckedMs <= 25 * 60 * 1000) {
+    if (recent.length >= 3 && recent.slice(-3).every((row) => Number(row.success) !== 1)) state = "down";
+    else if (Number(latest.success) !== 1 || (recent.length >= 2 && recentSuccesses / recent.length < 0.75)) state = "unstable";
+    else if (recentAverageMs >= 5000) state = "slow";
+    else state = "healthy";
+  }
+
+  const successes = rows.filter((row) => Number(row.success) === 1).length;
+  const history = Array.from({ length: 24 }, (_, index) => {
+    const bucket = metricHour(now - (23 - index) * 60 * 60 * 1000);
+    const bucketRows = rows.filter((row) => metricHour(row.checked_at) === bucket);
+    const bucketSuccesses = bucketRows.filter((row) => Number(row.success) === 1).length;
+    return {
+      bucket_hour: bucket,
+      state: uptimeHistoryState(bucketRows),
+      checks: bucketRows.length,
+      success_rate: bucketRows.length ? bucketSuccesses / bucketRows.length : null,
+    };
+  });
+
+  return {
+    platform,
+    state,
+    label: uptimeStateLabel(state),
+    last_checked_at: lastCheckedAt,
+    checks: rows.length,
+    availability: rows.length ? successes / rows.length : null,
+    average_duration_ms: rows.length ? Math.round(rows.reduce((sum, row) => sum + Number(row.duration_ms || 0), 0) / rows.length) : 0,
+    history,
+  };
 }
 
 async function handlePublicServiceStatus(env) {
   const db = getDatabase(env);
   const generatedAt = sqlNow();
   const platforms = ["netease", "qq", "kuwo"];
-  if (!db) return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall: "unknown", overall_label: "检测中", platforms: platforms.map((platform) => ({ platform, state: "unknown", label: "检测中", last_updated_at: null })) } }, { "Cache-Control": "no-store" });
+  const emptyPlatforms = () => platforms.map((platform) => ({ platform, state: "unknown", label: "待检测", last_checked_at: null, checks: 0, availability: null, average_duration_ms: 0, history: [] }));
+  if (!db) return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() } }, { "Cache-Control": "public, max-age=30" });
 
   try {
-    const since = metricHour(Date.now() - 24 * 60 * 60 * 1000);
-    const [platformResult, resolveResult] = await Promise.all([
-      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'platform_parse' GROUP BY source").bind(since).all(),
-      db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, MAX(COALESCE(last_success_at, last_failure_at)) AS last_updated_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'parse' GROUP BY source").bind(since).all(),
-    ]);
-    const platformRows = new Map((platformResult.results || []).map((row) => [String(row.source || ""), row]));
-    const resolveRows = new Map((resolveResult.results || []).map((row) => [String(row.source || ""), row]));
-    const platformStates = platforms.map((platform) => ({ platform, ...aggregatePublicPlatformHealth(platform, platformRows, resolveRows, Date.now()) }));
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const result = await db.prepare(
+      "SELECT checked_at, platform, success, duration_ms FROM service_uptime_checks WHERE checked_at >= ? ORDER BY checked_at ASC",
+    ).bind(since).all();
+    const platformStates = platforms.map((platform) => aggregatePublicUptime(platform, result.results || [], Date.now()));
     const states = platformStates.map((item) => item.state);
-    const overall = states.every((state) => state === "healthy") ? "healthy" : states.every((state) => state === "down") ? "down" : states.some((state) => state === "down") ? "unstable" : states.some((state) => state === "unstable") ? "unstable" : "unknown";
-    const overallLabel = overall === "healthy" ? "正常运行" : overall === "down" ? "服务维护中" : overall === "unstable" ? "部分服务波动" : "检测中";
-    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall, overall_label: overallLabel, platforms: platformStates } }, { "Cache-Control": "no-store" });
+    const overall = states.every((state) => state === "healthy") ? "healthy"
+      : states.every((state) => state === "down") ? "down"
+        : states.some((state) => state === "down" || state === "unstable") ? "unstable"
+          : states.some((state) => state === "slow") ? "slow"
+            : "unknown";
+    const overallLabel = ({ healthy: "全部正常", slow: "部分服务较慢", unstable: "部分服务波动", down: "服务不可用", unknown: "等待主动检测" })[overall];
+    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall, overall_label: overallLabel, platforms: platformStates } }, { "Cache-Control": "public, max-age=30" });
   } catch {
-    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, overall: "unknown", overall_label: "检测中", platforms: platforms.map((platform) => ({ platform, state: "unknown", label: "检测中", last_updated_at: null })) } }, { "Cache-Control": "no-store" });
+    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() } }, { "Cache-Control": "public, max-age=30" });
   }
 }
 
@@ -1366,11 +1414,12 @@ async function handleAdminMonitoring(request, env) {
   const cutoff = metricHour(now - days * 24 * 60 * 60 * 1000);
   const trendCutoff = metricHour(now - 24 * 60 * 60 * 1000);
   try {
-    const [summaryResult, latestResult, trendResult, finalResult] = await Promise.all([
+    const [summaryResult, latestResult, trendResult, finalResult, platformBreakdownResult] = await Promise.all([
       db.prepare("SELECT source, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures, SUM(total_duration_ms) AS total_duration_ms, MAX(last_success_at) AS last_success_at, MAX(last_failure_at) AS last_failure_at FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') GROUP BY source ORDER BY requests DESC, source ASC").bind(cutoff).all(),
       db.prepare("SELECT source, last_status, last_error, bucket_hour FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') ORDER BY bucket_hour DESC").bind(cutoff).all(),
       db.prepare("SELECT bucket_hour, SUM(requests) AS requests, SUM(successes) AS successes, SUM(failures) AS failures FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation NOT IN ('final_parse', 'platform_parse') GROUP BY bucket_hour ORDER BY bucket_hour ASC").bind(trendCutoff).all(),
       db.prepare("SELECT source, SUM(successes) AS hits FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation = 'final_parse' GROUP BY source ORDER BY hits DESC, source ASC").bind(cutoff).all(),
+      db.prepare("SELECT source, operation, SUM(requests) AS requests, SUM(successes) AS successes, SUM(total_duration_ms) AS total_duration_ms FROM service_metrics_hourly WHERE bucket_hour >= ? AND operation IN ('resolve_netease', 'resolve_qq', 'resolve_kuwo') GROUP BY source, operation").bind(cutoff).all(),
     ]);
     const latestBySource = new Map();
     for (const row of latestResult.results || []) {
@@ -1380,6 +1429,21 @@ async function handleAdminMonitoring(request, env) {
     const catalogBySource = new Map(MONITORING_SERVICE_CATALOG.map((item) => [item.source, item]));
     const allSources = [...MONITORING_SERVICE_CATALOG, ...Array.from(summaryBySource.keys()).filter((source) => !catalogBySource.has(source)).map((source, index) => ({ source, category: "other", order: 1000 + index }))];
     const disabledSources = new Set(await getDisabledSources(env));
+    const platformBreakdown = new Map();
+    for (const row of platformBreakdownResult.results || []) {
+      const source = String(row.source || "");
+      const operation = String(row.operation || "");
+      const platform = operation.replace(/^resolve_/, "");
+      if (!UPTIME_PLATFORMS.includes(platform)) continue;
+      if (!platformBreakdown.has(source)) platformBreakdown.set(source, []);
+      const requests = Number(row.requests || 0);
+      platformBreakdown.get(source).push({
+        platform,
+        requests,
+        success_rate: requests ? Number(row.successes || 0) / requests : null,
+        average_duration_ms: requests ? Math.round(Number(row.total_duration_ms || 0) / requests) : 0,
+      });
+    }
     const services = allSources.map((catalog) => {
       const row = summaryBySource.get(catalog.source) || {};
       const latest = latestBySource.get(catalog.source) || {};
@@ -1406,6 +1470,7 @@ async function handleAdminMonitoring(request, env) {
         last_error: latest.last_error || "",
         health: health.state,
         health_label: health.label,
+        platforms: platformBreakdown.get(String(catalog.source || "")) || [],
       };
     });
     const trendLookup = new Map((trendResult.results || []).map((row) => [String(row.bucket_hour), row]));
@@ -4132,6 +4197,7 @@ function resolverScore(platform, source, baseIndex) {
 }
 
 function queueResolverMetric(ctx, env, metric) {
+  if (ctx?.skipResolverMetrics) return;
   const task = recordServiceMetric(env, metric);
   if (ctx?.waitUntil) ctx.waitUntil(task);
   else void task;
@@ -4231,7 +4297,7 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
       updateResolverHealth(input.platform, result.source, result.ok, Number(result.durationMs || 0), Number(result.status || 200));
       queueResolverMetric(ctx, env, {
         source: result.source,
-        operation: "resolve_v2",
+        operation: `resolve_${input.platform}`,
         success: result.ok,
         status: result.ok ? 200 : Number(result.status || 502),
         durationMs: Number(result.durationMs || 0),
@@ -4321,6 +4387,79 @@ async function handleResolve(request, env, ctx) {
     await putResolverNegativeCache(key, config.negativeCacheTtlSeconds);
     return jsonResponse(502, { code: -1, message: "暂时无法解析这首歌，请稍后重试" });
   }
+}
+
+function parseUptimeCanaryList(value, fallback) {
+  const configured = String(value || "")
+    .split(",")
+    .map((entry) => {
+      const [id, name, artist] = entry.split("|").map((part) => String(part || "").trim());
+      return id ? { id, name, artist } : null;
+    })
+    .filter(Boolean);
+  return configured.length ? configured : fallback;
+}
+
+function uptimeCanaries(platform, env) {
+  const key = `UPTIME_${String(platform || "").toUpperCase()}_CANARIES`;
+  return parseUptimeCanaryList(env[key], DEFAULT_UPTIME_CANARIES[platform] || []);
+}
+
+async function recordUptimeCheck(env, result) {
+  const db = getDatabase(env);
+  if (!db) return;
+  const checkedAt = sqlNow();
+  try {
+    await db.batch([
+      db.prepare(
+        "INSERT INTO service_uptime_checks (checked_at, platform, success, duration_ms, status_code, error_code, canary_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).bind(
+        checkedAt,
+        result.platform,
+        result.success ? 1 : 0,
+        Math.max(0, Math.min(300000, Math.round(Number(result.durationMs) || 0))),
+        result.success ? 200 : 502,
+        result.success ? null : "resolve_failed",
+        String(result.canaryId || ""),
+      ),
+      db.prepare("DELETE FROM service_uptime_checks WHERE checked_at < ?")
+        .bind(new Date(Date.now() - UPTIME_CHECK_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString()),
+    ]);
+  } catch {
+    // Uptime persistence must not affect normal resolver traffic.
+  }
+}
+
+async function runScheduledUptimeCheck(controller, env) {
+  const scheduledAt = Number(controller?.scheduledTime || Date.now());
+  const slot = Math.floor(scheduledAt / (5 * 60 * 1000));
+  const platform = UPTIME_PLATFORMS[((slot % UPTIME_PLATFORMS.length) + UPTIME_PLATFORMS.length) % UPTIME_PLATFORMS.length];
+  const canaries = uptimeCanaries(platform, env);
+  const canary = canaries[Math.floor(slot / UPTIME_PLATFORMS.length) % Math.max(1, canaries.length)];
+  if (!canary?.id) return;
+
+  const startedAt = Date.now();
+  let success = false;
+  try {
+    const result = await resolveWithQualityFallback({
+      platform,
+      id: canary.id,
+      quality: "320k",
+      name: canary.name || "",
+      artist: canary.artist || "",
+      album: "",
+      cover: "",
+    }, env, { skipResolverMetrics: true });
+    success = Boolean(normalizeMediaUrl(result?.url || ""));
+  } catch {
+    success = false;
+  }
+  await recordUptimeCheck(env, {
+    platform,
+    success,
+    durationMs: Date.now() - startedAt,
+    canaryId: canary.id,
+  });
 }
 
 async function handleBackup4(request, env) {
