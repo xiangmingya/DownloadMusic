@@ -8,12 +8,10 @@
 - Linux DO 月会员：Linux DO Credit 积分购买 30 天会员，价格由管理员在页面内调整
 - Linux DO 白名单管理员：只有 `ADMIN_LINUXDO_IDS` 中的账号能进入管理页；密码登录不具备管理权限
 - 管理员服务监控：D1 按小时聚合各主源和备用源的调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
-- 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
-  - 备用源代理：`/api/proxy/backup`（GDStudio）
-  - 第三层备用代理：`/api/proxy/backup3`（雨糖小屋 QQ 搜索/解析接口）
-  - 第四层备用解析：`/api/proxy/backup4`（QQ/网易/酷我 多源链路）
-    - 可选：JKAPI（网易云、QQ；需自行配置 `JKAPI_API_KEY`）
-    - 实验性：米兔音乐（酷我；上游可能返回 403，失败会自动跳过）
+- 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/search` `/api/proxy/resolve` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
+  - `/api/proxy/search`：主搜索失败时在 Worker 内部走多源兜底
+  - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两源延迟竞速
+  - 可选：JKAPI（网易云、QQ；需自行配置 `JKAPI_API_KEY`）
 
 ## 路由
 

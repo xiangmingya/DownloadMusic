@@ -167,7 +167,7 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 
 ## 六、音乐代理 Proxy
 
-> 所有 `/api/proxy/*` 接口**均需登录**；`parse`、`media` 额外需要有效会员（管理员除外）。
+> 所有 `/api/proxy/*` 接口**均需登录**；`parse`、`resolve`、`media` 额外需要有效会员（管理员除外）。
 
 ### 6.1 平台能力
 `GET /api/proxy/methods`
@@ -206,7 +206,7 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 { "platform": "netease", "ids": "123456", "quality": "320k" }
 ```
 
-`quality`：`128k` / `320k` / `flac` / `flac24bit`。注：前端主解析已停用，实际播放走 6.9 多源链路。
+`quality`：`128k` / `320k` / `flac` / `flac24bit`。该接口为 TuneHub 兼容接口；网页播放和下载统一使用 6.11 的 `/resolve`。
 
 ### 6.7 免费元数据（网易云）
 `GET /api/proxy/meta?platform=netease&id=<歌曲ID>`
@@ -225,28 +225,23 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 
 仅代理 `image/*` 内容，域名同样走媒体白名单。
 
-### 6.10 备用源 GDStudio
-`GET /api/proxy/backup?types=<search|url|lyric|pic>&source=<netease|tencent|kuwo>&...`
+### 6.10 统一搜索
+`GET /api/proxy/search?platform=<netease|qq|kuwo>&keyword=<关键词>&page=1&limit=20`
 
-- `types=search`：`name`（关键词）、`count`、`pages`
-- `types=url`（需会员）：`id`、`br`（128/320/999）解析播放链接
-- `types=lyric|pic`（需会员）：`id` 取歌词/封面
+Worker 先调用主搜索，失败后在服务端内部使用多源搜索兜底；客户端不再调用旧 `backup*` 接口。
 
-### 6.11 备用源 3 雨糖小屋（QQ）
-`GET /api/proxy/backup3?input=<关键词或ID>&filter=<name|id>&type=qq&page=1`
+### 6.11 统一解析
+`POST /api/proxy/resolve`（需会员）
 
-- `filter=name`：搜索（登录即可）
-- `filter=id`（需会员）：解析播放链接
+```json
+{ "platform": "netease", "id": "123456", "quality": "320k", "name": "歌曲名", "artist": "歌手" }
+```
 
-### 6.12 备用源 4 多源链路
-`GET /api/proxy/backup4?mode=<search|url>&platform=<netease|qq|kuwo>&...`
+Worker 会缓存短期链接、合并同一歌曲的并发解析、按健康度排序 provider，并以最多两个并发来源进行延迟竞速。返回 `data.url`、`provider`、`cached`、`attempt_count` 与 `elapsed_ms`。
 
-- `mode=search`：`keyword`、`page`、`limit`
-- `mode=url`（需会员）：`id`、`quality`、`name`、`artist`
+旧 `/api/proxy/backup`、`backup3`、`backup4` 已移除。
 
-内部按健康度自动排序的解析源链：GDStudio、雨糖小屋（网易云/酷我）、LXMusic Onrender、LXMusic 签名源、OIAPI（网易云/酷我）、JKAPI、CHKSZ（网易云/QQ）、BugPK、Paugram、QQMP3、NXVAV。被管理员禁用的源会被跳过。
-
-### 6.13 小爱音箱外部搜索源（topone）
+### 6.12 小爱音箱外部搜索源（topone）
 
 `POST /api/topone?platform=<netease,qq,kuwo>`
 

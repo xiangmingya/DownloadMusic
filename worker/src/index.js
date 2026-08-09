@@ -68,14 +68,18 @@ const PUBLIC_PLATFORM_RESOLVE_SOURCES = {
   kuwo: ["gdstudio", "onrender", "lxmusic_signed", "oiapi_kuwo", "qqmp3"],
 };
 let lastServiceMetricsCleanupAt = 0;
+const resolverInflight = new Map();
+const resolverMemoryCache = new Map();
+const resolverProviderHealth = new Map();
+const resolverProviderInFlight = new Map();
 
 export default {
-  async fetch(request, env) {
-    return handleRequest(request, env);
+  async fetch(request, env, ctx) {
+    return handleRequest(request, env, ctx);
   },
 };
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
 
   if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
@@ -156,13 +160,13 @@ async function handleRequest(request, env) {
       return withCors(request, env, await handleClientBind(request, env));
     }
     if (url.pathname === "/api/topone" && request.method === "POST") {
-      return toponeCors(request, await handleTopone(request, env));
+      return toponeCors(request, await handleTopone(request, env, ctx));
     }
     if (url.pathname.startsWith("/api/proxy/")) {
       const sessionAuth = await requireClientAuth(request, env);
       if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
     }
-    const membershipRequiredRoutes = new Set(["/api/proxy/parse", "/api/proxy/media"]);
+    const membershipRequiredRoutes = new Set(["/api/proxy/parse", "/api/proxy/media", "/api/proxy/resolve"]);
     if (membershipRequiredRoutes.has(url.pathname)) {
       const access = await requireMusicAccess(request, env);
       if (!access.ok) return withCors(request, env, access.response);
@@ -173,6 +177,9 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/method" && request.method === "GET") {
       return withCors(request, env, await handleMethod(request, env));
+    }
+    if (url.pathname === "/api/proxy/search" && request.method === "GET") {
+      return withCors(request, env, await handleSearch(request, env));
     }
     if (url.pathname === "/api/proxy/toplists" && request.method === "GET") {
       return withCors(request, env, await handleToplists(request, env));
@@ -186,6 +193,9 @@ async function handleRequest(request, env) {
     if (url.pathname === "/api/proxy/parse" && request.method === "POST") {
       return withCors(request, env, await handleParse(request, env));
     }
+    if (url.pathname === "/api/proxy/resolve" && request.method === "POST") {
+      return withCors(request, env, await handleResolve(request, env, ctx));
+    }
     if (url.pathname === "/api/proxy/meta" && request.method === "GET") {
       return withCors(request, env, await handleMeta(request, env));
     }
@@ -197,15 +207,6 @@ async function handleRequest(request, env) {
     }
     if (url.pathname === "/api/proxy/lyric" && request.method === "GET") {
       return withCors(request, env, await handleLyric(request, env));
-    }
-    if (url.pathname === "/api/proxy/backup" && request.method === "GET") {
-      return withCors(request, env, await handleBackup(request, env));
-    }
-    if (url.pathname === "/api/proxy/backup3" && request.method === "GET") {
-      return withCors(request, env, await handleBackup3(request, env));
-    }
-    if (url.pathname === "/api/proxy/backup4" && request.method === "GET") {
-      return withCors(request, env, await handleBackup4(request, env));
     }
 
     return withCors(request, env, jsonResponse(404, { code: 404, message: "Not Found" }));
@@ -2543,13 +2544,43 @@ async function handleMethod(request, env) {
   }
 }
 
+// 统一搜索入口：优先主搜索，失败后仅在 Worker 内部使用多源搜索兜底。
+// 前端不再感知或调用旧 backup* 路由。
+async function handleSearch(request, env) {
+  const url = new URL(request.url);
+  const platform = normalizeBackup4Platform(url.searchParams.get("platform"));
+  const keyword = String(url.searchParams.get("keyword") || "").trim();
+  const page = toPositiveInt(url.searchParams.get("page"), 1);
+  const limit = Math.min(50, toPositiveInt(url.searchParams.get("limit"), 20));
+  if (!BACKUP4_ALLOWED_PLATFORMS.has(platform) || !keyword) {
+    return jsonResponse(400, { code: -1, message: "缺少或无效参数: platform / keyword" });
+  }
+  if (await isSourceDisabled(env, platform)) {
+    return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
+  }
+  try {
+    const list = await monitoredServiceCall(env, { source: platform, operation: "search" }, () => callSearch(platform, keyword, page, limit));
+    if (Array.isArray(list) && list.length) {
+      return jsonResponse(200, { code: 0, message: "Success", data: list, provider: "primary" }, { "Cache-Control": "no-store" });
+    }
+  } catch {
+    // Continue to the internal fallback chain.
+  }
+  try {
+    const fallback = await backup4Search(platform, keyword, page, limit, env);
+    return jsonResponse(200, { code: 0, message: "Success", data: fallback.list || [], provider: "resolver_search" }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "搜索失败", data: [] });
+  }
+}
+
 // 小爱音箱外部搜索源（topone 规范，供 Songloft 智能音箱插件配置）：
 // POST /api/topone?platform=netease,qq,kuwo
 // Body: { keyword, hint?, quality? }
 // Auth: Authorization: Bearer <KEY> 或 X-DM-Key: <KEY>（只验 Key，设备绑定为后续锚点）
 // 各平台并发搜索，按平台优先级消费结果；平台内按标题匹配度 + 歌手提示优先尝试候选，
 // 取第一个能解析出播放地址的结果（整体预算 5.5 秒，单平台预算 4 秒）。
-async function handleTopone(request, env) {
+async function handleTopone(request, env, ctx) {
   const startedAt = Date.now();
   const body = await parseJsonBody(request);
   const keyword = String(body?.keyword || "").trim();
@@ -2584,7 +2615,7 @@ async function handleTopone(request, env) {
 
   const overallBudgetMs = 5500;
   const tasks = platforms.map((platform) =>
-    runToponePlatform(platform, searchKeyword, keyword, hintArtist, quality, key, env, startedAt),
+    runToponePlatform(platform, searchKeyword, keyword, hintArtist, quality, env, ctx, startedAt),
   );
   for (let i = 0; i < tasks.length; i += 1) {
     const result = await withTimeout(tasks[i], overallBudgetMs - (Date.now() - startedAt));
@@ -2613,7 +2644,7 @@ async function handleTopone(request, env) {
   return jsonResponse(404, { code: 404, msg: "未找到歌曲", data: null });
 }
 
-async function runToponePlatform(platform, searchKeyword, title, artist, quality, key, env, startedAt) {
+async function runToponePlatform(platform, searchKeyword, title, artist, quality, env, ctx, startedAt) {
   if (await isSourceDisabled(env, platform)) return null;
 
   const candidates = await withTimeout(searchToponeCandidates(platform, searchKeyword, env), 4000);
@@ -2628,7 +2659,7 @@ async function runToponePlatform(platform, searchKeyword, title, artist, quality
   for (const hit of sorted.slice(0, 4)) {
     if (Date.now() - platformStartedAt > platformBudgetMs) break;
     if (Date.now() - startedAt > 5200) break;
-    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, key, env), 1500);
+    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, env, ctx), 1500);
     if (parseData && parseData.url) {
       return { platform, hit, parseData };
     }
@@ -2666,21 +2697,20 @@ async function searchToponeCandidates(platform, keyword, env) {
   return [];
 }
 
-async function parseToponeCandidate(platform, hit, quality, key, env) {
-  const parseUrl = new URL("https://local/api/topone");
-  parseUrl.searchParams.set("mode", "url");
-  parseUrl.searchParams.set("platform", platform);
-  parseUrl.searchParams.set("id", hit.id);
-  parseUrl.searchParams.set("quality", quality);
-  if (hit.name) parseUrl.searchParams.set("name", hit.name);
-  if (hit.artist) parseUrl.searchParams.set("artist", hit.artist);
-  const resp = await handleBackup4(
-    new Request(parseUrl.toString(), { method: "GET", headers: requestWithApiKeyHeader(new Request("https://local/api/topone", { method: "POST" }), key).headers }),
-    env,
-  );
-  if (!resp) return null;
-  const payload = await resp.json().catch(() => null);
-  return payload?.code === 0 && payload?.data?.url ? payload.data : null;
+async function parseToponeCandidate(platform, hit, quality, env, ctx) {
+  try {
+    return await resolveWithHedging({
+      platform,
+      id: String(hit.id || ""),
+      quality: backup4NormalizeQuality(quality),
+      name: String(hit.name || ""),
+      artist: String(hit.artist || ""),
+      album: String(hit.album || ""),
+      cover: normalizeMediaUrl(hit.cover || ""),
+    }, env, ctx);
+  } catch {
+    return null;
+  }
 }
 
 function toponeSortCandidates(list, title, artist) {
@@ -3694,7 +3724,7 @@ async function backup4TryNxvav(platform, id, quality, name, artist, env) {
   if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
     throw new Error(`nxvav 疑似试听片段 (${totalBytes} bytes)`);
   }
-  return { url: endpoint.toString(), provider: "nxvav" };
+  return { url: endpoint.toString(), provider: "nxvav", validated: true };
 }
 
 function music11naServer(platform) {
@@ -3767,7 +3797,7 @@ async function backup4Try11na(platform, id, quality, name, artist) {
   if (totalBytes > 0 && totalBytes < PREVIEW_MAX_BYTES) {
     throw new Error(`11na 疑似试听片段 (${totalBytes} bytes)`);
   }
-  return { url: endpoint.toString(), provider: "11na" };
+  return { url: endpoint.toString(), provider: "11na", validated: true };
 }
 
 function probeTotalSize(response) {
@@ -3875,6 +3905,247 @@ async function prioritizeBackupChain(env, chain, operation, routingKey) {
   }
 }
 
+function resolverConfig(env) {
+  const int = (value, fallback, min, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+  };
+  return {
+    enabled: String(env.RESOLVER_V2_ENABLED || "true").toLowerCase() !== "false",
+    totalBudgetMs: int(env.RESOLVER_TOTAL_BUDGET_MS, 7000, 2000, 15000),
+    hedgeDelayMs: int(env.RESOLVER_HEDGE_DELAY_MS, 700, 150, 3000),
+    maxAttempts: int(env.RESOLVER_MAX_ATTEMPTS, 4, 1, 8),
+    maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
+    providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
+    cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
+  };
+}
+
+function resolverCacheKey(input) {
+  return `resolve:v2:${input.platform}:${input.id}:${input.quality}`;
+}
+
+function resolverCacheRequest(key) {
+  return new Request(`https://resolver-cache.internal/${encodeURIComponent(key)}`);
+}
+
+async function getResolverCache(key) {
+  const now = Date.now();
+  const memory = resolverMemoryCache.get(key);
+  if (memory?.expiresAt > now) return { ...memory.data, cached: true };
+  if (memory) resolverMemoryCache.delete(key);
+  if (typeof caches === "undefined" || !caches.default) return null;
+  try {
+    const response = await caches.default.match(resolverCacheRequest(key));
+    if (!response) return null;
+    const data = await response.json();
+    if (!data?.url || Number(data.expires_at || 0) <= now) return null;
+    resolverMemoryCache.set(key, { expiresAt: Number(data.expires_at), data });
+    return { ...data, cached: true };
+  } catch {
+    return null;
+  }
+}
+
+async function putResolverCache(key, data, ttlSeconds) {
+  const expiresAt = Date.now() + ttlSeconds * 1000;
+  const value = { ...data, cached: false, created_at: Date.now(), expires_at: expiresAt };
+  if (resolverMemoryCache.size >= 1000) {
+    const oldestKey = resolverMemoryCache.keys().next().value;
+    if (oldestKey) resolverMemoryCache.delete(oldestKey);
+  }
+  resolverMemoryCache.set(key, { expiresAt, data: value });
+  if (typeof caches === "undefined" || !caches.default) return value;
+  try {
+    await caches.default.put(
+      resolverCacheRequest(key),
+      new Response(JSON.stringify(value), {
+        headers: { "Content-Type": "application/json", "Cache-Control": `max-age=${ttlSeconds}` },
+      }),
+    );
+  } catch {
+    // Cache API is an optimization. A cache write failure must not reject playback.
+  }
+  return value;
+}
+
+function resolverHealthKey(platform, source) {
+  return `${platform}:${source}`;
+}
+
+function getResolverHealth(platform, source) {
+  return resolverProviderHealth.get(resolverHealthKey(platform, source)) || {
+    successes: 0,
+    failures: 0,
+    consecutiveFailures: 0,
+    averageDurationMs: 0,
+    circuitUntil: 0,
+    lastSuccessAt: 0,
+  };
+}
+
+function updateResolverHealth(platform, source, success, durationMs, status = 0) {
+  const key = resolverHealthKey(platform, source);
+  const previous = getResolverHealth(platform, source);
+  const now = Date.now();
+  const consecutiveFailures = success ? 0 : previous.consecutiveFailures + 1;
+  let circuitUntil = previous.circuitUntil;
+  if (success) circuitUntil = 0;
+  else if (status === 401 || status === 403) circuitUntil = now + 60 * 60 * 1000;
+  else if (status === 429) circuitUntil = now + 10 * 60 * 1000;
+  else if (consecutiveFailures >= 5) circuitUntil = now + 30 * 60 * 1000;
+  else if (consecutiveFailures >= 3) circuitUntil = now + 5 * 60 * 1000;
+  resolverProviderHealth.set(key, {
+    successes: previous.successes + (success ? 1 : 0),
+    failures: previous.failures + (success ? 0 : 1),
+    consecutiveFailures,
+    averageDurationMs: previous.averageDurationMs
+      ? Math.round(previous.averageDurationMs * 0.7 + durationMs * 0.3)
+      : Math.round(durationMs),
+    circuitUntil,
+    lastSuccessAt: success ? now : previous.lastSuccessAt,
+  });
+}
+
+function resolverScore(platform, source, baseIndex) {
+  const health = getResolverHealth(platform, source);
+  const total = health.successes + health.failures;
+  const successRate = total ? health.successes / total : 0.65;
+  return successRate * 100 - Math.min(35, health.averageDurationMs / 100) - health.consecutiveFailures * 18 - baseIndex * 0.25;
+}
+
+function queueResolverMetric(ctx, env, metric) {
+  const task = recordServiceMetric(env, metric);
+  if (ctx?.waitUntil) ctx.waitUntil(task);
+  else void task;
+}
+
+async function getResolverCandidates(platform, env) {
+  const disabled = new Set(await getDisabledSources(env));
+  return getBackup4ProviderChain(platform, env)
+    .filter((item) => !disabled.has(item.source) && Date.now() >= getResolverHealth(platform, item.source).circuitUntil)
+    .map((item, index) => ({ ...item, baseIndex: index, score: resolverScore(platform, item.source, index) }))
+    .sort((a, b) => b.score - a.score || a.baseIndex - b.baseIndex);
+}
+
+async function runResolverProvider(candidate, input, env, config) {
+  const source = candidate.source;
+  const active = Number(resolverProviderInFlight.get(source) || 0);
+  if (active >= config.providerConcurrency) {
+    return { ok: false, source, status: 503, error: "provider_busy" };
+  }
+  resolverProviderInFlight.set(source, active + 1);
+  const startedAt = Date.now();
+  try {
+    const result = await candidate.run(input.platform, input.id, input.quality, input.name, input.artist);
+    const url = normalizeMediaUrl(result?.url || "");
+    if (!url) return { ok: false, source, status: 502, error: "empty_url", durationMs: Date.now() - startedAt };
+    const validated = Boolean(result?.validated);
+    if (!validated) {
+      const probe = await probeMediaUrl(url, { timeoutMs: 1800 });
+      if (!probe.ok) return { ok: false, source, status: Number(probe.status || 502), error: "invalid_media", durationMs: Date.now() - startedAt };
+    }
+    return {
+      ok: true,
+      source,
+      durationMs: Date.now() - startedAt,
+      data: { url, provider: String(result?.provider || source), lyrics: String(result?.lyrics || ""), cover: normalizeMediaUrl(result?.cover || "") },
+    };
+  } catch (error) {
+    return { ok: false, source, status: Number(error?.status || 0), error: error instanceof Error ? error.message : "provider_failed", durationMs: Date.now() - startedAt };
+  } finally {
+    const remaining = Math.max(0, Number(resolverProviderInFlight.get(source) || 1) - 1);
+    if (remaining) resolverProviderInFlight.set(source, remaining);
+    else resolverProviderInFlight.delete(source);
+  }
+}
+
+async function resolveWithHedging(input, env, ctx) {
+  const config = resolverConfig(env);
+  const candidates = (await getResolverCandidates(input.platform, env)).slice(0, config.maxAttempts);
+  if (!candidates.length) throw new Error("当前平台没有可用解析源");
+  const startedAt = Date.now();
+  const deadlineAt = startedAt + config.totalBudgetMs;
+  let nextIndex = 0;
+  const active = new Map();
+  const errors = [];
+  const start = () => {
+    if (nextIndex >= candidates.length || active.size >= config.maxConcurrent) return false;
+    const candidate = candidates[nextIndex++];
+    const promise = runResolverProvider(candidate, input, env, config).then((result) => ({ candidate, result }));
+    active.set(candidate.source, promise);
+    return true;
+  };
+  start();
+  let nextHedgeAt = startedAt + config.hedgeDelayMs;
+
+  while (active.size > 0 && Date.now() < deadlineAt) {
+    const waitMs = Math.max(1, Math.min(deadlineAt - Date.now(), nextHedgeAt - Date.now()));
+    const raced = await Promise.race([
+      ...active.values(),
+      sleep(waitMs).then(() => ({ timer: true })),
+    ]);
+    if (raced?.timer) {
+      if (active.size < config.maxConcurrent) start();
+      nextHedgeAt = Date.now() + config.hedgeDelayMs;
+      continue;
+    }
+    active.delete(raced.candidate.source);
+    const { result } = raced;
+    updateResolverHealth(input.platform, result.source, result.ok, Number(result.durationMs || 0), Number(result.status || 200));
+    queueResolverMetric(ctx, env, {
+      source: result.source,
+      operation: "resolve_v2",
+      success: result.ok,
+      status: result.ok ? 200 : Number(result.status || 502),
+      durationMs: Number(result.durationMs || 0),
+      error: result.ok ? "" : result.error,
+    });
+    if (result.ok) {
+      queueResolverMetric(ctx, env, { source: result.data.provider, operation: "final_parse", success: true, status: 200, durationMs: Date.now() - startedAt });
+      return { ...result.data, attempt_count: nextIndex - active.size, elapsed_ms: Date.now() - startedAt };
+    }
+    errors.push(`${result.source}:${result.error}`);
+    start();
+  }
+  throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
+}
+
+async function handleResolve(request, env, ctx) {
+  if (!resolverConfig(env).enabled) return jsonResponse(503, { code: -1, message: "统一解析器暂未启用" });
+  const body = await parseJsonBody(request);
+  const input = {
+    platform: normalizeBackup4Platform(body.platform),
+    id: String(body.id || "").trim(),
+    quality: backup4NormalizeQuality(body.quality || "320k"),
+    name: String(body.name || "").trim(),
+    artist: String(body.artist || "").trim(),
+    album: String(body.album || "").trim(),
+    cover: normalizeMediaUrl(body.cover || ""),
+  };
+  if (!BACKUP4_ALLOWED_PLATFORMS.has(input.platform) || !input.id) {
+    return jsonResponse(400, { code: -1, message: "缺少或无效参数: platform / id" });
+  }
+  const key = resolverCacheKey(input);
+  if (!body.bypass_cache) {
+    const cached = await getResolverCache(key);
+    if (cached?.url) return jsonResponse(200, { code: 0, message: "Success", data: cached });
+  }
+  let task = resolverInflight.get(key);
+  if (!task) {
+    task = resolveWithHedging(input, env, ctx)
+      .then((data) => putResolverCache(key, { ...data, platform: input.platform, id: input.id, quality: input.quality }, resolverConfig(env).cacheTtlSeconds))
+      .finally(() => resolverInflight.delete(key));
+    resolverInflight.set(key, task);
+  }
+  try {
+    const data = await task;
+    return jsonResponse(200, { code: 0, message: "Success", data });
+  } catch (error) {
+    return jsonResponse(502, { code: -1, message: error instanceof Error ? error.message : "统一解析失败" });
+  }
+}
+
 async function handleBackup4(request, env) {
   const reqUrl = new URL(request.url);
   const mode = String(reqUrl.searchParams.get("mode") || "url").trim().toLowerCase();
@@ -3973,13 +4244,13 @@ async function handleBackup4(request, env) {
   });
 }
 
-async function probeMediaUrl(url) {
+async function probeMediaUrl(url, { timeoutMs = 6000, signal } = {}) {
   try {
     const response = await fetch(String(url || ""), {
       method: "GET",
       headers: { Range: "bytes=0-0", "User-Agent": "Mozilla/5.0" },
       redirect: "follow",
-      signal: AbortSignal.timeout(6000),
+      signal: signal || AbortSignal.timeout(timeoutMs),
     });
     return { ok: response.ok, status: response.status };
   } catch {

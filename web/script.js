@@ -3,15 +3,14 @@ const LIBRARY_API_URL = API_BASE.replace(/\/proxy$/, '/library');
 const APP_API_ROOT = API_BASE.replace(/\/proxy$/, '');
 const API_ROUTES = {
     parse: `${API_BASE}/parse`,
+    resolve: `${API_BASE}/resolve`,
+    search: `${API_BASE}/search`,
     meta: `${API_BASE}/meta`,
     method: `${API_BASE}/method`,
     methods: `${API_BASE}/methods`,
     media: `${API_BASE}/media`,
     cover: `${API_BASE}/cover`,
     lyric: `${API_BASE}/lyric`,
-    backup: `${API_BASE}/backup`,
-    backup3: `${API_BASE}/backup3`,
-    backup4: `${API_BASE}/backup4`,
     publicStatus: `${APP_API_ROOT}/public/service-status`,
     toplists: `${API_BASE}/toplists`,
     toplist: `${API_BASE}/toplist`,
@@ -635,6 +634,52 @@ async function ensureParsedSong(platform, id, quality) {
     return matched;
 }
 
+// 所有新播放、下载和预加载统一交给 Worker 解析器；Worker 负责缓存、竞速和来源选择。
+async function resolveSongMedia(song, quality, options = {}) {
+    const platform = toPrimaryPlatform(song?.platform || song?.source);
+    const id = String(song?.id || '').trim();
+    if (!platform || !id) throw new Error('歌曲参数缺失');
+    const response = await apiFetch(API_ROUTES.resolve, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        dialogOn402: true,
+        timeoutMs: 10000,
+        body: JSON.stringify({
+            platform,
+            id,
+            quality: quality || '320k',
+            name: String(song?.name || '').trim(),
+            artist: String(song?.artist || '').trim(),
+            album: String(song?.album || '').trim(),
+            cover: normalizeMediaUrl(song?.cover || ''),
+            bypass_cache: Boolean(options.bypassCache)
+        })
+    });
+    const payload = parseResponseText(await response.text());
+    if (!response.ok || Number(payload?.code) !== 0 || !payload?.data?.url) {
+        throw new Error(getApiErrorMessage(payload, response.status, '未获取到播放链接'));
+    }
+    const data = payload.data;
+    const parsed = {
+        id,
+        success: true,
+        url: normalizeMediaUrl(data.url || ''),
+        error: '',
+        pic: normalizeMediaUrl(data.cover || song?.cover || ''),
+        cover: normalizeMediaUrl(data.cover || song?.cover || ''),
+        lyrics: String(data.lyrics || ''),
+        info: {
+            name: String(song?.name || `ID ${id}`),
+            artist: String(song?.artist || '未知歌手'),
+            album: String(song?.album || '')
+        },
+        fallback_provider: String(data.provider || 'resolver_v2'),
+        cached: Boolean(data.cached)
+    };
+    cacheParsedItem(platform, quality, parsed);
+    return parsed;
+}
+
 async function resolveBackup4Parsed(platform, id, quality, options = {}) {
     const normalizedPlatform = toPrimaryPlatform(platform);
     const songId = String(id || '').trim();
@@ -702,29 +747,8 @@ function shouldPreloadNextTrack() {
 
 async function resolvePreloadMediaUrl(song, quality) {
     const item = await resolveLookupOnlySong(song);
-    const source = String(item?.platform || item?.source || '');
-    const id = String(item?.id || '');
-    if (!source || !id) return '';
-
-    if (normalizeSongDataSource(item?.dataSource) === 'backup') {
-        const data = await ensureBackupPlayableData(item, quality);
-        return normalizeMediaUrl(data?.url || '');
-    }
-    if (normalizeSongDataSource(item?.dataSource) === 'backup3') {
-        const data = await ensureBackup3PlayableData(item);
-        return normalizeMediaUrl(data?.url || '');
-    }
-
-    let parsed = null;
-    try {
-        parsed = await ensureParsedSong(source, id, quality);
-    } catch {
-        parsed = await resolveBackup4Parsed(source, id, quality, {
-            name: item.name,
-            artist: item.artist,
-            cover: item.cover
-        }).catch(() => null);
-    }
+    if (!item?.id) return '';
+    const parsed = await resolveSongMedia(item, quality).catch(() => null);
     return normalizeMediaUrl(parsed?.url || '');
 }
 
@@ -884,92 +908,6 @@ async function checkStatus() {
             throw new Error(getApiErrorMessage(methodsData, response.status, '服务异常'));
         }
     } catch {
-        try {
-            const backupProbe = await callBackupApi({
-                types: 'search',
-                source: 'netease',
-                name: '周杰伦',
-                count: 1,
-                pages: 1
-            }, {
-                timeoutMs: 9000,
-                retries: 0
-            });
-            const backupAlive = Array.isArray(backupProbe);
-            if (backupAlive) {
-                supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
-                platformNames = {
-                    netease: defaultPlatformNameMap.netease,
-                    qq: defaultPlatformNameMap.qq,
-                    kuwo: defaultPlatformNameMap.kuwo
-                };
-                updatePlatformSelect();
-                document.getElementById('serviceStatus').innerHTML =
-                    `服务状态: <span class="online">主源波动，备用可用</span>`;
-                document.getElementById('healthStatus').innerHTML =
-                    `健康状态: <span class="online">降级运行</span>`;
-                return;
-            }
-        } catch {
-            // ignore
-        }
-        try {
-            const backup3Probe = await callBackup3Api({
-                input: '周杰伦',
-                filter: 'name',
-                type: 'qq',
-                page: 1
-            }, {
-                timeoutMs: 10000,
-                retries: 0
-            });
-            const backup3Alive = Number(backup3Probe?.code) === 200 && Array.isArray(backup3Probe?.data);
-            if (backup3Alive) {
-                supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
-                platformNames = {
-                    netease: defaultPlatformNameMap.netease,
-                    qq: defaultPlatformNameMap.qq,
-                    kuwo: defaultPlatformNameMap.kuwo
-                };
-                updatePlatformSelect();
-                document.getElementById('serviceStatus').innerHTML =
-                    `服务状态: <span class="online">主源波动，备用3可用</span>`;
-                document.getElementById('healthStatus').innerHTML =
-                    `健康状态: <span class="online">三级降级</span>`;
-                return;
-            }
-        } catch {
-            // ignore
-        }
-        try {
-            const backup4Probe = await callBackup4Api({
-                mode: 'search',
-                platform: 'netease',
-                keyword: '周杰伦',
-                page: 1,
-                limit: 1
-            }, {
-                timeoutMs: 10000,
-                retries: 0
-            });
-            const backup4Alive = Array.isArray(backup4Probe?.data) && backup4Probe.data.length > 0;
-            if (backup4Alive) {
-                supportedPlatforms = [...PRIMARY_ALLOWED_PLATFORMS];
-                platformNames = {
-                    netease: defaultPlatformNameMap.netease,
-                    qq: defaultPlatformNameMap.qq,
-                    kuwo: defaultPlatformNameMap.kuwo
-                };
-                updatePlatformSelect();
-                document.getElementById('serviceStatus').innerHTML =
-                    `服务状态: <span class="online">主源波动，备用4可用</span>`;
-                document.getElementById('healthStatus').innerHTML =
-                    `健康状态: <span class="online">多源降级</span>`;
-                return;
-            }
-        } catch {
-            // ignore
-        }
         document.getElementById('serviceStatus').innerHTML =
             `服务状态: <span class="offline">网络波动</span>`;
         document.getElementById('healthStatus').innerHTML =
@@ -1127,21 +1065,19 @@ async function searchSongsByKeywordPagePrimary(keyword, selectedPlatform, option
         throw new Error('暂无可用平台');
     }
 
-    // 酷我主搜索对海外机房不稳定，给短超时并跳过重试，尽快交给后备源。
-    const timeoutMs = platform === 'kuwo' ? 6000 : 15000;
-    const retries = platform === 'kuwo' ? 0 : 1;
     const requestPage = Math.max(1, Number(options.page || 1));
     const requestLimit = Math.max(1, Number(options.limit || searchApiLimit));
-    const result = await callPlatformMethod(platform, 'search', {
-        keyword,
-        page: requestPage,
-        limit: requestLimit
-    }, {
-        timeoutMs,
-        retries,
-        retryDelayMs: 600
-    });
-    const list = Array.isArray(result) ? result : [];
+    const url = new URL(API_ROUTES.search, window.location.href);
+    url.searchParams.set('platform', platform);
+    url.searchParams.set('keyword', keyword);
+    url.searchParams.set('page', String(requestPage));
+    url.searchParams.set('limit', String(requestLimit));
+    const response = await apiFetch(url.toString(), { timeoutMs: 18000 });
+    const payload = parseResponseText(await response.text());
+    if (!response.ok || Number(payload?.code) !== 0) {
+        throw new Error(getApiErrorMessage(payload, response.status, '搜索失败'));
+    }
+    const list = Array.isArray(payload?.data) ? payload.data : [];
     return list.map(item => ({
         id: String(item.id || ''),
         name: item.name || '未知歌曲',
@@ -1320,28 +1256,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
         });
         return { songs, provider: 'primary' };
     }
-    if (forceProvider === 'backup') {
-        const songs = await searchSongsByKeywordPageBackup(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        return { songs, provider: 'backup' };
-    }
-    if (forceProvider === 'backup3') {
-        const songs = await searchSongsByKeywordPageBackup3(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        return { songs, provider: 'backup3' };
-    }
-    if (forceProvider === 'backup4') {
-        const songs = await searchSongsByKeywordPageBackup4(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        return { songs, provider: 'backup4' };
-    }
-
     let primarySongs = [];
     let primaryError = null;
     try {
@@ -1355,48 +1269,6 @@ async function searchSongsByKeyword(keyword, selectedPlatform, options = {}) {
 
     if (!primaryError && primarySongs.length > 0) {
         return { songs: primarySongs, provider: 'primary' };
-    }
-
-    let backupError = null;
-    try {
-        const backupSongs = await searchSongsByKeywordPageBackup(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        if (backupSongs.length > 0) {
-            return { songs: backupSongs, provider: 'backup' };
-        }
-    } catch (error) {
-        backupError = error;
-        // 继续尝试第三层备用源
-    }
-
-    try {
-        const backup3Songs = await searchSongsByKeywordPageBackup3(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        if (backup3Songs.length > 0) {
-            return { songs: backup3Songs, provider: 'backup3' };
-        }
-    } catch (backup3Error) {
-        // ignore backup3 errors
-    }
-
-    try {
-        const backup4Songs = await searchSongsByKeywordPageBackup4(keyword, selectedPlatform, {
-            page: requestPage,
-            limit: requestLimit
-        });
-        if (backup4Songs.length > 0) {
-            return { songs: backup4Songs, provider: 'backup4' };
-        }
-    } catch (backup4Error) {
-        // ignore backup4 errors
-    }
-
-    if (!silentFallback && backupError) {
-        toastBackupUnavailableOnce();
     }
 
     if (primaryError) {
@@ -2100,35 +1972,7 @@ async function fetchPlaylistSongsBackup(platform, playlistId) {
 }
 
 async function fetchPlaylistSongs(platform, playlistId, options = {}) {
-    const silentFallback = Boolean(options.silentFallback);
-    let primarySongs = [];
-    let primaryError = null;
-    try {
-        primarySongs = await fetchPlaylistSongsPrimary(platform, playlistId);
-    } catch (error) {
-        primaryError = error;
-    }
-
-    if (!primaryError && primarySongs.length > 0) {
-        return primarySongs;
-    }
-
-    try {
-        const backupSongs = await fetchPlaylistSongsBackup(platform, playlistId);
-        if (backupSongs.length > 0) {
-            return backupSongs;
-        }
-    } catch (backupError) {
-        if (primaryError) {
-            throw primaryError;
-        }
-        throw backupError;
-    }
-
-    if (primaryError) {
-        throw primaryError;
-    }
-    return [];
+    return fetchPlaylistSongsPrimary(platform, playlistId);
 }
 
 // 搜索
@@ -2177,46 +2021,17 @@ async function search() {
         }
 
         if (currentSearchType === 'song') {
-            let parseResp = null;
-            try {
-                parseResp = await parseSongs(platform, input, quality);
-            } catch (parseError) {
-                parseResp = null;
-            }
-
-            const parsedItems = parseResp ? normalizeParsedItems(platform, quality, parseResp) : [];
-            const successSongs = parsedItems
-                .filter(item => item.success)
-                .map(item => toSongFromParsedItem(platform, item));
-
-            if (successSongs.length > 0) {
-                displaySongsWithPagination(successSongs);
-                return;
-            }
-
-            const backupSong = await fetchSongByIdBackup(platform, input, quality).catch(() => null);
-            if (backupSong) {
-                displaySongsWithPagination([backupSong]);
-                return;
-            }
-
-            const backup3Song = await fetchSongByIdBackup3(platform, input).catch(() => null);
-            if (backup3Song) {
-                displaySongsWithPagination([backup3Song]);
-                return;
-            }
-
-            const backup4Parsed = await resolveBackup4Parsed(platform, input, quality, {
+            const resolved = await resolveSongMedia({
+                platform,
+                id: input,
                 name: `ID ${input}`,
                 artist: '未知歌手'
-            }).catch(() => null);
-            if (backup4Parsed) {
-                displaySongsWithPagination([toSongFromParsedItem(platform, backup4Parsed)]);
-                return;
+            }, quality).catch(() => null);
+            if (resolved) {
+                displaySongsWithPagination([toSongFromParsedItem(platform, resolved)]);
+            } else {
+                resultsDiv.innerHTML = '<div class="empty-state">解析失败，请稍后重试或切换平台</div>';
             }
-
-            const firstError = parsedItems.find(item => !item.success);
-            resultsDiv.innerHTML = `<div class="empty-state">${localizeErrorMessage(firstError?.error, '解析失败')}</div>`;
         } else {
             const songs = await fetchPlaylistSongs(platform, input);
             if (songs.length > 0) {
@@ -2496,43 +2311,7 @@ async function downloadSong(source, id, name, artist, index = null, songObj = nu
 }
 
 async function resolveDownloadMedia(source, id, name, artist, runtimeSong, quality, options = {}) {
-    if (runtimeSong?.dataSource === 'backup') {
-        const backupData = await ensureBackupPlayableData(runtimeSong, quality, options);
-        const mediaUrl = normalizeMediaUrl(backupData.url || '');
-        if (!mediaUrl) {
-            throw new Error('备用源未获取到下载链接');
-        }
-        return mediaUrl;
-    }
-    if (runtimeSong?.dataSource === 'backup3') {
-        const backup3Data = await ensureBackup3PlayableData(runtimeSong, options);
-        const mediaUrl = normalizeMediaUrl(backup3Data.url || '');
-        if (!mediaUrl) {
-            throw new Error('备用源3未获取到下载链接');
-        }
-        return mediaUrl;
-    }
-
-    let parsed = null;
-    try {
-        parsed = await ensureParsedSong(source, id, quality);
-    } catch (primaryError) {
-        let backupError = null;
-        try {
-            parsed = await resolveBackup4Parsed(source, id, quality, {
-                name,
-                artist,
-                cover: runtimeSong?.cover || '',
-                bypassCache: Boolean(options.bypassCache)
-            });
-        } catch (error) {
-            backupError = error;
-            parsed = null;
-        }
-        if (!parsed) {
-            throw backupError || primaryError;
-        }
-    }
+    const parsed = await resolveSongMedia(runtimeSong || { source, id, name, artist }, quality, options);
     const mediaUrl = normalizeMediaUrl(parsed?.url || '');
     if (!mediaUrl) {
         throw new Error(localizeErrorMessage(parsed?.error, '未获取到下载链接'));
@@ -2552,20 +2331,7 @@ function triggerBlobDownload(blob, filename) {
 }
 
 async function resolveFreshPlaybackUrl(platform, id, name, artist, quality, runtimeSong) {
-    if (runtimeSong?.dataSource === 'backup') {
-        const data = await ensureBackupPlayableData(runtimeSong, quality, { bypassCache: true });
-        return normalizeMediaUrl(data?.url || '');
-    }
-    if (runtimeSong?.dataSource === 'backup3') {
-        const data = await ensureBackup3PlayableData(runtimeSong, { bypassCache: true });
-        return normalizeMediaUrl(data?.url || '');
-    }
-    const parsed = await resolveBackup4Parsed(platform, id, quality, {
-        name,
-        artist,
-        cover: runtimeSong?.cover || '',
-        bypassCache: true
-    }).catch(() => null);
+    const parsed = await resolveSongMedia(runtimeSong || { platform, id, name, artist }, quality, { bypassCache: true }).catch(() => null);
     return normalizeMediaUrl(parsed?.url || '');
 }
 
@@ -4175,66 +3941,16 @@ async function playSongCore(source, id, name, artist, options = {}) {
     setGlobalPlayLoading(true);
 
     try {
-        const dataSource = normalizeSongDataSource(runtimeSong?.dataSource);
-        const isBackupSong = dataSource === 'backup';
-        const isBackup3Song = dataSource === 'backup3';
-        let mediaUrl = '';
-        let rawCover = '';
-        let lyricsRaw = '';
-        let backupMeta = null;
-        let backup3Meta = null;
-        let songPlatform = source;
-
-        if (isBackupSong) {
-            const backupData = await ensureBackupPlayableData(runtimeSong, quality);
-            if (playRequestId !== activePlayRequestId) return;
-            mediaUrl = normalizeMediaUrl(backupData.url || '');
-            if (!mediaUrl) {
-                throw new Error('备用源未获取到播放链接');
-            }
-            rawCover = normalizeMediaUrl(runtimeSong.cover || backupData.cover || options.cover || '');
-            lyricsRaw = String(backupData.lyrics || '');
-            songPlatform = String(runtimeSong.platform || runtimeSong.source || source);
-            backupMeta = runtimeSong.backup || null;
-        } else if (isBackup3Song) {
-            const backup3Data = await ensureBackup3PlayableData(runtimeSong);
-            if (playRequestId !== activePlayRequestId) return;
-            mediaUrl = normalizeMediaUrl(backup3Data.url || '');
-            if (!mediaUrl) {
-                throw new Error('备用源3未获取到播放链接');
-            }
-            rawCover = normalizeMediaUrl(runtimeSong.cover || backup3Data.cover || options.cover || '');
-            lyricsRaw = String(backup3Data.lyrics || '');
-            songPlatform = String(runtimeSong.platform || runtimeSong.source || source);
-            backup3Meta = runtimeSong.backup3 || null;
-        } else {
-            let parsed = null;
-            try {
-                parsed = await ensureParsedSong(source, id, quality);
-            } catch (primaryError) {
-                let backupError = null;
-                try {
-                    parsed = await resolveBackup4Parsed(source, id, quality, {
-                        name,
-                        artist,
-                        cover: runtimeSong?.cover || options.cover || ''
-                    });
-                } catch (error) {
-                    backupError = error;
-                    parsed = null;
-                }
-                if (!parsed) {
-                    throw backupError || primaryError;
-                }
-            }
-            if (playRequestId !== activePlayRequestId) return;
-            mediaUrl = normalizeMediaUrl(parsed?.url || '');
-            if (!mediaUrl) {
-                throw new Error(localizeErrorMessage(parsed?.error, '未获取到播放链接'));
-            }
-            rawCover = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || options.cover || '');
-            lyricsRaw = String(parsed.lyrics || '');
-        }
+        const resolveInput = runtimeSong || { platform: source, id, name, artist, cover: options.cover || '' };
+        const parsed = await resolveSongMedia(resolveInput, quality);
+        if (playRequestId !== activePlayRequestId) return;
+        let mediaUrl = normalizeMediaUrl(parsed?.url || '');
+        if (!mediaUrl) throw new Error('未获取到播放链接');
+        const rawCover = normalizeMediaUrl(parsed.cover || parsed.pic || parsed?.info?.pic || options.cover || '');
+        const lyricsRaw = String(parsed.lyrics || '');
+        const songPlatform = String(resolveInput.platform || resolveInput.source || source);
+        const backupMeta = null;
+        const backup3Meta = null;
 
         resetInlinePlaybackUi(inlineIndex);
 
@@ -4278,7 +3994,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
             cover: rawCover,
             lyricsRaw,
             lyrics: parsedLyrics,
-            dataSource: isBackupSong ? 'backup' : (isBackup3Song ? 'backup3' : 'primary'),
+            dataSource: 'primary',
             backup: backupMeta,
             backup3: backup3Meta
         };
