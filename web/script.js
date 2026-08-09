@@ -3898,6 +3898,27 @@ function syncNowPlayingViews() {
     updateHomeNowPlayingControlState();
 }
 
+function skipUnplayableTrack(playRequestId) {
+    const currentIndex = resolveCurrentPlaylistIndex();
+    const nextIndex = currentIndex + 1;
+    if (currentIndex < 0 || nextIndex >= playlistSongs.length) {
+        showToast('这首歌暂时无法播放，播放列表里没有下一首可切换', 'info');
+        return false;
+    }
+
+    // Do not leave a failed media URL attached while the next item resolves.
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    currentPlaylistIndex = nextIndex;
+    renderPlaylistSheet();
+    showToast('这首歌暂时无法播放，正在切换下一首…', 'info');
+    setTimeout(() => {
+        if (playRequestId === activePlayRequestId) void playSongFromPlaylist(nextIndex);
+    }, 0);
+    return true;
+}
+
 async function playSongCore(source, id, name, artist, options = {}) {
     const quality = document.getElementById('quality').value;
     const inlineIndex = Number.isInteger(options.inlineIndex) ? options.inlineIndex : null;
@@ -4046,7 +4067,7 @@ async function playSongCore(source, id, name, artist, options = {}) {
         scheduleNextTrackPreload();
     } catch (error) {
         if (playRequestId === activePlayRequestId) {
-            if (!isMembershipError(error)) showToast(`播放失败: ${error.message || '未知错误'}`, 'error');
+            if (!isMembershipError(error)) skipUnplayableTrack(playRequestId);
             syncInlinePlayButtonState();
             updateFullPlayerControlState();
         }
