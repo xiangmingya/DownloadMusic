@@ -25,7 +25,7 @@ const env = {
   DB,
   RESOLVER_TOTAL_BUDGET_MS: "3000",
   RESOLVER_HEDGE_DELAY_MS: "1000",
-  RESOLVER_MAX_ATTEMPTS: "2",
+  RESOLVER_MAX_ATTEMPTS: "8",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
 };
 
@@ -39,14 +39,23 @@ const cookie = login.headers.get("Set-Cookie").split(";", 1)[0];
 const originalFetch = globalThis.fetch;
 let resolverUpstreamCalls = 0;
 let losslessRequested = false;
+let qualityFallbackUsed = false;
 globalThis.fetch = async (input) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
-    const smallLossless = url.includes("id=small-lossless");
-    if (smallLossless) losslessRequested = url.includes("br=999");
+    const smallAudio = url.includes("id=small-audio");
+    if (url.includes("id=flac-ok")) losslessRequested = url.includes("br=999");
+    const flacFallback = url.includes("id=flac-fallback");
+    if (flacFallback && url.includes("br=320")) qualityFallbackUsed = true;
     await new Promise((resolve) => setTimeout(resolve, 25));
-    return new Response(JSON.stringify({ url: smallLossless ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
+    if (flacFallback && url.includes("br=999")) {
+      return new Response(JSON.stringify({ message: "lossless unavailable" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ url: smallAudio ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -93,15 +102,30 @@ try {
   assert.deepEqual(Object.keys((await cached.json()).data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "a cache hit should not call upstream again");
 
-  const shortLossless = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+  const flac = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie },
-    body: JSON.stringify({ platform: "netease", id: "small-lossless", quality: "flac" }),
+    body: JSON.stringify({ platform: "netease", id: "flac-ok", quality: "flac" }),
   }), env);
-  const shortLosslessPayload = await shortLossless.json();
   assert.equal(losslessRequested, true, "lossless requests should not be downgraded to 320k");
-  assert.equal(shortLossless.status, 502, "a suspiciously small lossless result must be retried instead of returned");
-  assert.equal(shortLosslessPayload.message, "暂时无法解析这首歌，请稍后重试");
+  assert.equal(flac.status, 200);
+
+  const flacFallback = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "flac-fallback", quality: "flac" }),
+  }), env);
+  assert.equal(flacFallback.status, 200);
+  assert.equal(qualityFallbackUsed, true, "unavailable lossless audio should fall back to 320k");
+
+  const shortAudio = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "small-audio", quality: "320k" }),
+  }), env);
+  const shortAudioPayload = await shortAudio.json();
+  assert.equal(shortAudio.status, 502, "a suspiciously short audio result must be retried instead of returned");
+  assert.equal(shortAudioPayload.message, "暂时无法解析这首歌，请稍后重试");
 
   const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
     method: "POST",

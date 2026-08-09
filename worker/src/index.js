@@ -3924,14 +3924,14 @@ function resolverConfig(env) {
     maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
-    minLosslessBytes: int(env.RESOLVER_MIN_LOSSLESS_BYTES, 1024 * 1024, 0, 50 * 1024 * 1024),
+    minMediaBytes: int(env.RESOLVER_MIN_MEDIA_BYTES, 1024 * 1024, 0, 50 * 1024 * 1024),
   };
 }
 
 function resolverCacheKey(input) {
-  // v3 starts a fresh cache namespace after lossless media validation was added,
-  // so previously accepted short prompt URLs cannot be served from cache.
-  return `resolve:v3:${input.platform}:${input.id}:${input.quality}`;
+  // v4 starts a fresh cache namespace after the short-audio rule was expanded,
+  // so previously accepted prompt URLs cannot be served from cache.
+  return `resolve:v4:${input.platform}:${input.id}:${input.quality}`;
 }
 
 function resolverCacheRequest(key) {
@@ -4080,11 +4080,11 @@ async function runResolverProvider(candidate, input, env, config) {
     if (!validated) {
       const probe = await probeMediaUrl(url, { timeoutMs: 1800 });
       if (!probe.ok) return { ok: false, source, status: Number(probe.status || 502), error: "invalid_media", durationMs: Date.now() - startedAt };
-      // Short speech prompts are frequently returned as a false "FLAC" result.
-      // Reject only when the server reports a total size, so chunked legitimate
-      // recordings are not discarded merely because their size is unknown.
-      if (input.quality.startsWith("flac") && probe.totalBytes > 0 && probe.totalBytes < config.minLosslessBytes) {
-        return { ok: false, source, status: 422, error: "lossless_media_too_small", durationMs: Date.now() - startedAt };
+      // A short spoken prompt is worse than a skipped song. Reject a reported
+      // sub-threshold result and continue with another source. Unknown sizes
+      // remain eligible so chunked, otherwise-valid audio is not discarded.
+      if (probe.totalBytes > 0 && probe.totalBytes < config.minMediaBytes) {
+        return { ok: false, source, status: 422, error: "media_too_small", durationMs: Date.now() - startedAt };
       }
     }
     return {
@@ -4153,6 +4153,25 @@ async function resolveWithHedging(input, env, ctx) {
   throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
 }
 
+// Lossless availability varies by platform and provider. Preserve the user's
+// preferred quality first, then gracefully fall back rather than leaving a
+// song unplayable. Every fallback still goes through the same media checks.
+async function resolveWithQualityFallback(input, env, ctx) {
+  const requestedQuality = backup4NormalizeQuality(input.quality);
+  const qualities = requestedQuality.startsWith("flac")
+    ? [requestedQuality, "320k", "128k"]
+    : [requestedQuality];
+  let lastError = null;
+  for (const quality of qualities) {
+    try {
+      return await resolveWithHedging({ ...input, quality }, env, ctx);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("解析失败");
+}
+
 async function handleResolve(request, env, ctx) {
   if (!resolverConfig(env).enabled) return jsonResponse(503, { code: -1, message: "统一解析器暂未启用" });
   const body = await parseJsonBody(request);
@@ -4175,7 +4194,7 @@ async function handleResolve(request, env, ctx) {
   }
   let task = resolverInflight.get(key);
   if (!task) {
-    task = resolveWithHedging(input, env, ctx)
+    task = resolveWithQualityFallback(input, env, ctx)
       .then((data) => putResolverCache(key, { ...data, platform: input.platform, id: input.id, quality: input.quality }, resolverConfig(env).cacheTtlSeconds))
       .finally(() => resolverInflight.delete(key));
     resolverInflight.set(key, task);
