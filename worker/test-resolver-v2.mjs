@@ -43,10 +43,10 @@ globalThis.fetch = async (input) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
-    const smallLossless = url.includes("id=small-lossless");
-    if (smallLossless) losslessRequested = url.includes("br=999");
+    const smallAudio = url.includes("id=small-audio");
+    if (url.includes("id=flac-ok")) losslessRequested = url.includes("br=999");
     await new Promise((resolve) => setTimeout(resolve, 25));
-    return new Response(JSON.stringify({ url: smallLossless ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
+    return new Response(JSON.stringify({ url: smallAudio ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -93,15 +93,22 @@ try {
   assert.deepEqual(Object.keys((await cached.json()).data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "a cache hit should not call upstream again");
 
-  const shortLossless = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+  const flac = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie },
-    body: JSON.stringify({ platform: "netease", id: "small-lossless", quality: "flac" }),
+    body: JSON.stringify({ platform: "netease", id: "flac-ok", quality: "flac" }),
   }), env);
-  const shortLosslessPayload = await shortLossless.json();
   assert.equal(losslessRequested, true, "lossless requests should not be downgraded to 320k");
-  assert.equal(shortLossless.status, 502, "a suspiciously small lossless result must be retried instead of returned");
-  assert.equal(shortLosslessPayload.message, "暂时无法解析这首歌，请稍后重试");
+  assert.equal(flac.status, 200);
+
+  const shortAudio = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "small-audio", quality: "320k" }),
+  }), env);
+  const shortAudioPayload = await shortAudio.json();
+  assert.equal(shortAudio.status, 502, "a suspiciously short audio result must be retried instead of returned");
+  assert.equal(shortAudioPayload.message, "暂时无法解析这首歌，请稍后重试");
 
   const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
     method: "POST",

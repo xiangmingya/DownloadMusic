@@ -239,7 +239,7 @@ Worker 先调用主搜索，失败后在服务端内部使用多源搜索兜底�
 
 Worker 会缓存短期链接、合并同一歌曲的并发解析、按健康度排序内部来源，并以最多两个并发来源进行延迟竞速。为避免暴露内部服务链路，对外仅返回 `data.url`、`cover` 与 `lyrics`。
 
-当请求 `flac` / `flac24bit` 且上游返回了媒体总大小时，Worker 会拒绝小于 1 MiB 的结果并自动尝试下一来源，以避免把短语音提示当作无损音频。可通过 `RESOLVER_MIN_LOSSLESS_BYTES` 调整阈值；上游未提供大小时不会因此拒绝结果。
+当上游返回媒体总大小时，Worker 会拒绝小于 1 MiB 的结果并自动尝试下一来源，避免把短语音提示当作歌曲播放。可通过 `RESOLVER_MIN_MEDIA_BYTES` 调整阈值；上游未提供大小时不会因此拒绝结果。
 
 旧 `/api/proxy/backup`、`backup3`、`backup4` 已移除。
 
