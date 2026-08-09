@@ -3929,7 +3929,9 @@ function resolverConfig(env) {
 }
 
 function resolverCacheKey(input) {
-  return `resolve:v2:${input.platform}:${input.id}:${input.quality}`;
+  // v3 starts a fresh cache namespace after lossless media validation was added,
+  // so previously accepted short prompt URLs cannot be served from cache.
+  return `resolve:v3:${input.platform}:${input.id}:${input.quality}`;
 }
 
 function resolverCacheRequest(key) {
