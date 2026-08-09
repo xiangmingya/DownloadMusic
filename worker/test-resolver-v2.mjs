@@ -25,7 +25,6 @@ const env = {
   DB,
   RESOLVER_TOTAL_BUDGET_MS: "3000",
   RESOLVER_HEDGE_DELAY_MS: "1000",
-  RESOLVER_MAX_ATTEMPTS: "8",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
 };
 

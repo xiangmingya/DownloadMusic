@@ -3930,7 +3930,6 @@ function resolverConfig(env) {
     enabled: String(env.RESOLVER_V2_ENABLED || "true").toLowerCase() !== "false",
     totalBudgetMs: int(env.RESOLVER_TOTAL_BUDGET_MS, 7000, 2000, 15000),
     hedgeDelayMs: int(env.RESOLVER_HEDGE_DELAY_MS, 700, 150, 3000),
-    maxAttempts: int(env.RESOLVER_MAX_ATTEMPTS, 4, 1, 8),
     maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
@@ -4118,7 +4117,10 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
   const config = Number.isFinite(budgetMs)
     ? { ...baseConfig, totalBudgetMs: Math.max(300, Math.min(baseConfig.totalBudgetMs, Math.floor(budgetMs))) }
     : baseConfig;
-  const candidates = (await getResolverCandidates(input.platform, env)).slice(0, config.maxAttempts);
+  // After removing disabled and unconfigured providers, walk every remaining
+  // source until one succeeds or the overall request budget is exhausted.
+  // The deadline and concurrency cap still prevent an unbounded request.
+  const candidates = await getResolverCandidates(input.platform, env);
   if (!candidates.length) throw new Error("当前平台没有可用解析源");
   const startedAt = Date.now();
   const deadlineAt = startedAt + config.totalBudgetMs;
