@@ -71,7 +71,7 @@ Cloudflare Worker（`musicapi.621888.xyz`）对外接口说明。所有请求均
 ### 2.1 服务状态
 `GET /api/public/service-status`（公开）
 
-返回 Cloudflare Cron 主动探测产生的最近 24 小时平台 Uptime，包括当前状态、可用率、平均耗时和逐小时状态条。公开数据只包含 netease/qq/kuwo 平台汇总，不包含内部解析源。
+返回 Cloudflare Cron 主动探测产生的最近 24 小时平台 Uptime，包括当前状态、可用率、平均耗时和逐小时状态条。GDStudio 返回官方平台 CDN 且报告文件大于 1 MB 时采用可信元数据验证，避免 Cron 机房跨地域探测网易云 CDN 造成误判；其他结果继续执行 Range 音频验证。公开数据只包含 netease/qq/kuwo 平台汇总，不包含内部解析源。
 
 Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟完成一次“解析链接 + 音频有效性验证”。探测结果写入独立的 `service_uptime_checks` 表，不与管理员页面中的用户真实调用统计混合。
 
@@ -144,7 +144,7 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 ### 5.3 会员列表
 `GET /api/admin/members?q=<关键词>`
 
-返回有效会员列表（Linux DO ID、昵称、注册/最近登录、会员开通与到期时间）。
+返回有效会员列表（Linux DO ID、昵称、注册/最近使用、会员开通与到期时间、用户状态及 API Key 状态）。`last_used_at` 同时统计网页会话和该用户 API Key 的实际调用。
 
 ### 5.4 赠送会员
 `POST /api/admin/members/grant`
@@ -152,12 +152,26 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 { "target": "Linux DO ID 或完整昵称", "days": 30, "note": "可选备注" }
 ```
 
-### 5.5 服务监控
+### 5.5 用户状态
+`PUT /api/admin/members/status`
+
+启用或禁用用户，正文为 `{ "linuxdo_id": "123", "disabled": true }`。禁用后现有网页会话和该用户的 API Key 都会被拒绝；管理员账号不能被禁用。
+
+### 5.6 用户 API Key 管理
+`GET /api/admin/members/api-key?linuxdo_id=<ID>`
+
+读取指定用户的脱敏 API Key、最近使用、绑定设备和启用状态。不会返回完整 Key 或设备令牌。
+
+`PUT /api/admin/members/api-key`
+
+启用或禁用指定用户的 API Key，正文为 `{ "linuxdo_id": "123", "enabled": false }`。
+
+### 5.7 服务监控
 `GET /api/admin/monitoring?days=1|7|30`
 
 返回 `services`（各源调用/成功率/耗时/健康度/禁用状态）、`trend`（24 小时趋势）、`final_sources`（最终解析来源命中）。
 
-### 5.6 禁用 / 启用解析源
+### 5.8 禁用 / 启用解析源
 `PUT /api/admin/monitoring/sources`
 ```json
 { "source": "onrender", "disabled": true }

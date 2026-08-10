@@ -29,6 +29,9 @@
 - `PUT /api/admin/settings/membership`
 - `GET /api/admin/members`
 - `POST /api/admin/members/grant`
+- `PUT /api/admin/members/status`
+- `GET /api/admin/members/api-key`
+- `PUT /api/admin/members/api-key`
 - `GET /api/admin/monitoring?days=1|7|30`
 - `GET /api/library`
 - `PUT /api/library`
@@ -78,7 +81,7 @@ wrangler d1 create downloadmusic-auth
 wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 ```
 
-升级到会员管理增强版时，也需要再执行一次上述命令：它会新增 `membership_grants` 表，并复用已有的 `linuxdo_users` 表显示昵称、注册时间、最近登录和会员开通时间。已有会员不会丢失；历史会员的开通时间会兼容显示为原有更新时间。
+升级到会员管理增强版时，也需要再执行一次上述命令：它会新增 `membership_grants` 表，并复用已有的 `linuxdo_users` 表显示昵称、注册时间、最近使用和会员开通时间。已有会员不会丢失；历史会员的开通时间会兼容显示为原有更新时间。
 
 密码登录统一使用一个家庭资料库；Linux DO 登录按每个 Linux DO 账号独立保存。
 
@@ -87,6 +90,8 @@ wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 管理员用 Linux DO 白名单账号登录后，右上角会出现“管理”。服务监控仅在这个页面显示，普通用户无法请求接口。
 
 公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
+
+用户状态和最近使用时间需要执行 `migrations/0003_user_activity.sql`。最近使用最多每 5 分钟写入一次，网页与 API Key 调用都会更新；禁用用户会同时阻止其现有会话和 API Key。
 
 - 统计范围可切换最近 24 小时、7 天或 30 天；最近 24 小时会显示按小时趋势。
 - “最终解析来源”只统计成功返回可播放链接的 TuneHub、GDStudio、QQ 备用解析和备用源 4，不把内部搜索请求混进去。
