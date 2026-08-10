@@ -106,3 +106,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_key);
+
+-- linuxdo_users belongs to the base authentication schema. Migration 0003 adds
+-- last_used_at and this index so the admin list can sort by real recent use.
+CREATE INDEX IF NOT EXISTS idx_linuxdo_users_last_used ON linuxdo_users (last_used_at DESC);

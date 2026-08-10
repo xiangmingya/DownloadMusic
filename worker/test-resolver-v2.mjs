@@ -60,10 +60,12 @@ let losslessRequested = false;
 let qualityFallbackUsed = false;
 let unconfiguredProviderCalls = 0;
 let cancelledHedgedRequests = 0;
+let trustedCanaryMediaProbes = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
+    const uptimeCanary = url.includes("id=108914") || url.includes("id=66842");
     if (url.includes("id=cancel-hedge")) {
       await new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, 1000);
@@ -87,10 +89,16 @@ globalThis.fetch = async (input, init = {}) => {
         headers: { "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify({ url: smallAudio ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
+    return new Response(JSON.stringify(uptimeCanary
+      ? { url: "https://m8.music.126.net/song/canary.mp3", size: 2_000_000 }
+      : { url: smallAudio ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
+  }
+  if (url === "https://m8.music.126.net/song/canary.mp3") {
+    trustedCanaryMediaProbes += 1;
+    throw new Error("trusted GDStudio metadata should avoid a region-sensitive media probe");
   }
   if (url === "https://cdn.example.test/music.mp3") {
     return new Response("a", { status: 206, headers: { "Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/2000000" } });
@@ -204,6 +212,7 @@ try {
   assert.equal(uptimeRows.length, 1, "one Cron trigger should persist one isolated uptime check");
   assert.equal(uptimeRows[0].platform, "netease");
   assert.equal(uptimeRows[0].success, 1);
+  assert.equal(trustedCanaryMediaProbes, 0, "trusted official-CDN metadata should prevent Cron colo false negatives");
 
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();

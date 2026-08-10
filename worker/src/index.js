@@ -84,6 +84,10 @@ const resolverMemoryCache = new Map();
 const resolverNegativeCache = new Map();
 const resolverProviderHealth = new Map();
 const resolverProviderInFlight = new Map();
+const linuxdoUserAccessCache = new Map();
+const userActivityWriteAt = new Map();
+const USER_ACCESS_CACHE_TTL_MS = 30 * 1000;
+const USER_ACTIVITY_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 
 export default {
   async fetch(request, env, ctx) {
@@ -152,6 +156,15 @@ async function handleRequest(request, env, ctx) {
     }
     if (url.pathname === "/api/admin/members/grant" && request.method === "POST") {
       return withCors(request, env, await handleAdminMemberGrant(request, env));
+    }
+    if (url.pathname === "/api/admin/members/status" && request.method === "PUT") {
+      return withCors(request, env, await handleAdminMemberStatus(request, env));
+    }
+    if (url.pathname === "/api/admin/members/api-key" && request.method === "GET") {
+      return withCors(request, env, await handleAdminMemberApiKey(request, env));
+    }
+    if (url.pathname === "/api/admin/members/api-key" && request.method === "PUT") {
+      return withCors(request, env, await handleAdminMemberApiKeyStatus(request, env));
     }
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
@@ -561,10 +574,54 @@ async function getSession(request, env) {
   return parsed;
 }
 
+function linuxdoIdFromOwnerKey(ownerKey) {
+  const value = String(ownerKey || "");
+  return value.startsWith("linuxdo:") ? value.slice("linuxdo:".length).trim() : "";
+}
+
+async function getLinuxdoUserAccess(linuxdoId, env, { force = false } = {}) {
+  const id = String(linuxdoId || "").trim();
+  const db = getDatabase(env);
+  if (!id || !db) return { disabled: false, disabled_at: null };
+  const cached = linuxdoUserAccessCache.get(id);
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.value;
+  try {
+    const row = await db.prepare("SELECT disabled_at FROM linuxdo_users WHERE linuxdo_id = ? LIMIT 1").bind(id).first();
+    const value = { disabled: Boolean(row?.disabled_at), disabled_at: row?.disabled_at || null };
+    linuxdoUserAccessCache.set(id, { value, expiresAt: Date.now() + USER_ACCESS_CACHE_TTL_MS });
+    return value;
+  } catch {
+    // A temporary D1 failure must not lock every signed-in user out.
+    return { disabled: false, disabled_at: null };
+  }
+}
+
+async function touchLinuxdoUserActivity(linuxdoId, env) {
+  const id = String(linuxdoId || "").trim();
+  const db = getDatabase(env);
+  if (!id || !db) return;
+  const nowMs = Date.now();
+  if (nowMs - Number(userActivityWriteAt.get(`user:${id}`) || 0) < USER_ACTIVITY_WRITE_INTERVAL_MS) return;
+  userActivityWriteAt.set(`user:${id}`, nowMs);
+  try {
+    await db.prepare("UPDATE linuxdo_users SET last_used_at = ? WHERE linuxdo_id = ?").bind(sqlNow(), id).run();
+  } catch {
+    // Activity tracking is informational and must never block the application.
+  }
+}
+
 async function requireSession(request, env) {
   const session = await getSession(request, env);
   if (!session) {
     return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
+  }
+  if (session.type === "linuxdo") {
+    const linuxdoId = getLinuxdoId(session);
+    const access = await getLinuxdoUserAccess(linuxdoId, env);
+    if (access.disabled) {
+      return { ok: false, response: jsonResponse(403, { code: 403, message: "账号已被管理员禁用" }) };
+    }
+    await touchLinuxdoUserActivity(linuxdoId, env);
   }
   return { ok: true, session };
 }
@@ -642,6 +699,30 @@ async function lookupApiKeyRecord(key, env) {
   }
 }
 
+async function apiKeyOwnerDisabled(record, env) {
+  const linuxdoId = linuxdoIdFromOwnerKey(record?.owner_key);
+  if (!linuxdoId) return false;
+  return (await getLinuxdoUserAccess(linuxdoId, env)).disabled;
+}
+
+async function touchApiKeyActivity(record, env) {
+  const db = getDatabase(env);
+  const id = Number(record?.id || 0);
+  if (!db || !id) return;
+  const nowMs = Date.now();
+  if (nowMs - Number(userActivityWriteAt.get(`apikey:${id}`) || 0) < USER_ACTIVITY_WRITE_INTERVAL_MS) return;
+  userActivityWriteAt.set(`apikey:${id}`, nowMs);
+  const now = sqlNow();
+  const statements = [db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now, id)];
+  const linuxdoId = linuxdoIdFromOwnerKey(record.owner_key);
+  if (linuxdoId) statements.push(db.prepare("UPDATE linuxdo_users SET last_used_at = ? WHERE linuxdo_id = ?").bind(now, linuxdoId));
+  try {
+    await db.batch(statements);
+  } catch {
+    // Usage timestamps are best-effort and must not fail an authenticated request.
+  }
+}
+
 async function validateApiKeyOnly(request, env) {
   const key = getApiKeyFromRequest(request);
   if (!key) return null;
@@ -652,8 +733,10 @@ async function validateApiKeyOnly(request, env) {
   if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
     return { error: jsonResponse(401, { code: 401, message: "API Key 已过期" }) };
   }
-  const db = getDatabase(env);
-  if (db) db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(sqlNow(), record.id).run().catch(() => {});
+  if (await apiKeyOwnerDisabled(record, env)) {
+    return { error: jsonResponse(403, { code: 403, message: "API Key 所属账号已被管理员禁用" }) };
+  }
+  await touchApiKeyActivity(record, env);
 
   return {
     session: {
@@ -684,14 +767,16 @@ async function validateBoundApiKey(request, env) {
   if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
     return { error: jsonResponse(401, { code: 401, message: "API Key 已过期" }) };
   }
+  if (await apiKeyOwnerDisabled(record, env)) {
+    return { error: jsonResponse(403, { code: 403, message: "API Key 所属账号已被管理员禁用" }) };
+  }
   if (String(record.mi_uid || "").trim() !== miUid) {
     return { error: jsonResponse(403, { code: 403, message: "小米账号与绑定不符" }) };
   }
   if (String(record.device_token || "").trim() !== token) {
     return { error: jsonResponse(401, { code: 401, message: "设备令牌无效，请重新保存绑定" }) };
   }
-  const db = getDatabase(env);
-  if (db) db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(sqlNow(), record.id).run().catch(() => {});
+  await touchApiKeyActivity(record, env);
   return {
     session: {
       type: "apikey",
@@ -709,11 +794,9 @@ async function validateBoundApiKey(request, env) {
 async function requireClientAuth(request, env) {
   const key = getApiKeyFromRequest(request);
   if (!key) {
-    const session = await getSession(request, env);
-    if (!session) {
-      return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
-    }
-    return { ok: true, session, auth_mode: "session" };
+    const auth = await requireSession(request, env);
+    if (!auth.ok) return auth;
+    return { ok: true, session: auth.session, auth_mode: "session" };
   }
   const bound = await validateBoundApiKey(request, env);
   if (!bound) return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
@@ -727,11 +810,9 @@ async function requireAnyAuth(request, env) {
     if (apiAuth.error) return { ok: false, response: apiAuth.error };
     return { ok: true, session: apiAuth.session, auth_mode: "apikey" };
   }
-  const session = await getSession(request, env);
-  if (!session) {
-    return { ok: false, response: jsonResponse(401, { code: 401, message: "Unauthorized" }) };
-  }
-  return { ok: true, session, auth_mode: "session" };
+  const auth = await requireSession(request, env);
+  if (!auth.ok) return auth;
+  return { ok: true, session: auth.session, auth_mode: "session" };
 }
 
 function getDatabase(env) {
@@ -1029,11 +1110,13 @@ async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
 
 async function recordMemberLogin(linuxdoId, userName, avatar, env) {
   const db = getDatabase(env);
-  if (!db || !linuxdoId) return;
+  if (!db || !linuxdoId) return { disabled: false, disabled_at: null };
   const now = sqlNow();
-  await db.prepare("INSERT INTO linuxdo_users (linuxdo_id, name, avatar, created_at, last_login_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, last_login_at = excluded.last_login_at")
-    .bind(String(linuxdoId), String(userName || linuxdoId), String(avatar || ""), now, now)
+  await db.prepare("INSERT INTO linuxdo_users (linuxdo_id, name, avatar, created_at, last_login_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(linuxdo_id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, last_login_at = excluded.last_login_at, last_used_at = excluded.last_used_at")
+    .bind(String(linuxdoId), String(userName || linuxdoId), String(avatar || ""), now, now, now)
     .run();
+  userActivityWriteAt.set(`user:${linuxdoId}`, Date.now());
+  return getLinuxdoUserAccess(linuxdoId, env, { force: true });
 }
 
 async function handlePasswordLogin(request, env) {
@@ -1228,8 +1311,11 @@ async function handleLinuxdoLoginCallback(request, env) {
 
   const userName = pickLinuxdoName(payload, linuxdoId);
   const avatar = pickLinuxdoAvatar(payload);
-  await recordMemberLogin(linuxdoId, userName, avatar, env).catch(() => {});
+  const userAccess = await recordMemberLogin(linuxdoId, userName, avatar, env).catch(() => null);
   const redirectTo = safeRedirectUrl(statePayload.redirect, env, request.url);
+  if (userAccess?.disabled) {
+    return Response.redirect(`${redirectTo}?login=disabled`, 302);
+  }
   return new Response(null, {
     status: 302,
     headers: {
@@ -1356,9 +1442,17 @@ async function handleAdminMembers(request, env) {
   if (!db) return apiError("D1 数据库未配置", 503);
   const keyword = String(new URL(request.url).searchParams.get("q") || "").trim().slice(0, 80);
   const now = sqlNow();
+  const selectMembers = `SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar,
+    u.created_at AS registered_at, u.last_login_at, u.last_used_at, u.disabled_at,
+    MAX(COALESCE(u.last_used_at, ''), COALESCE(k.last_used_at, ''), COALESCE(u.last_login_at, '')) AS recent_used_at,
+    k.id AS api_key_id, k.enabled AS api_key_enabled,
+    (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at
+    FROM memberships m
+    LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id
+    LEFT JOIN api_keys k ON k.owner_key = ('linuxdo:' || m.linuxdo_id)`;
   const statement = keyword
-    ? db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar, u.created_at AS registered_at, u.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR u.name LIKE ?) ORDER BY m.expires_at ASC LIMIT 500").bind(now, `%${keyword}%`, `%${keyword}%`)
-    : db.prepare("SELECT m.linuxdo_id, m.expires_at, m.updated_at, u.name, u.avatar, u.created_at AS registered_at, u.last_login_at, (SELECT MIN(granted_at) FROM membership_grants g WHERE g.linuxdo_id = m.linuxdo_id) AS membership_started_at FROM memberships m LEFT JOIN linuxdo_users u ON u.linuxdo_id = m.linuxdo_id WHERE m.expires_at > ? ORDER BY m.expires_at ASC LIMIT 500").bind(now);
+    ? db.prepare(`${selectMembers} WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR u.name LIKE ?) ORDER BY recent_used_at DESC, m.expires_at ASC LIMIT 500`).bind(now, `%${keyword}%`, `%${keyword}%`)
+    : db.prepare(`${selectMembers} WHERE m.expires_at > ? ORDER BY recent_used_at DESC, m.expires_at ASC LIMIT 500`).bind(now);
   const rows = await statement.all();
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""),
@@ -1367,10 +1461,73 @@ async function handleAdminMembers(request, env) {
     avatar: String(row.avatar || ""),
     registered_at: row.registered_at || null,
     last_login_at: row.last_login_at || null,
+    last_used_at: row.recent_used_at || row.last_used_at || row.last_login_at || null,
+    disabled: Boolean(row.disabled_at),
+    disabled_at: row.disabled_at || null,
+    has_api_key: Boolean(row.api_key_id),
+    api_key_enabled: Boolean(row.api_key_id) && Number(row.api_key_enabled) === 1,
     membership_started_at: row.membership_started_at || row.updated_at || null,
     expires_at: row.expires_at || null,
     updated_at: row.updated_at || null,
   })) } });
+}
+
+async function handleAdminMemberStatus(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const body = await parseJsonBody(request);
+  const linuxdoId = String(body.linuxdo_id || "").trim().slice(0, 80);
+  if (!linuxdoId || typeof body.disabled !== "boolean") return apiError("用户和状态参数无效", 400);
+  if (body.disabled && getAdminLinuxdoIds(env).has(linuxdoId)) return apiError("不能禁用管理员账号", 400);
+  const disabledAt = body.disabled ? sqlNow() : null;
+  const result = await db.prepare("UPDATE linuxdo_users SET disabled_at = ? WHERE linuxdo_id = ?").bind(disabledAt, linuxdoId).run();
+  if (!result.meta?.changes) return apiError("用户不存在", 404);
+  linuxdoUserAccessCache.delete(linuxdoId);
+  return jsonResponse(200, { code: 0, message: "Success", data: { linuxdo_id: linuxdoId, disabled: body.disabled, disabled_at: disabledAt } });
+}
+
+async function handleAdminMemberApiKey(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const linuxdoId = String(new URL(request.url).searchParams.get("linuxdo_id") || "").trim().slice(0, 80);
+  if (!linuxdoId) return apiError("缺少 Linux DO ID", 400);
+  const user = await db.prepare("SELECT linuxdo_id, name, disabled_at FROM linuxdo_users WHERE linuxdo_id = ? LIMIT 1").bind(linuxdoId).first();
+  if (!user) return apiError("用户不存在", 404);
+  const row = await db.prepare("SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at, enabled, expires_at FROM api_keys WHERE owner_key = ? LIMIT 1").bind(`linuxdo:${linuxdoId}`).first();
+  return jsonResponse(200, { code: 0, message: "Success", data: {
+    user: { linuxdo_id: linuxdoId, name: String(user.name || linuxdoId), disabled: Boolean(user.disabled_at) },
+    has_key: Boolean(row),
+    key: row ? {
+      id: Number(row.id),
+      name: String(row.name || "默认"),
+      key_preview: maskApiKey(row.api_key),
+      created_at: row.created_at || null,
+      last_used_at: row.last_used_at || null,
+      mi_uid_tail: row.mi_uid ? maskMiUid(row.mi_uid) : null,
+      device_id: row.device_id || null,
+      device_name: row.device_name || null,
+      bound_at: row.bound_at || null,
+      enabled: Number(row.enabled) === 1,
+      expires_at: row.expires_at || null,
+    } : null,
+  } });
+}
+
+async function handleAdminMemberApiKeyStatus(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const body = await parseJsonBody(request);
+  const linuxdoId = String(body.linuxdo_id || "").trim().slice(0, 80);
+  if (!linuxdoId || typeof body.enabled !== "boolean") return apiError("用户和 API Key 状态参数无效", 400);
+  const result = await db.prepare("UPDATE api_keys SET enabled = ? WHERE owner_key = ?").bind(body.enabled ? 1 : 0, `linuxdo:${linuxdoId}`).run();
+  if (!result.meta?.changes) return apiError("该用户尚未申请 API Key", 404);
+  return jsonResponse(200, { code: 0, message: "Success", data: { linuxdo_id: linuxdoId, enabled: body.enabled } });
 }
 
 async function handleAdminMemberGrant(request, env) {
@@ -1784,7 +1941,7 @@ async function handleKeysStatus(request, env) {
   if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
   const row = await db
     .prepare(
-      "SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at FROM api_keys WHERE owner_key = ? LIMIT 1",
+      "SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at, enabled, expires_at FROM api_keys WHERE owner_key = ? LIMIT 1",
     )
     .bind(ownerKey)
     .first();
@@ -1806,6 +1963,8 @@ async function handleKeysStatus(request, env) {
       device_id: row.device_id || null,
       device_name: row.device_name || null,
       bound_at: row.bound_at || null,
+      enabled: Number(row.enabled) === 1,
+      expires_at: row.expires_at || null,
     },
   });
 }
@@ -1842,11 +2001,15 @@ async function handleKeysReset(request, env) {
   const ownerKey = apiKeyOwnerKey(auth.session);
   if (!db) return apiKeyUnavailableResponse();
   if (!ownerKey) return jsonResponse(401, { code: 401, message: "Unauthorized" });
+  const existing = await db.prepare("SELECT id, enabled FROM api_keys WHERE owner_key = ? LIMIT 1").bind(ownerKey).first();
+  if (existing && Number(existing.enabled) !== 1) {
+    return jsonResponse(403, { code: 403, message: "API Key 已被管理员禁用，请联系管理员" });
+  }
   const key = generateApiKey();
   const now = sqlNow();
   await db
     .prepare(
-      "INSERT INTO api_keys (owner_key, api_key, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(owner_key) DO UPDATE SET api_key = excluded.api_key, mi_uid = NULL, device_id = NULL, device_name = NULL, device_token = NULL, bound_at = NULL, enabled = 1, expires_at = NULL, last_used_at = NULL",
+      "INSERT INTO api_keys (owner_key, api_key, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(owner_key) DO UPDATE SET api_key = excluded.api_key, mi_uid = NULL, device_id = NULL, device_name = NULL, device_token = NULL, bound_at = NULL, expires_at = NULL, last_used_at = NULL",
     )
     .bind(ownerKey, key, "默认", now)
     .run();
@@ -1896,6 +2059,9 @@ async function handleClientBind(request, env) {
   if (record.expires_at && Date.parse(record.expires_at) <= Date.now()) {
     return jsonResponse(401, { code: 401, message: "API Key 已过期" });
   }
+  if (await apiKeyOwnerDisabled(record, env)) {
+    return jsonResponse(403, { code: 403, message: "API Key 所属账号已被管理员禁用" });
+  }
   if (!db) {
     return jsonResponse(503, { code: 503, message: "D1 数据库未配置" });
   }
@@ -1912,7 +2078,7 @@ async function handleClientBind(request, env) {
     if (boundDeviceId && boundDeviceId !== deviceId) {
       return jsonResponse(403, { code: 403, message: "该 Key 已在其他设备绑定" });
     }
-    await db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now, record.id).run().catch(() => {});
+    await touchApiKeyActivity(record, env);
     return jsonResponse(200, {
       code: 0,
       message: "Success",
@@ -1933,6 +2099,8 @@ async function handleClientBind(request, env) {
     )
     .bind(miUid, deviceId, deviceName, token, now, now, record.id)
     .run();
+  const linuxdoId = linuxdoIdFromOwnerKey(record.owner_key);
+  if (linuxdoId) await touchLinuxdoUserActivity(linuxdoId, env);
   return jsonResponse(200, {
     code: 0,
     message: "Success",
@@ -3248,6 +3416,19 @@ async function backup4Json(url, { headers, timeoutMs = BACKUP4_TIMEOUT_MS, signa
   };
 }
 
+function gdstudioMetadataValidated(platform, url, size) {
+  if (Number(size || 0) < PREVIEW_MAX_BYTES) return false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (platform === "netease") return hostMatchesRule(host, ".music.126.net") || hostMatchesRule(host, ".music.163.com");
+    if (platform === "kuwo") return hostMatchesRule(host, ".kuwo.cn") || hostMatchesRule(host, ".kwcdn.kuwo.cn");
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 async function backup4TryGdstudio(platform, id, quality, _name, _artist, signal) {
   if (platform !== "netease" && platform !== "kuwo") return null;
 
@@ -3262,7 +3443,14 @@ async function backup4TryGdstudio(platform, id, quality, _name, _artist, signal)
   const parsed = response.json;
   const url = normalizeMediaUrl(parsed?.url || "");
   if (response.ok && url) {
-    return { url, provider: "gdstudio" };
+    return {
+      url,
+      provider: "gdstudio",
+      // GDStudio reports the final file size. Trust it only for the official
+      // platform CDN and only above the short-prompt threshold. This avoids
+      // Cron-colo false negatives while every other result still gets a Range probe.
+      validated: gdstudioMetadataValidated(platform, url, parsed?.size),
+    };
   }
   throw new Error(String(parsed?.detail || parsed?.message || `gdstudio failed (${response.status})`));
 }
@@ -4418,8 +4606,8 @@ async function recordUptimeCheck(env, result) {
         result.platform,
         result.success ? 1 : 0,
         Math.max(0, Math.min(300000, Math.round(Number(result.durationMs) || 0))),
-        result.success ? 200 : 502,
-        result.success ? null : "resolve_failed",
+        result.success ? 200 : Number(result.statusCode || 502),
+        result.success ? null : String(result.errorCode || "resolve_failed").slice(0, 240),
         String(result.canaryId || ""),
       ),
       db.prepare("DELETE FROM service_uptime_checks WHERE checked_at < ?")
@@ -4440,6 +4628,8 @@ async function runScheduledUptimeCheck(controller, env) {
 
   const startedAt = Date.now();
   let success = false;
+  let statusCode = 502;
+  let errorCode = "resolve_failed";
   try {
     const result = await resolveWithQualityFallback({
       platform,
@@ -4451,14 +4641,18 @@ async function runScheduledUptimeCheck(controller, env) {
       cover: "",
     }, env, { skipResolverMetrics: true });
     success = Boolean(normalizeMediaUrl(result?.url || ""));
-  } catch {
+  } catch (error) {
     success = false;
+    errorCode = metricError(error);
+    if (/超时|timeout|aborted/i.test(errorCode)) statusCode = 504;
   }
   await recordUptimeCheck(env, {
     platform,
     success,
     durationMs: Date.now() - startedAt,
     canaryId: canary.id,
+    statusCode,
+    errorCode,
   });
 }
 

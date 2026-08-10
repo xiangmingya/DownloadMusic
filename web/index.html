@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260809-12">
+    <link rel="stylesheet" href="style.css?v=20260810-13">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -195,7 +195,7 @@
                     <button id="adminMembersTab" class="admin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="adminMembersPanel" data-admin-tab="members">会员管理</button>
                     <button id="adminMonitoringTab" class="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="adminMonitoringPanel" data-admin-tab="monitoring">实时服务监控</button>
                 </div>
-                <section id="adminMembersPanel" class="admin-card admin-members-card admin-tab-panel" role="tabpanel" aria-labelledby="adminMembersTab" data-admin-tab-panel="members"><div class="section-heading admin-members-heading"><div><p class="eyebrow">会员管理</p><h2 id="adminMembersTitle">有效会员</h2><p class="admin-muted">显示最近登录、注册和会员有效期；支持按 Linux DO ID 或昵称查找。</p></div><div class="admin-member-toolbar"><label class="sr-only" for="adminMemberSearch">查找会员</label><input id="adminMemberSearch" type="search" placeholder="搜索昵称或 Linux DO ID"><button id="refreshMembersBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div><div id="adminMemberList" class="admin-member-list">正在读取…</div></section>
+                <section id="adminMembersPanel" class="admin-card admin-members-card admin-tab-panel" role="tabpanel" aria-labelledby="adminMembersTab" data-admin-tab-panel="members"><div class="section-heading admin-members-heading"><div><p class="eyebrow">会员管理</p><h2 id="adminMembersTitle">有效会员</h2><p class="admin-muted">显示最近使用、注册和会员有效期；支持管理用户状态及其 API Key。</p></div><div class="admin-member-toolbar"><label class="sr-only" for="adminMemberSearch">查找会员</label><input id="adminMemberSearch" type="search" placeholder="搜索昵称或 Linux DO ID"><button id="refreshMembersBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div><div id="adminMemberList" class="admin-member-list">正在读取…</div></section>
                 <section id="adminMonitoringPanel" class="admin-monitoring admin-tab-panel" role="tabpanel" aria-labelledby="adminMonitoringTab" data-admin-tab-panel="monitoring" hidden>
                     <div class="section-heading admin-monitoring-heading"><div><p class="eyebrow">用户真实调用数据 · 每 30 秒刷新</p><h2 id="monitoringTitle">服务实时监控</h2><p id="monitoringSummaryText" class="admin-muted">正在读取最近服务状态…</p></div><div class="monitoring-actions"><label class="sr-only" for="monitoringRange">统计范围</label><select id="monitoringRange" aria-label="统计范围"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select><button id="refreshMonitoringBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div>
                     <div id="monitoringKpis" class="monitoring-kpis" aria-live="polite"></div>
@@ -382,13 +382,24 @@
                 <button id="apiKeyUnbindLink" type="button" class="text-link" hidden>解绑设备</button>
             </div>
         </dialog>
+
+        <dialog id="adminApiKeyDialog" class="admin-api-key-dialog" aria-labelledby="adminApiKeyDialogTitle">
+            <div class="uptime-dialog-head">
+                <div><p class="eyebrow">管理员 · API KEY</p><h2 id="adminApiKeyDialogTitle">API Key 管理</h2><p id="adminApiKeyDialogUser" class="admin-muted">正在读取用户信息…</p></div>
+                <form method="dialog"><button class="uptime-dialog-close" type="submit" aria-label="关闭 API Key 管理"></button></form>
+            </div>
+            <div id="adminApiKeyDetails" class="admin-api-key-details" aria-live="polite">正在读取…</div>
+            <div class="admin-api-key-actions">
+                <button id="adminApiKeyToggleBtn" type="button" class="secondary-quiet-btn" hidden>禁用 API Key</button>
+            </div>
+        </dialog>
     </div>
 
     <script>
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260806-43';
+        const APP_ASSET_VERSION = '20260810-44';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -703,7 +714,10 @@
 
         const query = new URLSearchParams(window.location.search);
         const loginState = query.get('login');
-        if (loginState && loginState.startsWith('failed')) {
+        if (loginState === 'disabled') {
+            setLoginTip('此账号已被管理员禁用。', true);
+            history.replaceState(null, '', window.location.origin + window.location.pathname);
+        } else if (loginState && loginState.startsWith('failed')) {
             setLoginTip('Linux DO 登录失败，请稍后重试。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
