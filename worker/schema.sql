@@ -107,6 +107,31 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_key);
 
+-- API Key 外部调用网络活动：仅保存网络段哈希和脱敏地址，用于后台异常提醒。
+-- 不保存完整公网 IP，也不据此自动封禁用户。
+CREATE TABLE IF NOT EXISTS api_key_network_activity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_key_id INTEGER NOT NULL,
+  network_hash TEXT NOT NULL,
+  ip_preview TEXT NOT NULL,
+  country TEXT,
+  region TEXT,
+  city TEXT,
+  asn INTEGER,
+  user_agent TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  observations INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(api_key_id, network_hash),
+  FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_key_network_activity_key_time
+ON api_key_network_activity (api_key_id, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_key_network_activity_time
+ON api_key_network_activity (last_seen_at DESC);
+
 -- linuxdo_users belongs to the base authentication schema. Migration 0003 adds
 -- last_used_at and this index so the admin list can sort by real recent use.
 CREATE INDEX IF NOT EXISTS idx_linuxdo_users_last_used ON linuxdo_users (last_used_at DESC);

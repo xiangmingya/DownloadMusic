@@ -43,7 +43,8 @@ const env = {
   SESSION_SECRET: "test-session-secret",
   DB,
   RESOLVER_TOTAL_BUDGET_MS: "3000",
-  RESOLVER_HEDGE_DELAY_MS: "1000",
+  RESOLVER_EXPANSION_DELAY_MS: "150",
+  RESOLVER_INITIAL_CONCURRENCY: "3",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
 };
 
@@ -61,8 +62,28 @@ let qualityFallbackUsed = false;
 let unconfiguredProviderCalls = 0;
 let cancelledHedgedRequests = 0;
 let trustedCanaryMediaProbes = 0;
+const twoWaveStartedAt = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
+  if (url.includes("two-wave")) {
+    twoWaveStartedAt.push({ url, at: Date.now() });
+    if (url.includes("api.11na.cn")) {
+      return new Response("a", {
+        status: 206,
+        headers: { "Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/2000000" },
+      });
+    }
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 1200);
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      if (init.signal?.aborted) abort();
+      else init.signal?.addEventListener("abort", abort, { once: true });
+    });
+    throw new Error("first-wave provider intentionally slow");
+  }
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
     const uptimeCanary = url.includes("id=108914") || url.includes("id=66842");
@@ -158,11 +179,23 @@ try {
   assert.deepEqual(Object.keys((await cached.json()).data).sort(), ["cover", "lyrics", "url"]);
   assert.equal(resolverUpstreamCalls, 1, "a cache hit should not call upstream again");
 
+  const twoWaveStarted = Date.now();
+  const twoWave = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "two-wave", quality: "320k" }),
+  }), env);
+  assert.equal(twoWave.status, 200, "a validated second-wave provider should win");
+  assert.ok(twoWaveStartedAt.length >= 4, "the remaining provider pool should be released after the grace period");
+  const secondWaveCall = twoWaveStartedAt.find((entry) => entry.url.includes("api.11na.cn"));
+  assert.ok(secondWaveCall, "a low-priority rescue provider should be attempted");
+  assert.ok(secondWaveCall.at - twoWaveStarted >= 100, "rescue providers should wait for the short first-wave grace period");
+
   const hedged = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie },
     body: JSON.stringify({ platform: "netease", id: "cancel-hedge", quality: "320k" }),
-  }), { ...env, RESOLVER_HEDGE_DELAY_MS: "150" });
+  }), env);
   assert.equal(hedged.status, 200);
   assert.equal(cancelledHedgedRequests, 1, "a slower provider should be aborted after a hedged provider succeeds");
 

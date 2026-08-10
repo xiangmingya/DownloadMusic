@@ -21,6 +21,13 @@ const apiKey = {
   enabled: 1,
   expires_at: null,
 };
+const recentNetworkTime = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+const networkRows = [
+  { api_key_id: 7, network_hash: "network-a", ip_preview: "120.1.*.*", country: "CN", region: "广东", city: "广州", asn: 4134, user_agent: "Songloft", first_seen_at: recentNetworkTime, last_seen_at: recentNetworkTime, observations: 3 },
+  { api_key_id: 7, network_hash: "network-b", ip_preview: "121.2.*.*", country: "CN", region: "广东", city: "深圳", asn: 4134, user_agent: "Songloft", first_seen_at: recentNetworkTime, last_seen_at: recentNetworkTime, observations: 2 },
+  { api_key_id: 7, network_hash: "network-c", ip_preview: "122.3.*.*", country: "CN", region: "广东", city: "佛山", asn: 4134, user_agent: "Songloft", first_seen_at: recentNetworkTime, last_seen_at: recentNetworkTime, observations: 1 },
+];
+let recordedNetworkActivity = null;
 
 const DB = {
   prepare(sql) {
@@ -36,6 +43,7 @@ const DB = {
             return null;
           },
           async all() {
+            if (sql.includes("FROM api_key_network_activity")) return { results: networkRows.map((row) => ({ ...row })) };
             if (sql.includes("FROM memberships m")) {
               const user = users.get("user1");
               return { results: [{
@@ -57,6 +65,10 @@ const DB = {
             return { results: [] };
           },
           async run() {
+            if (sql.includes("INSERT INTO api_key_network_activity")) {
+              recordedNetworkActivity = { sql, args: [...args] };
+              return { meta: { changes: 1 } };
+            }
             if (sql.startsWith("UPDATE linuxdo_users SET last_used_at")) {
               const user = users.get(String(args[1]));
               if (user) user.last_used_at = args[0];
@@ -116,6 +128,7 @@ const members = (await membersResponse.json()).data.members;
 assert.equal(membersResponse.status, 200);
 assert.equal(members[0].last_used_at, apiKey.last_used_at, "member list should show latest real use including API Key activity");
 assert.equal(members[0].has_api_key, true);
+assert.equal(members[0].api_key_network_risk.status, "attention", "three networks in 24 hours should create an admin reminder");
 
 const keyResponse = await worker.fetch(new Request("https://api.example.com/api/admin/members/api-key?linuxdo_id=user1", { headers: { Cookie: adminCookie } }), env);
 const keyPayload = await keyResponse.json();
@@ -123,6 +136,27 @@ assert.equal(keyResponse.status, 200);
 assert.equal(keyPayload.data.key.device_name, "客厅音箱");
 assert.equal(keyPayload.data.key.key_preview.includes("*"), true);
 assert.equal("api_key" in keyPayload.data.key, false, "admin API must not expose the full API key");
+assert.equal(keyPayload.data.key.network_risk.status, "attention");
+assert.equal(keyPayload.data.key.network_risk.recent_networks.length, 3);
+
+const backgroundTasks = [];
+const toponeMetadataResponse = await worker.fetch(new Request("https://api.example.com/api/topone?platform=invalid", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${apiKey.api_key}`,
+    "Content-Type": "application/json",
+    "CF-Connecting-IP": "120.1.23.45",
+    "CF-IPCountry": "CN",
+    "User-Agent": "Songloft-Test",
+  },
+  body: JSON.stringify({ keyword: "晴天", quality: "320k" }),
+}), env, { waitUntil(task) { backgroundTasks.push(task); } });
+assert.equal(toponeMetadataResponse.status, 400, "invalid platform should stop before contacting music providers");
+await Promise.all(backgroundTasks);
+assert.ok(recordedNetworkActivity, "authenticated topone requests should record network activity in the background");
+assert.equal(recordedNetworkActivity.args[2], "120.1.23.*", "stored IP must be masked to its network prefix");
+assert.equal(recordedNetworkActivity.args[3], "CN");
+assert.notEqual(recordedNetworkActivity.args[1], "120.1.23.0/24", "the database must store a salted network hash, not the raw prefix");
 
 const disableUser = await worker.fetch(jsonRequest("/api/admin/members/status", { linuxdo_id: "user1", disabled: true }), env);
 assert.equal(disableUser.status, 200);

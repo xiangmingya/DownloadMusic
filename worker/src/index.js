@@ -86,8 +86,13 @@ const resolverProviderHealth = new Map();
 const resolverProviderInFlight = new Map();
 const linuxdoUserAccessCache = new Map();
 const userActivityWriteAt = new Map();
+const apiNetworkActivityWriteAt = new Map();
 const USER_ACCESS_CACHE_TTL_MS = 30 * 1000;
 const USER_ACTIVITY_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+const API_NETWORK_ACTIVITY_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+const API_NETWORK_ACTIVITY_RETENTION_DAYS = 30;
+const API_NETWORK_ACTIVITY_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let lastApiNetworkActivityCleanupAt = 0;
 
 export default {
   async fetch(request, env, ctx) {
@@ -739,6 +744,7 @@ async function validateApiKeyOnly(request, env) {
   await touchApiKeyActivity(record, env);
 
   return {
+    record,
     session: {
       type: "apikey",
       api_key_id: Number(record.id),
@@ -747,6 +753,153 @@ async function validateApiKeyOnly(request, env) {
       user: { name: String(record.name || "API Key") },
     },
   };
+}
+
+function requestClientIp(request) {
+  const direct = String(request.headers.get("CF-Connecting-IP") || "").trim();
+  if (direct) return direct;
+  return String(request.headers.get("X-Forwarded-For") || "").split(",")[0].trim();
+}
+
+function expandIpv6(value) {
+  const input = String(value || "").trim().toLowerCase().split("%")[0];
+  if (!input.includes(":")) return null;
+  const halves = input.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  if (halves.length === 1 && left.length !== 8) return null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (halves.length === 2 && missing < 1)) return null;
+  const groups = [...left, ...Array(missing).fill("0"), ...right];
+  if (groups.length !== 8 || groups.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+  return groups.map((part) => part.padStart(4, "0"));
+}
+
+function clientNetworkDescriptor(ip) {
+  const value = String(ip || "").trim();
+  const ipv4 = value.split(".");
+  if (ipv4.length === 4 && ipv4.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)) {
+    return {
+      network: `${ipv4[0]}.${ipv4[1]}.${ipv4[2]}.0/24`,
+      preview: `${ipv4[0]}.${ipv4[1]}.${ipv4[2]}.*`,
+    };
+  }
+  const ipv6 = expandIpv6(value);
+  if (!ipv6) return null;
+  const prefix = ipv6.slice(0, 4).join(":");
+  return { network: `${prefix}::/64`, preview: `${ipv6[0]}:${ipv6[1]}:${ipv6[2]}:${ipv6[3]}::/64` };
+}
+
+function apiNetworkActivitySalt(env) {
+  return String(env.API_ACTIVITY_SALT || "").trim() || sessionSecret(env);
+}
+
+async function recordApiKeyNetworkActivity(request, record, env) {
+  const db = getDatabase(env);
+  const apiKeyId = Number(record?.id || 0);
+  const descriptor = clientNetworkDescriptor(requestClientIp(request));
+  if (!db || !apiKeyId || !descriptor) return;
+  const networkHash = await sha256Hex(`${apiNetworkActivitySalt(env)}:${descriptor.network}`);
+  const throttleKey = `${apiKeyId}:${networkHash}`;
+  const nowMs = Date.now();
+  if (nowMs - Number(apiNetworkActivityWriteAt.get(throttleKey) || 0) < API_NETWORK_ACTIVITY_WRITE_INTERVAL_MS) return;
+  apiNetworkActivityWriteAt.set(throttleKey, nowMs);
+
+  const now = sqlNow();
+  const cf = request.cf || {};
+  const country = String(cf.country || request.headers.get("CF-IPCountry") || "").trim().slice(0, 8);
+  const region = String(cf.region || "").trim().slice(0, 80);
+  const city = String(cf.city || "").trim().slice(0, 80);
+  const asn = Math.max(0, Number(cf.asn || 0) || 0);
+  const userAgent = String(request.headers.get("User-Agent") || "").trim().slice(0, 180);
+  try {
+    await db.prepare(
+      `INSERT INTO api_key_network_activity
+        (api_key_id, network_hash, ip_preview, country, region, city, asn, user_agent, first_seen_at, last_seen_at, observations)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+       ON CONFLICT(api_key_id, network_hash) DO UPDATE SET
+         ip_preview = excluded.ip_preview,
+         country = excluded.country,
+         region = excluded.region,
+         city = excluded.city,
+         asn = excluded.asn,
+         user_agent = excluded.user_agent,
+         last_seen_at = excluded.last_seen_at,
+         observations = api_key_network_activity.observations + 1`,
+    ).bind(apiKeyId, networkHash, descriptor.preview, country, region, city, asn, userAgent, now, now).run();
+
+    if (nowMs - lastApiNetworkActivityCleanupAt >= API_NETWORK_ACTIVITY_CLEANUP_INTERVAL_MS) {
+      lastApiNetworkActivityCleanupAt = nowMs;
+      const cutoff = new Date(nowMs - API_NETWORK_ACTIVITY_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      await db.prepare("DELETE FROM api_key_network_activity WHERE last_seen_at < ?").bind(cutoff).run();
+    }
+  } catch (error) {
+    apiNetworkActivityWriteAt.delete(throttleKey);
+    console.warn(`[api-key-network] write skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function apiKeyNetworkRisk(rows, nowMs = Date.now()) {
+  const recent = (Array.isArray(rows) ? rows : [])
+    .filter((row) => Number.isFinite(Date.parse(row.last_seen_at)))
+    .sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at));
+  const rows24h = recent.filter((row) => Date.parse(row.last_seen_at) >= nowMs - 24 * 60 * 60 * 1000);
+  const rows7d = recent.filter((row) => Date.parse(row.last_seen_at) >= nowMs - 7 * 24 * 60 * 60 * 1000);
+  const countries24h = new Set(rows24h.map((row) => String(row.country || "").trim()).filter(Boolean));
+  const asns24h = new Set(rows24h.map((row) => Number(row.asn || 0)).filter((value) => value > 0));
+  const reasons = [];
+  if (rows24h.length >= 3) reasons.push(`24 小时内出现 ${rows24h.length} 个网络段`);
+  if (countries24h.size >= 2) reasons.push(`24 小时内出现 ${countries24h.size} 个国家或地区`);
+  if (asns24h.size >= 3) reasons.push(`24 小时内出现 ${asns24h.size} 个网络运营商`);
+  if (rows7d.length >= 5) reasons.push(`7 天内出现 ${rows7d.length} 个网络段`);
+  return {
+    status: reasons.length ? "attention" : "normal",
+    reasons,
+    networks_24h: rows24h.length,
+    networks_7d: rows7d.length,
+    countries_24h: countries24h.size,
+    asns_24h: asns24h.size,
+    recent_networks: recent.slice(0, 8).map((row) => ({
+      ip_preview: String(row.ip_preview || ""),
+      country: String(row.country || ""),
+      region: String(row.region || ""),
+      city: String(row.city || ""),
+      asn: Number(row.asn || 0) || null,
+      user_agent: String(row.user_agent || ""),
+      first_seen_at: row.first_seen_at || null,
+      last_seen_at: row.last_seen_at || null,
+      observations: Number(row.observations || 0),
+    })),
+  };
+}
+
+async function loadApiKeyNetworkActivity(db, apiKeyIds) {
+  const ids = [...new Set((apiKeyIds || []).map(Number).filter((id) => id > 0))];
+  if (!ids.length) return { available: true, rowsByKey: new Map() };
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const rowsByKey = new Map();
+    // D1/SQLite variable limits vary by deployment; keep admin lists reliable with small batches.
+    for (let offset = 0; offset < ids.length; offset += 80) {
+      const batch = ids.slice(offset, offset + 80);
+      const placeholders = batch.map(() => "?").join(",");
+      const result = await db.prepare(
+        `SELECT api_key_id, network_hash, ip_preview, country, region, city, asn, user_agent, first_seen_at, last_seen_at, observations
+         FROM api_key_network_activity
+         WHERE api_key_id IN (${placeholders}) AND last_seen_at >= ?
+         ORDER BY last_seen_at DESC`,
+      ).bind(...batch, cutoff).all();
+      for (const row of result.results || []) {
+        const id = Number(row.api_key_id || 0);
+        if (!rowsByKey.has(id)) rowsByKey.set(id, []);
+        rowsByKey.get(id).push(row);
+      }
+    }
+    return { available: true, rowsByKey };
+  } catch {
+    return { available: false, rowsByKey: new Map() };
+  }
 }
 
 async function validateBoundApiKey(request, env) {
@@ -1454,6 +1607,8 @@ async function handleAdminMembers(request, env) {
     ? db.prepare(`${selectMembers} WHERE m.expires_at > ? AND (m.linuxdo_id LIKE ? OR u.name LIKE ?) ORDER BY recent_used_at DESC, m.expires_at ASC LIMIT 500`).bind(now, `%${keyword}%`, `%${keyword}%`)
     : db.prepare(`${selectMembers} WHERE m.expires_at > ? ORDER BY recent_used_at DESC, m.expires_at ASC LIMIT 500`).bind(now);
   const rows = await statement.all();
+  const memberRows = rows.results || [];
+  const networkActivity = await loadApiKeyNetworkActivity(db, memberRows.map((row) => row.api_key_id));
   return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
     linuxdo_id: String(row.linuxdo_id || ""),
     name: String(row.name || row.linuxdo_id || ""),
@@ -1466,6 +1621,11 @@ async function handleAdminMembers(request, env) {
     disabled_at: row.disabled_at || null,
     has_api_key: Boolean(row.api_key_id),
     api_key_enabled: Boolean(row.api_key_id) && Number(row.api_key_enabled) === 1,
+    api_key_network_risk: row.api_key_id ? {
+      ...apiKeyNetworkRisk(networkActivity.rowsByKey.get(Number(row.api_key_id)) || []),
+      available: networkActivity.available,
+      recent_networks: undefined,
+    } : null,
     membership_started_at: row.membership_started_at || row.updated_at || null,
     expires_at: row.expires_at || null,
     updated_at: row.updated_at || null,
@@ -1498,6 +1658,11 @@ async function handleAdminMemberApiKey(request, env) {
   const user = await db.prepare("SELECT linuxdo_id, name, disabled_at FROM linuxdo_users WHERE linuxdo_id = ? LIMIT 1").bind(linuxdoId).first();
   if (!user) return apiError("用户不存在", 404);
   const row = await db.prepare("SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at, enabled, expires_at FROM api_keys WHERE owner_key = ? LIMIT 1").bind(`linuxdo:${linuxdoId}`).first();
+  const networkActivity = row ? await loadApiKeyNetworkActivity(db, [row.id]) : { available: true, rowsByKey: new Map() };
+  const networkRisk = row ? {
+    ...apiKeyNetworkRisk(networkActivity.rowsByKey.get(Number(row.id)) || []),
+    available: networkActivity.available,
+  } : null;
   return jsonResponse(200, { code: 0, message: "Success", data: {
     user: { linuxdo_id: linuxdoId, name: String(user.name || linuxdoId), disabled: Boolean(user.disabled_at) },
     has_key: Boolean(row),
@@ -1513,6 +1678,7 @@ async function handleAdminMemberApiKey(request, env) {
       bound_at: row.bound_at || null,
       enabled: Number(row.enabled) === 1,
       expires_at: row.expires_at || null,
+      network_risk: networkRisk,
     } : null,
   } });
 }
@@ -2014,6 +2180,13 @@ async function handleKeysReset(request, env) {
     .bind(ownerKey, key, "默认", now)
     .run();
   const row = await db.prepare("SELECT id FROM api_keys WHERE owner_key = ? LIMIT 1").bind(ownerKey).first();
+  if (row?.id) {
+    try {
+      await db.prepare("DELETE FROM api_key_network_activity WHERE api_key_id = ?").bind(Number(row.id)).run();
+    } catch {
+      // Older deployments may not have applied the optional activity migration yet.
+    }
+  }
   return jsonResponse(200, {
     code: 0,
     message: "Success",
@@ -2814,8 +2987,8 @@ async function handleSearch(request, env) {
 // POST /api/topone?platform=netease,qq,kuwo
 // Body: { keyword, hint?, quality? }
 // Auth: Authorization: Bearer <KEY> 或 X-DM-Key: <KEY>（只验 Key，设备绑定为后续锚点）
-// 各平台并发搜索，按平台优先级消费结果；平台内按标题匹配度 + 歌手提示优先尝试候选，
-// 取第一个能解析出播放地址的结果（整体预算 5.5 秒，单平台预算 4 秒）。
+// 各平台同时搜索和解析，不再按平台顺序等待；第一个通过音频验证的结果直接胜出，
+// 其余平台随即取消。整体预算 5.5 秒，以适配外部插件常见的 6 秒请求超时。
 async function handleTopone(request, env, ctx) {
   const startedAt = Date.now();
   const body = await parseJsonBody(request);
@@ -2839,6 +3012,9 @@ async function handleTopone(request, env, ctx) {
     const payload = auth?.error ? await auth.error.json().catch(() => null) : null;
     return jsonResponse(status, { code: payload?.code ?? -1, msg: payload?.message || "API Key 无效", data: null });
   }
+  const networkActivityTask = recordApiKeyNetworkActivity(request, auth.record, env);
+  if (ctx?.waitUntil) ctx.waitUntil(networkActivityTask);
+  else void networkActivityTask;
 
   const url = new URL(request.url);
   const requested = String(url.searchParams.get("platform") || "").trim().toLowerCase();
@@ -2850,12 +3026,35 @@ async function handleTopone(request, env, ctx) {
   }
 
   const overallBudgetMs = 5500;
-  const tasks = platforms.map((platform) =>
-    runToponePlatform(platform, searchKeyword, keyword, hintArtist, quality, env, ctx, startedAt),
-  );
-  for (let i = 0; i < tasks.length; i += 1) {
-    const result = await withTimeout(tasks[i], overallBudgetMs - (Date.now() - startedAt));
+  const deadlineAt = startedAt + overallBudgetMs;
+  const pending = new Map();
+  platforms.forEach((platform, index) => {
+    const controller = new AbortController();
+    const promise = runToponePlatform(
+      platform,
+      searchKeyword,
+      keyword,
+      hintArtist,
+      quality,
+      env,
+      ctx,
+      deadlineAt,
+      controller.signal,
+    ).then((result) => ({ index, result }));
+    pending.set(index, { promise, controller });
+  });
+  const abortPending = () => pending.forEach((entry) => entry.controller.abort());
+
+  while (pending.size > 0 && Date.now() < deadlineAt) {
+    const raced = await Promise.race([
+      ...[...pending.values()].map((entry) => entry.promise),
+      sleep(Math.max(1, deadlineAt - Date.now())).then(() => ({ timeout: true })),
+    ]);
+    if (raced?.timeout) break;
+    pending.delete(raced.index);
+    const result = raced.result;
     if (!result) continue;
+    abortPending();
     const { hit, parseData } = result;
     console.log(`[topone] hit platform=${result.platform} id=${hit.id} elapsed=${Date.now() - startedAt}ms`);
     return jsonResponse(200, {
@@ -2875,27 +3074,28 @@ async function handleTopone(request, env, ctx) {
       },
     });
   }
+  abortPending();
 
   console.log(`[topone] done 404 elapsed=${Date.now() - startedAt}ms keyword=${keyword}`);
   return jsonResponse(404, { code: 404, msg: "未找到歌曲", data: null });
 }
 
-async function runToponePlatform(platform, searchKeyword, title, artist, quality, env, ctx, startedAt) {
+async function runToponePlatform(platform, searchKeyword, title, artist, quality, env, ctx, deadlineAt, signal) {
   if (await isSourceDisabled(env, platform)) return null;
+  if (signal?.aborted) return null;
 
-  const candidates = await withTimeout(searchToponeCandidates(platform, searchKeyword, env), 4000);
+  const searchBudgetMs = Math.min(4000, Math.max(1, deadlineAt - Date.now()));
+  const candidates = await withTimeout(searchToponeCandidates(platform, searchKeyword, env), searchBudgetMs);
   if (!Array.isArray(candidates) || candidates.length === 0) {
     console.log(`[topone] ${platform} search none keyword=${searchKeyword}`);
     return null;
   }
   const sorted = toponeSortCandidates(candidates, title, artist);
 
-  const platformBudgetMs = 4000;
-  const platformStartedAt = Date.now();
   for (const hit of sorted.slice(0, 4)) {
-    if (Date.now() - platformStartedAt > platformBudgetMs) break;
-    if (Date.now() - startedAt > 5200) break;
-    const parseData = await withTimeout(parseToponeCandidate(platform, hit, quality, env, ctx), 1500);
+    const remainingMs = deadlineAt - Date.now();
+    if (signal?.aborted || remainingMs <= 250) break;
+    const parseData = await parseToponeCandidate(platform, hit, quality, env, ctx, remainingMs, signal);
     if (parseData && parseData.url) {
       return { platform, hit, parseData };
     }
@@ -2933,9 +3133,9 @@ async function searchToponeCandidates(platform, keyword, env) {
   return [];
 }
 
-async function parseToponeCandidate(platform, hit, quality, env, ctx) {
+async function parseToponeCandidate(platform, hit, quality, env, ctx, budgetMs, signal) {
   try {
-    return await resolveWithHedging({
+    return await resolveWithQualityFallback({
       platform,
       id: String(hit.id || ""),
       quality: backup4NormalizeQuality(quality),
@@ -2943,7 +3143,7 @@ async function parseToponeCandidate(platform, hit, quality, env, ctx) {
       artist: String(hit.artist || ""),
       album: String(hit.album || ""),
       cover: normalizeMediaUrl(hit.cover || ""),
-    }, env, ctx);
+    }, env, ctx, budgetMs, signal);
   } catch {
     return null;
   }
@@ -4200,8 +4400,8 @@ function resolverConfig(env) {
   return {
     enabled: String(env.RESOLVER_V2_ENABLED || "true").toLowerCase() !== "false",
     totalBudgetMs: int(env.RESOLVER_TOTAL_BUDGET_MS, 7000, 2000, 15000),
-    hedgeDelayMs: int(env.RESOLVER_HEDGE_DELAY_MS, 700, 150, 3000),
-    maxConcurrent: int(env.RESOLVER_MAX_CONCURRENCY, 2, 1, 2),
+    expansionDelayMs: int(env.RESOLVER_EXPANSION_DELAY_MS, 400, 100, 1500),
+    initialConcurrency: int(env.RESOLVER_INITIAL_CONCURRENCY, 3, 1, 5),
     providerConcurrency: int(env.RESOLVER_PROVIDER_CONCURRENCY, 3, 1, 20),
     cacheTtlSeconds: int(env.RESOLVER_CACHE_TTL_SECONDS, 120, 15, 600),
     negativeCacheTtlSeconds: int(env.RESOLVER_NEGATIVE_CACHE_TTL_SECONDS, 20, 5, 60),
@@ -4393,19 +4593,37 @@ function queueResolverMetric(ctx, env, metric) {
 
 async function getResolverCandidates(platform, env) {
   const disabled = new Set(await getDisabledSources(env));
+  const now = Date.now();
   return getBackup4ProviderChain(platform, env)
     .filter((item) => resolverSourceConfigured(item.source, env))
-    .filter((item) => !disabled.has(item.source) && Date.now() >= getResolverHealth(platform, item.source).circuitUntil)
-    .map((item, index) => ({ ...item, baseIndex: index, score: resolverScore(platform, item.source, index) }))
+    .filter((item) => !disabled.has(item.source))
+    .map((item, index) => {
+      const circuitOpen = now < getResolverHealth(platform, item.source).circuitUntil;
+      return {
+        ...item,
+        baseIndex: index,
+        circuitOpen,
+        // A cooling-down source stays out of the first wave but remains in the
+        // rescue wave. This preserves "all enabled sources failed" semantics
+        // and also lets a recovered public API rejoin without waiting minutes.
+        score: resolverScore(platform, item.source, index) - (circuitOpen ? 10000 : 0),
+      };
+    })
     .sort((a, b) => b.score - a.score || a.baseIndex - b.baseIndex);
 }
 
 async function runResolverProvider(candidate, input, env, config, signal) {
   const source = candidate.source;
-  const active = Number(resolverProviderInFlight.get(source) || 0);
-  if (active >= config.providerConcurrency) {
-    return { ok: false, source, status: 503, error: "provider_busy" };
+  // Keep a per-provider concurrency ceiling across different songs, but queue
+  // briefly instead of treating a busy provider as a failed attempt. This is
+  // important when several friends request songs at the same time: every
+  // enabled provider still gets a real chance before the song is rejected.
+  while (Number(resolverProviderInFlight.get(source) || 0) >= config.providerConcurrency) {
+    if (signal?.aborted) return { ok: false, source, status: 499, error: "aborted" };
+    await sleep(25);
   }
+  if (signal?.aborted) return { ok: false, source, status: 499, error: "aborted" };
+  const active = Number(resolverProviderInFlight.get(source) || 0);
   resolverProviderInFlight.set(source, active + 1);
   const startedAt = Date.now();
   try {
@@ -4438,14 +4656,29 @@ async function runResolverProvider(candidate, input, env, config, signal) {
   }
 }
 
-async function resolveWithHedging(input, env, ctx, budgetMs = null) {
+function mergeAbortSignals(...signals) {
+  const activeSignals = signals.filter(Boolean);
+  if (activeSignals.length <= 1) return activeSignals[0];
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(activeSignals);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  activeSignals.forEach((signal) => {
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+  return controller.signal;
+}
+
+async function resolveWithHedging(input, env, ctx, budgetMs = null, outerSignal = null) {
   const baseConfig = resolverConfig(env);
   const config = Number.isFinite(budgetMs)
     ? { ...baseConfig, totalBudgetMs: Math.max(300, Math.min(baseConfig.totalBudgetMs, Math.floor(budgetMs))) }
     : baseConfig;
-  // After removing disabled and unconfigured providers, walk every remaining
-  // source until one succeeds or the overall request budget is exhausted.
-  // The deadline and concurrency cap still prevent an unbounded request.
+  // Start the best historical providers immediately. If they have not produced
+  // a validated result after a short grace period, release every remaining
+  // provider at once. A fast failure replenishes the first wave immediately.
+  // Therefore every enabled/configured provider is attempted before failure,
+  // while healthy cache-miss traffic usually needs only the small first wave.
   const candidates = await getResolverCandidates(input.platform, env);
   if (!candidates.length) throw new Error("当前平台没有可用解析源");
   const startedAt = Date.now();
@@ -4457,31 +4690,56 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
     active.forEach((entry) => entry.controller.abort());
   };
   const start = () => {
-    if (nextIndex >= candidates.length || active.size >= config.maxConcurrent) return false;
+    if (nextIndex >= candidates.length) return false;
     const candidate = candidates[nextIndex++];
     const controller = new AbortController();
-    const promise = runResolverProvider(candidate, input, env, config, controller.signal).then((result) => ({ candidate, result }));
+    const signal = mergeAbortSignals(controller.signal, outerSignal);
+    const promise = runResolverProvider(candidate, input, env, config, signal).then((result) => ({ candidate, result }));
     active.set(candidate.source, { promise, controller });
     return true;
   };
-  start();
-  let nextHedgeAt = startedAt + config.hedgeDelayMs;
+  const fillInitialWave = () => {
+    while (active.size < config.initialConcurrency && start()) {
+      // Fill the bounded first wave.
+    }
+  };
+  const startAllRemaining = () => {
+    while (start()) {
+      // The second wave deliberately releases all remaining providers.
+    }
+  };
+  fillInitialWave();
+  const expansionDelayMs = Math.min(config.expansionDelayMs, Math.max(50, Math.floor(config.totalBudgetMs * 0.25)));
+  const expansionAt = startedAt + expansionDelayMs;
+  let expanded = false;
 
-  while (active.size > 0 && Date.now() < deadlineAt) {
-    const waitMs = Math.max(1, Math.min(deadlineAt - Date.now(), nextHedgeAt - Date.now()));
+  while ((active.size > 0 || nextIndex < candidates.length) && Date.now() < deadlineAt && !outerSignal?.aborted) {
+    const now = Date.now();
+    if (!expanded && now >= expansionAt) {
+      expanded = true;
+      startAllRemaining();
+    }
+    if (active.size === 0) {
+      if (expanded) startAllRemaining();
+      else fillInitialWave();
+      continue;
+    }
+    const nextTimerAt = expanded ? deadlineAt : Math.min(deadlineAt, expansionAt);
+    const waitMs = Math.max(1, nextTimerAt - Date.now());
     const raced = await Promise.race([
       ...[...active.values()].map((entry) => entry.promise),
       sleep(waitMs).then(() => ({ timer: true })),
     ]);
     if (raced?.timer) {
-      if (active.size < config.maxConcurrent) start();
-      nextHedgeAt = Date.now() + config.hedgeDelayMs;
+      if (!expanded && Date.now() >= expansionAt) {
+        expanded = true;
+        startAllRemaining();
+      }
       continue;
     }
     active.delete(raced.candidate.source);
     const { result } = raced;
-    const providerBusy = result.error === "provider_busy";
-    if (!providerBusy) {
+    if (result.error !== "aborted") {
       updateResolverHealth(input.platform, result.source, result.ok, Number(result.durationMs || 0), Number(result.status || 200));
       queueResolverMetric(ctx, env, {
         source: result.source,
@@ -4495,26 +4753,34 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null) {
     if (result.ok) {
       abortActive();
       queueResolverMetric(ctx, env, { source: result.data.provider, operation: "final_parse", success: true, status: 200, durationMs: Date.now() - startedAt });
-      return { ...result.data, attempt_count: nextIndex - active.size, elapsed_ms: Date.now() - startedAt };
+      return { ...result.data, attempt_count: nextIndex, elapsed_ms: Date.now() - startedAt };
     }
     errors.push(`${result.source}:${result.error}`);
-    start();
+    if (expanded) startAllRemaining();
+    else fillInitialWave();
   }
+  active.forEach((entry, source) => errors.push(`${source}:timeout`));
   abortActive();
+  if (outerSignal?.aborted) throw new Error("解析已取消");
   throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
 }
 
 // Lossless availability varies by platform and provider. Preserve the user's
 // preferred quality first, then gracefully fall back rather than leaving a
 // song unplayable. Every fallback still goes through the same media checks.
-async function resolveWithQualityFallback(input, env, ctx) {
+async function resolveWithQualityFallback(input, env, ctx, budgetMs = null, outerSignal = null) {
   const requestedQuality = backup4NormalizeQuality(input.quality);
   const qualities = requestedQuality.startsWith("flac")
     ? [requestedQuality, "320k", "128k"]
     : [requestedQuality];
-  const deadlineAt = Date.now() + resolverConfig(env).totalBudgetMs;
+  const configuredBudgetMs = resolverConfig(env).totalBudgetMs;
+  const totalBudgetMs = Number.isFinite(budgetMs)
+    ? Math.max(300, Math.min(configuredBudgetMs, Math.floor(budgetMs)))
+    : configuredBudgetMs;
+  const deadlineAt = Date.now() + totalBudgetMs;
   let lastError = null;
   for (let index = 0; index < qualities.length; index += 1) {
+    if (outerSignal?.aborted) break;
     const quality = qualities[index];
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 300) break;
@@ -4522,13 +4788,14 @@ async function resolveWithQualityFallback(input, env, ctx) {
     // keeps FLAC fallback within the frontend's 10-second request timeout.
     const attemptBudgetMs = index === qualities.length - 1
       ? remainingMs
-      : Math.floor(remainingMs * (index === 0 ? 0.3 : 0.72));
+      : Math.floor(remainingMs * 0.7);
     try {
-      return await resolveWithHedging({ ...input, quality }, env, ctx, attemptBudgetMs);
+      return await resolveWithHedging({ ...input, quality }, env, ctx, attemptBudgetMs, outerSignal);
     } catch (error) {
       lastError = error;
     }
   }
+  if (outerSignal?.aborted) throw new Error("解析已取消");
   throw lastError || new Error("解析失败");
 }
 

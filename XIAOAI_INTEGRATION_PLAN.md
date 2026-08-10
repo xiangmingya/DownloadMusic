@@ -220,6 +220,7 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_key);
 - `api_keys.expires_at`：Key 过期。
 - 配额字段（每日解析次数、流量）、限流、速率控制。
 - KEY 与米家账号 / 设备绑定（真限制）。
+- API 侧网络活动提醒（当前采用）：记录 Key 的脱敏网络段、地区和运营商；多网络异常只在会员管理端提醒，由管理员人工处理，不自动封禁。
 - 哈希存储 + 明文仅一次展示。
 - 签名媒体 URL（`sig` + `exp`，HMAC 可携带 KEY ID）——小爱云端直接拉流时使用。
 

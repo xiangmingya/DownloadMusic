@@ -11,7 +11,7 @@
 - 管理员服务监控：D1 只聚合用户真实流量中的各主源和备用源调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/search` `/api/proxy/resolve` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - `/api/proxy/search`：主搜索失败时在 Worker 内部走多源兜底
-  - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两源延迟竞速
+  - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两批智能竞速（首批健康源，短延迟后放出全部剩余源）
   - 可选：JKAPI（网易云、QQ；需自行配置 `JKAPI_API_KEY`）
 
 ## 路由
@@ -90,6 +90,8 @@ wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 管理员用 Linux DO 白名单账号登录后，右上角会出现“管理”。服务监控仅在这个页面显示，普通用户无法请求接口。
 
 公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
+
+API Key 网络异常提醒需要执行 `migrations/0004_api_key_network_activity.sql`。该表只保存加盐后的网络段哈希、脱敏地址和 Cloudflare 地区/ASN；提醒不会自动禁用用户或 Key。
 
 用户状态和最近使用时间需要执行 `migrations/0003_user_activity.sql`。最近使用最多每 5 分钟写入一次，网页与 API Key 调用都会更新；禁用用户会同时阻止其现有会话和 API Key。
 
