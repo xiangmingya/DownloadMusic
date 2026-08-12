@@ -19,6 +19,7 @@ crons = ["*/5 * * * *"]
 # - BACKUP4_LXMUSIC_ONRENDER_KEY（LXMusic Onrender 请求签名）
 # - BACKUP4_LXMUSIC_SCRIPT_MD5（LXMusic 签名材料）
 # - BACKUP4_LXMUSIC_SECRET_KEY（LXMusic 签名材料）
+# - APIBYTE_KUWO_API_KEY（山海云端酷我歌单；免费额度 500 次/日，不用于播放解析）
 # - LINUXDO_CLIENT_ID
 # - LINUXDO_CLIENT_SECRET
 # - LINUXDO_REDIRECT_URI

@@ -21,6 +21,7 @@ const BACKUP4_LXMUSIC_ONRENDER_URL = "https://lxmusicapi.onrender.com";
 const BACKUP4_LXMUSIC_SIGNED_URL = "https://88.lxmusic.xn--fiqs8s";
 const BACKUP4_OIAPI_MUSIC163_URL = "https://oiapi.net/api/Music_163";
 const BACKUP4_OIAPI_KUWO_URL = "https://oiapi.net/api/Kuwo";
+const BACKUP4_APIBYTE_KUWO_URL = "https://apione.apibyte.cn/kwmusic";
 const BACKUP4_QQMP3_ENDPOINTS = [
   "https://www.qqmp3.vip/api/kw.php",
   "https://bb.qqmp3.vip/api/kw.php",
@@ -73,6 +74,7 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "jkapi", category: "resolve", order: 60, name: "JKAPI 音乐接口", detail: "网易云 / QQ 音乐接口 · 播放链接解析", endpoint: "jkapi.com/api/music" },
   { source: "oiapi_music163", category: "resolve", order: 70, name: "OIAPI 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
   { source: "oiapi_kuwo", category: "resolve", order: 80, name: "OIAPI 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "oiapi.net" },
+  { source: "apibyte_kuwo", category: "data", order: 31, name: "山海云端 酷我歌单", detail: "酷我音乐歌单搜索与详情 · 限额缓存数据源", endpoint: "apione.apibyte.cn" },
   { source: "chksz_163", category: "resolve", order: 90, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
   { source: "chksz_qq", category: "resolve", order: 91, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
   { source: "bugpk", category: "resolve", order: 95, name: "BugPK 音乐解析聚合", detail: "QQ / 网易云音乐接口 · 播放链接解析", endpoint: "api.bugpk.com" },
@@ -2440,6 +2442,67 @@ async function upstreamJson(url, init = {}, encoding = "utf-8") {
   return { status: resp.status, json, text };
 }
 
+async function apibyteKuwoJson(env, params, cacheTtlSeconds) {
+  const apiKey = String(env.APIBYTE_KUWO_API_KEY || "").trim();
+  if (!apiKey) throw new Error("山海云端酷我歌单 Key 未配置");
+  const endpoint = new URL(BACKUP4_APIBYTE_KUWO_URL);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") endpoint.searchParams.set(key, String(value));
+  });
+  const { status, json } = await upstreamJson(endpoint.toString(), {
+    headers: { "X-Api-Key": apiKey },
+    cf: { cacheEverything: true, cacheTtl: cacheTtlSeconds },
+  });
+  if (status < 200 || status >= 300 || Number(json?.code) !== 200) {
+    throw new Error(String(json?.msg || json?.message || `山海云端酷我歌单请求失败 (${status})`));
+  }
+  return json?.data;
+}
+
+function parseApibyteKuwoPlaylistSongs(data) {
+  const items = Array.isArray(data?.music_list) ? data.music_list : [];
+  return {
+    list: items.map((item) => ({
+      id: String(item?.rid || item?.musicrid || "").replace(/^MUSIC_/, ""),
+      name: String(item?.name || "未知歌曲"),
+      artist: String(item?.artist || "未知歌手"),
+      album: String(item?.album || ""),
+      cover: normalizeMediaUrl(item?.images?.pic || item?.images?.album_pic || ""),
+    })).filter((item) => item.id),
+  };
+}
+
+async function callApibyteKuwoPlaylist(env, id) {
+  const data = await apibyteKuwoJson(env, {
+    action: "playlist_detail",
+    playlist_id: id,
+    page: 0,
+    size: 1000,
+  }, 60 * 60);
+  return parseApibyteKuwoPlaylistSongs(data);
+}
+
+async function callApibyteKuwoPlaylists(env) {
+  const data = await apibyteKuwoJson(env, {
+    action: "search",
+    type: "playlist",
+    keyword: "热门",
+    page: 0,
+    size: 30,
+  }, 30 * 60);
+  const seen = new Set();
+  return (Array.isArray(data) ? data : [])
+    .map((item) => ({
+      id: String(item?.id || ""),
+      name: String(item?.name || "热门歌单"),
+      cover: normalizeMediaUrl(item?.img || item?.pic || ""),
+      trackCount: Number(item?.total || 0),
+      playCount: Number(item?.listencnt || 0),
+    }))
+    .filter((item) => item.id && !seen.has(item.id) && seen.add(item.id))
+    .slice(0, 30);
+}
+
 const NETEASE_WEB_HEADERS = {
   Referer: "https://music.163.com/",
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -2600,7 +2663,7 @@ async function callSearch(platform, keyword, page, limit) {
   throw new Error("不支持的平台");
 }
 
-async function callPlaylist(platform, id) {
+async function callPlaylist(platform, id, env) {
   if (platform === "netease") {
     const endpoint = new URL("https://music.163.com/api/playlist/detail");
     endpoint.searchParams.set("id", id);
@@ -2644,6 +2707,13 @@ async function callPlaylist(platform, id) {
   }
 
   if (platform === "kuwo") {
+    if (String(env?.APIBYTE_KUWO_API_KEY || "").trim()) {
+      try {
+        return await callApibyteKuwoPlaylist(env, id);
+      } catch {
+        // Preserve the existing Kuwo endpoint as a no-quota fallback.
+      }
+    }
     const endpoint = new URL("http://nplserver.kuwo.cn/pl.svc");
     const query = {
       op: "getlistinfo",
@@ -2745,7 +2815,7 @@ async function callToplists(platform) {
 
 async function callToplist(platform, id) {
   if (platform === "netease") {
-    const data = await callPlaylist(platform, id);
+    const data = await callPlaylist(platform, id, null);
     return { id, name: "网易云榜单", cover: "", songs: data.list || [] };
   }
 
@@ -2854,7 +2924,7 @@ function parseJsonpJson(text) {
   }
 }
 
-async function callPlaylists(platform) {
+async function callPlaylists(platform, env) {
   if (platform === "netease") {
     const endpoint = new URL("https://music.163.com/api/playlist/list");
     endpoint.searchParams.set("cat", "全部");
@@ -2904,6 +2974,12 @@ async function callPlaylists(platform) {
     })).filter((item) => item.id);
   }
 
+  if (platform === "kuwo") {
+    const playlists = await callApibyteKuwoPlaylists(env);
+    if (playlists.length > 0) return playlists;
+    throw new Error("未找到酷我推荐歌单");
+  }
+
   throw new Error("不支持的平台");
 }
 
@@ -2914,7 +2990,8 @@ async function handlePlaylists(request, env) {
     return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
   }
   try {
-    const playlists = await monitoredServiceCall(env, { source: platform, operation: "playlists" }, () => callPlaylists(platform));
+    const source = platform === "kuwo" ? "apibyte_kuwo" : platform;
+    const playlists = await monitoredServiceCall(env, { source, operation: "playlists" }, () => callPlaylists(platform, env));
     return jsonResponse(200, { code: 0, message: "Success", data: { playlists } });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取歌单列表失败" });
@@ -2946,7 +3023,7 @@ async function handleMethod(request, env) {
     if (functionName === "playlist") {
       const id = String(url.searchParams.get("id") || "").trim();
       if (!id) return jsonResponse(400, { code: -1, message: "缺少参数: id" });
-      const data = await monitoredServiceCall(env, { source: platform, operation: "playlist" }, () => callPlaylist(platform, id));
+      const data = await monitoredServiceCall(env, { source: platform, operation: "playlist" }, () => callPlaylist(platform, id, env));
       return jsonResponse(200, { code: 0, message: "Success", data });
     }
 

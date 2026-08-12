@@ -211,9 +211,9 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 返回榜单歌曲列表。
 
 ### 6.5 推荐歌单
-`GET /api/proxy/playlists?platform=netease`
+`GET /api/proxy/playlists?platform=<netease|qq|kuwo>`
 
-返回热门歌单列表（默认 netease）。
+返回热门歌单列表（默认 netease）。酷我歌单通过山海云端歌单搜索接口获取并缓存 30 分钟，点击歌单后详情缓存 1 小时；该数据源不参与歌曲播放地址解析。
 
 ### 6.6 歌曲解析（TuneHub V3）
 `POST /api/proxy/parse`（需会员）

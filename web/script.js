@@ -3719,7 +3719,7 @@ function formatPlayCount(count) {
 }
 
 async function fetchHomePlaylistCards() {
-    const tasks = ['netease', 'qq'].map(async platform => {
+    const tasks = ['netease', 'qq', 'kuwo'].map(async platform => {
         const url = new URL(API_ROUTES.playlists, window.location.href);
         url.searchParams.set('platform', platform);
         const response = await apiFetch(url.toString(), { timeoutMs: 15000 });
@@ -3749,7 +3749,7 @@ function pickHomePlaylistCards(cards) {
     const previous = new Set(homePlaylistKeys);
     const selected = [];
     const selectedKeys = new Set();
-    const platforms = ['netease', 'qq'];
+    const platforms = ['netease', 'qq', 'kuwo'];
 
     platforms.forEach(platform => {
         const seen = new Set();
@@ -3761,7 +3761,7 @@ function pickHomePlaylistCards(cards) {
                 return true;
             });
         const fresh = unique.filter(item => !previous.has(playlistCardKey(item)));
-        const platformPicks = (fresh.length >= 2 ? fresh : unique).slice(0, 2);
+        const platformPicks = (fresh.length ? fresh : unique).slice(0, 1);
         platformPicks.forEach(item => selectedKeys.add(playlistCardKey(item)));
         selected.push(...platformPicks);
     });

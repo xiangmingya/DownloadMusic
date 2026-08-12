@@ -13,6 +13,7 @@
   - `/api/proxy/search`：主搜索失败时在 Worker 内部走多源兜底
   - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两批智能竞速（首批健康源，短延迟后放出全部剩余源）
   - 可选：JKAPI（网易云、QQ；需自行配置 `JKAPI_API_KEY`）
+  - 可选：山海云端酷我歌单（每天 500 次、QPS 3；需配置 `APIBYTE_KUWO_API_KEY`，只用于首页歌单与歌单详情，不解析播放地址）
 
 ## 路由
 
@@ -69,6 +70,9 @@ MEMBERSHIP_REQUIRED = "true"
 ```bash
 # 仅填写你自己获得的 JKAPI Key
 wrangler secret put JKAPI_API_KEY
+
+# 山海云端酷我歌单接口
+wrangler secret put APIBYTE_KUWO_API_KEY
 ```
 
 ## D1：资料库同步

@@ -46,6 +46,7 @@ const env = {
   RESOLVER_EXPANSION_DELAY_MS: "150",
   RESOLVER_INITIAL_CONCURRENCY: "3",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
+  APIBYTE_KUWO_API_KEY: "test-apibyte-key",
   UPTIME_QQ_CANARIES: "qq-primary-fail|受限样本|测试歌手,qq-fallback-ok|可播样本|测试歌手,qq-third|第三样本|测试歌手",
 };
 
@@ -63,9 +64,25 @@ let qualityFallbackUsed = false;
 let unconfiguredProviderCalls = 0;
 let cancelledHedgedRequests = 0;
 let trustedCanaryMediaProbes = 0;
+let apibytePlaylistCalls = 0;
 const twoWaveStartedAt = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
+  if (url.startsWith("https://apione.apibyte.cn/kwmusic")) {
+    apibytePlaylistCalls += 1;
+    assert.equal(init.headers?.["X-Api-Key"], "test-apibyte-key");
+    assert.doesNotMatch(url, /action=music_url/, "APIByte must never be used to resolve playback URLs");
+    if (url.includes("action=playlist_detail")) {
+      return new Response(JSON.stringify({ code: 200, msg: "success", data: { music_list: [
+        { rid: 228741121, name: "暖暖", artist: "香皂泡", album: "暖暖", images: { pic: "https://img.kuwo.test/song.jpg" } },
+      ] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    assert.match(url, /action=search/);
+    assert.match(url, /type=playlist/);
+    return new Response(JSON.stringify({ code: 200, msg: "success", data: [
+      { id: "3706893759", name: "热门DJ歌单", img: "https://img.kuwo.test/playlist.jpg", total: "482", listencnt: "37921273" },
+    ] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   if (url.includes("qq-primary-fail")) {
     if (url.startsWith("https://api.bugpk.com/")) {
       return new Response(JSON.stringify({ code: 200, msg: "解析成功", data: { url: "版权限制或该音乐不存在！" } }), {
@@ -270,6 +287,33 @@ try {
   assert.equal(uptimeRows[1].success, 1, "a playable fallback canary should recover the platform check");
   assert.equal(uptimeRows[1].canary_id, "v2:qq-primary-fail>qq-fallback-ok");
   assert.match(uptimeRows[1].error_code, /recovered_after:qq-primary-fail:copyright_unavailable/);
+
+  const kuwoPlaylists = await worker.fetch(new Request("https://api.example.com/api/proxy/playlists?platform=kuwo", {
+    headers: { Cookie: cookie },
+  }), env);
+  const kuwoPlaylistsPayload = await kuwoPlaylists.json();
+  assert.equal(kuwoPlaylists.status, 200);
+  assert.deepEqual(kuwoPlaylistsPayload.data.playlists[0], {
+    id: "3706893759",
+    name: "热门DJ歌单",
+    cover: "https://img.kuwo.test/playlist.jpg",
+    trackCount: 482,
+    playCount: 37921273,
+  });
+
+  const kuwoPlaylistDetail = await worker.fetch(new Request("https://api.example.com/api/proxy/method?platform=kuwo&functionName=playlist&id=3706893759", {
+    headers: { Cookie: cookie },
+  }), env);
+  const kuwoPlaylistDetailPayload = await kuwoPlaylistDetail.json();
+  assert.equal(kuwoPlaylistDetail.status, 200);
+  assert.deepEqual(kuwoPlaylistDetailPayload.data.list[0], {
+    id: "228741121",
+    name: "暖暖",
+    artist: "香皂泡",
+    album: "暖暖",
+    cover: "https://img.kuwo.test/song.jpg",
+  });
+  assert.equal(apibytePlaylistCalls, 2, "APIByte should only serve the playlist list and detail requests");
 
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();
