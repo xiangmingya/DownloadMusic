@@ -3096,7 +3096,7 @@ function renderPublicUptimeDialog(data) {
     list.innerHTML = platforms.map(item => {
         const availability = item.availability === null || item.availability === undefined ? '—' : `${(Number(item.availability) * 100).toFixed(1)}%`;
         const average = Number(item.average_duration_ms || 0);
-        return `<article class="uptime-platform-card"><div class="uptime-platform-head"><strong>${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)}</strong><span class="${footerStatusClass(item.state)}">${escapeHtml(item.label || footerStatusLabel(item.state))}</span></div>${renderUptimeHistory(item.history)}<div class="uptime-platform-meta"><span>24 小时可用率 <b>${escapeHtml(availability)}</b></span><span>平均解析 <b>${average ? `${average.toLocaleString()} ms` : '—'}</b></span><span>${escapeHtml(formatStatusUpdatedAt(item.last_checked_at))}</span></div></article>`;
+        return `<article class="uptime-platform-card"><div class="uptime-platform-head"><strong>${escapeHtml(defaultPlatformNameMap[item.platform] || item.platform)}</strong><span class="${footerStatusClass(item.state)}">${escapeHtml(item.label || footerStatusLabel(item.state))}</span></div>${renderUptimeHistory(item.history)}<div class="uptime-platform-meta"><span>24 小时测试歌曲可播率 <b>${escapeHtml(availability)}</b></span><span>平均解析 <b>${average ? `${average.toLocaleString()} ms` : '—'}</b></span><span>${escapeHtml(formatStatusUpdatedAt(item.last_checked_at))}</span></div></article>`;
     }).join('') || '<p class="monitoring-empty">等待第一次 Cron 主动检测。</p>';
 }
 

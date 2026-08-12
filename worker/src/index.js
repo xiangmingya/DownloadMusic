@@ -43,14 +43,20 @@ const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const UPTIME_CHECK_RETENTION_DAYS = 7;
 const UPTIME_PLATFORMS = ["netease", "qq", "kuwo"];
+const UPTIME_CHECK_VERSION = "v2";
+const UPTIME_MAX_CANARY_ATTEMPTS = 3;
 const DEFAULT_UPTIME_CANARIES = {
   netease: [
     { id: "108914", name: "江南", artist: "林俊杰" },
     { id: "66842", name: "十年", artist: "陈奕迅" },
   ],
   qq: [
+    { id: "001AR7cQ0kFNyr", name: "最好不过一杯酒", artist: "卢润泽" },
     { id: "0039MnYb0qxYhV", name: "晴天", artist: "周杰伦" },
+    { id: "002FHVgG4btehE", name: "阿拉斯加海湾", artist: "蓝心羽" },
     { id: "000pgbEQ1C4Hsv", name: "晴天", artist: "刘瑞琦" },
+    { id: "000kbOVO3Oklxw", name: "海阔天空", artist: "好你个小夜" },
+    { id: "001573fK0LYM0E", name: "海阔天空", artist: "DreamSky" },
   ],
   kuwo: [
     { id: "228908", name: "晴天", artist: "周杰伦" },
@@ -1561,8 +1567,8 @@ async function handlePublicServiceStatus(env) {
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const result = await db.prepare(
-      "SELECT checked_at, platform, success, duration_ms FROM service_uptime_checks WHERE checked_at >= ? ORDER BY checked_at ASC",
-    ).bind(since).all();
+      "SELECT checked_at, platform, success, duration_ms FROM service_uptime_checks WHERE checked_at >= ? AND (platform <> 'qq' OR canary_id LIKE ?) ORDER BY checked_at ASC",
+    ).bind(since, `${UPTIME_CHECK_VERSION}:%`).all();
     const platformStates = platforms.map((platform) => aggregatePublicUptime(platform, result.results || [], Date.now()));
     const states = platformStates.map((item) => item.state);
     const overall = states.every((state) => state === "healthy") ? "healthy"
@@ -3790,9 +3796,15 @@ async function backup4TryBugpk(platform, id, quality, name, artist, signal) {
     },
   });
   const parsed = response.json;
-  const url = normalizeMediaUrl(parsed?.url || parsed?.data?.url || "");
+  const rawUrl = String(parsed?.url || parsed?.data?.url || "").trim();
+  const url = normalizeMediaUrl(rawUrl);
   if (response.ok && isHttpUrl(url)) {
     return { url, provider: "bugpk", lyrics: String(parsed?.lrc_data || parsed?.lyric || "") };
+  }
+  if (response.ok && /版权限制|音乐不存在|歌曲不存在/i.test(rawUrl)) {
+    const error = new Error("copyright_unavailable");
+    error.status = 422;
+    throw error;
   }
   const error = new Error(String(parsed?.message || parsed?.msg || `bugpk qq failed (${response.status})`));
   error.status = response.status;
@@ -4762,7 +4774,10 @@ async function resolveWithHedging(input, env, ctx, budgetMs = null, outerSignal 
   active.forEach((entry, source) => errors.push(`${source}:timeout`));
   abortActive();
   if (outerSignal?.aborted) throw new Error("解析已取消");
-  throw new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
+  const failure = new Error(errors.length ? `解析失败（${errors.join("; ").slice(0, 360)}）` : "解析超时");
+  if (errors.some((item) => /copyright_unavailable/i.test(item))) failure.code = "copyright_unavailable";
+  else if (errors.length > 0 && errors.every((item) => /timeout|aborted|超时/i.test(item))) failure.code = "timeout";
+  throw failure;
 }
 
 // Lossless availability varies by platform and provider. Preserve the user's
@@ -4874,7 +4889,7 @@ async function recordUptimeCheck(env, result) {
         result.success ? 1 : 0,
         Math.max(0, Math.min(300000, Math.round(Number(result.durationMs) || 0))),
         result.success ? 200 : Number(result.statusCode || 502),
-        result.success ? null : String(result.errorCode || "resolve_failed").slice(0, 240),
+        String(result.errorCode || (result.success ? "" : "resolve_failed")).slice(0, 240) || null,
         String(result.canaryId || ""),
       ),
       db.prepare("DELETE FROM service_uptime_checks WHERE checked_at < ?")
@@ -4885,18 +4900,18 @@ async function recordUptimeCheck(env, result) {
   }
 }
 
-async function runScheduledUptimeCheck(controller, env) {
-  const scheduledAt = Number(controller?.scheduledTime || Date.now());
-  const slot = Math.floor(scheduledAt / (5 * 60 * 1000));
-  const platform = UPTIME_PLATFORMS[((slot % UPTIME_PLATFORMS.length) + UPTIME_PLATFORMS.length) % UPTIME_PLATFORMS.length];
-  const canaries = uptimeCanaries(platform, env);
-  const canary = canaries[Math.floor(slot / UPTIME_PLATFORMS.length) % Math.max(1, canaries.length)];
-  if (!canary?.id) return;
+function classifyUptimeFailure(error) {
+  if (error?.code === "copyright_unavailable") return "copyright_unavailable";
+  if (error?.code === "timeout") return "timeout";
+  const message = metricError(error);
+  if (/copyright_unavailable|版权限制|音乐不存在|歌曲不存在/i.test(message)) return "copyright_unavailable";
+  if (/超时|timeout|aborted/i.test(message)) return "timeout";
+  if (/没有可用解析源|no_provider/i.test(message)) return "no_provider";
+  return "resolve_failed";
+}
 
+async function runUptimeCanaryAttempt(platform, canary, env) {
   const startedAt = Date.now();
-  let success = false;
-  let statusCode = 502;
-  let errorCode = "resolve_failed";
   try {
     const result = await resolveWithQualityFallback({
       platform,
@@ -4907,17 +4922,52 @@ async function runScheduledUptimeCheck(controller, env) {
       album: "",
       cover: "",
     }, env, { skipResolverMetrics: true });
-    success = Boolean(normalizeMediaUrl(result?.url || ""));
+    return {
+      id: canary.id,
+      success: Boolean(normalizeMediaUrl(result?.url || "")),
+      durationMs: Date.now() - startedAt,
+      errorCode: "",
+    };
   } catch (error) {
-    success = false;
-    errorCode = metricError(error);
-    if (/超时|timeout|aborted/i.test(errorCode)) statusCode = 504;
+    const detail = metricError(error);
+    console.warn(`[uptime] platform=${platform} canary=${canary.id} failed: ${detail}`);
+    return {
+      id: canary.id,
+      success: false,
+      durationMs: Date.now() - startedAt,
+      errorCode: classifyUptimeFailure(error),
+    };
   }
+}
+
+async function runScheduledUptimeCheck(controller, env) {
+  const scheduledAt = Number(controller?.scheduledTime || Date.now());
+  const slot = Math.floor(scheduledAt / (5 * 60 * 1000));
+  const platform = UPTIME_PLATFORMS[((slot % UPTIME_PLATFORMS.length) + UPTIME_PLATFORMS.length) % UPTIME_PLATFORMS.length];
+  const canaries = uptimeCanaries(platform, env);
+  if (!canaries.length) return;
+  const primaryIndex = Math.floor(slot / UPTIME_PLATFORMS.length) % canaries.length;
+
+  const startedAt = Date.now();
+  const attempts = [];
+  const attemptLimit = Math.min(UPTIME_MAX_CANARY_ATTEMPTS, canaries.length);
+  for (let offset = 0; offset < attemptLimit; offset += 1) {
+    const canary = canaries[(primaryIndex + offset) % canaries.length];
+    const attempt = await runUptimeCanaryAttempt(platform, canary, env);
+    attempts.push(attempt);
+    if (attempt.success) break;
+  }
+  const success = attempts.some((attempt) => attempt.success);
+  const failures = attempts.filter((attempt) => !attempt.success);
+  const errorCode = success
+    ? (failures.length ? `recovered_after:${failures.map((item) => `${item.id}:${item.errorCode}`).join(",")}` : "")
+    : attempts.map((item) => `${item.id}:${item.errorCode || "resolve_failed"}`).join(",");
+  const statusCode = !success && failures.length > 0 && failures.every((item) => item.errorCode === "timeout") ? 504 : 502;
   await recordUptimeCheck(env, {
     platform,
     success,
     durationMs: Date.now() - startedAt,
-    canaryId: canary.id,
+    canaryId: `${UPTIME_CHECK_VERSION}:${attempts.map((attempt) => attempt.id).join(">")}`,
     statusCode,
     errorCode,
   });

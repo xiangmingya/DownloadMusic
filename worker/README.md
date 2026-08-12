@@ -89,7 +89,7 @@ wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 
 管理员用 Linux DO 白名单账号登录后，右上角会出现“管理”。服务监控仅在这个页面显示，普通用户无法请求接口。
 
-公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
+公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。主动检测轮换样本，主样本失败时最多用两首不同样本复核，任一首成功即判本轮可用；公开百分比应理解为“测试歌曲可播率”。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
 
 API Key 网络异常提醒需要执行 `migrations/0004_api_key_network_activity.sql`。该表只保存加盐后的网络段哈希、脱敏地址和 Cloudflare 地区/ASN；提醒不会自动禁用用户或 Key。
 

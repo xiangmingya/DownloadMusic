@@ -46,6 +46,7 @@ const env = {
   RESOLVER_EXPANSION_DELAY_MS: "150",
   RESOLVER_INITIAL_CONCURRENCY: "3",
   TUNEHUB_API_KEY: "th_test-tunehub-key",
+  UPTIME_QQ_CANARIES: "qq-primary-fail|受限样本|测试歌手,qq-fallback-ok|可播样本|测试歌手,qq-third|第三样本|测试歌手",
 };
 
 const login = await worker.fetch(new Request("https://api.example.com/api/auth/login/password", {
@@ -65,6 +66,18 @@ let trustedCanaryMediaProbes = 0;
 const twoWaveStartedAt = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
+  if (url.includes("qq-primary-fail")) {
+    if (url.startsWith("https://api.bugpk.com/")) {
+      return new Response(JSON.stringify({ code: 200, msg: "解析成功", data: { url: "版权限制或该音乐不存在！" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ success: false, message: "unavailable canary" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   if (url.includes("two-wave")) {
     twoWaveStartedAt.push({ url, at: Date.now() });
     if (url.includes("api.11na.cn")) {
@@ -246,6 +259,17 @@ try {
   assert.equal(uptimeRows[0].platform, "netease");
   assert.equal(uptimeRows[0].success, 1);
   assert.equal(trustedCanaryMediaProbes, 0, "trusted official-CDN metadata should prevent Cron colo false negatives");
+
+  scheduledTask = null;
+  await worker.scheduled({ scheduledTime: 5 * 60 * 1000 }, env, {
+    waitUntil(task) { scheduledTask = task; },
+  });
+  await scheduledTask;
+  assert.equal(uptimeRows.length, 2, "a QQ Cron trigger should still persist one platform-level check");
+  assert.equal(uptimeRows[1].platform, "qq");
+  assert.equal(uptimeRows[1].success, 1, "a playable fallback canary should recover the platform check");
+  assert.equal(uptimeRows[1].canary_id, "v2:qq-primary-fail>qq-fallback-ok");
+  assert.match(uptimeRows[1].error_code, /recovered_after:qq-primary-fail:copyright_unavailable/);
 
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();
