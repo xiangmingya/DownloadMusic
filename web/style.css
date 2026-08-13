@@ -987,6 +987,25 @@ footer {
     background: rgba(111, 99, 255, 0.26);
 }
 
+.bimoji-btn {
+    margin-bottom: 10px;
+    border-color: rgba(113, 228, 154, 0.72);
+    background: rgba(70, 184, 113, 0.12);
+}
+
+.bimoji-btn:hover {
+    background: rgba(70, 184, 113, 0.23);
+}
+
+.bimoji-logo {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: block;
+    flex-shrink: 0;
+    object-fit: contain;
+}
+
 .linuxdo-logo {
     width: 26px;
     height: 26px;

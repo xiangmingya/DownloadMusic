@@ -131,6 +131,12 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === "/api/auth/callback/linuxdo" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoLoginCallback(request, env));
     }
+    if (url.pathname === "/api/auth/login/bimoji" && request.method === "GET") {
+      return withCors(request, env, await handleBimojiLoginStart(request, env));
+    }
+    if (url.pathname === "/api/auth/callback/bimoji" && request.method === "GET") {
+      return withCors(request, env, await handleBimojiLoginCallback(request, env));
+    }
     if (url.pathname === "/api/auth/logout" && request.method === "POST") {
       return withCors(request, env, await handleLogout(env));
     }
@@ -139,6 +145,9 @@ async function handleRequest(request, env, ctx) {
     }
     if (url.pathname === "/api/auth/linuxdo-status" && request.method === "GET") {
       return withCors(request, env, await handleLinuxdoStatus(env));
+    }
+    if (url.pathname === "/api/auth/bimoji-status" && request.method === "GET") {
+      return withCors(request, env, await handleBimojiStatus(env));
     }
     if (url.pathname === "/api/public/service-status" && request.method === "GET") {
       return withCors(request, env, await handlePublicServiceStatus(env));
@@ -416,6 +425,47 @@ function oauthConfigured(cfg) {
       cfg.userEndpoint &&
       cfg.redirectUri,
   );
+}
+
+function getBimojiConfig(env) {
+  const issuer = String(env.BIMOJI_ISSUER || "https://oidc.621888.xyz").trim().replace(/\/$/, "");
+  return {
+    issuer,
+    clientId: String(env.BIMOJI_CLIENT_ID || "").trim(),
+    clientSecret: String(env.BIMOJI_CLIENT_SECRET || "").trim(),
+    redirectUri: String(env.BIMOJI_REDIRECT_URI || "").trim(),
+    scope: String(env.BIMOJI_SCOPE || "openid profile email bimoji").trim(),
+  };
+}
+
+function bimojiConfigured(cfg) {
+  return Boolean(cfg.issuer && cfg.clientId && cfg.redirectUri);
+}
+
+async function getOidcDiscovery(cfg) {
+  const result = await fetchJson(`${cfg.issuer}/.well-known/openid-configuration`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!result.resp.ok || !result.json) throw new Error("OIDC Discovery unavailable");
+  if (String(result.json.issuer || "").replace(/\/$/, "") !== cfg.issuer) throw new Error("OIDC issuer mismatch");
+  for (const key of ["authorization_endpoint", "token_endpoint", "userinfo_endpoint", "jwks_uri"]) {
+    if (!result.json[key]) throw new Error(`OIDC Discovery missing ${key}`);
+  }
+  return result.json;
+}
+
+async function handleBimojiStatus(env) {
+  const cfg = getBimojiConfig(env);
+  if (!bimojiConfigured(cfg)) {
+    return jsonResponse(200, { code: 0, message: "Success", data: { configured: false, reachable: false, reason: "not_configured" } });
+  }
+  try {
+    await getOidcDiscovery(cfg);
+    return jsonResponse(200, { code: 0, message: "Success", data: { configured: true, reachable: true, reason: "ok" } });
+  } catch (error) {
+    return jsonResponse(200, { code: 0, message: "Success", data: { configured: true, reachable: false, reason: error instanceof Error ? error.message : "network_error" } });
+  }
 }
 
 async function handleLinuxdoStatus(env) {
@@ -1036,6 +1086,9 @@ async function getMembershipStatus(session, env) {
       source: session?.type === "apikey" ? "apikey" : "admin",
     };
   }
+  if (session?.type === "bimoji") {
+    return { active: true, expires_at: null, source: "bimoji" };
+  }
   const linuxdoId = getLinuxdoId(session);
   const db = getDatabase(env);
   if (!linuxdoId || !db) return { active: false, expires_at: null, source: "unavailable" };
@@ -1061,6 +1114,10 @@ async function requireMusicAccess(request, env) {
 function libraryOwnerKey(session) {
   if (session?.type === "apikey") return String(session?.owner_key || "");
   if (session?.type === "password") return "password:family";
+  if (session?.type === "bimoji") {
+    const sub = String(session?.user?.bimoji_sub || session?.user?.id || "").trim();
+    return sub ? `bimoji:${sub}` : "";
+  }
   if (session?.type !== "linuxdo") return "";
   const id = String(session?.user?.linuxdo_id || session?.user?.id || "").trim();
   return id ? `linuxdo:${id}` : "";
@@ -1484,6 +1541,160 @@ async function handleLinuxdoLoginCallback(request, env) {
       "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
     },
   });
+}
+
+function randomBase64url(size = 32) {
+  return b64urlEncode(crypto.getRandomValues(new Uint8Array(size)));
+}
+
+async function sha256Base64url(value) {
+  return b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
+}
+
+function bimojiTransactionCookie(env, value, maxAge = 600) {
+  const name = String(env.BIMOJI_TRANSACTION_COOKIE_NAME || "dm_bimoji_oidc").trim() || "dm_bimoji_oidc";
+  return [
+    `${name}=${value}`,
+    "Path=/api/auth/callback/bimoji",
+    `Max-Age=${maxAge}`,
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+  ].join("; ");
+}
+
+function readBimojiTransactionCookie(request, env) {
+  const name = String(env.BIMOJI_TRANSACTION_COOKIE_NAME || "dm_bimoji_oidc").trim() || "dm_bimoji_oidc";
+  return parseCookies(request.headers.get("Cookie"))[name] || "";
+}
+
+async function handleBimojiLoginStart(request, env) {
+  const cfg = getBimojiConfig(env);
+  if (!bimojiConfigured(cfg)) return jsonResponse(500, { code: -1, message: "笔墨迹 OIDC 未配置" });
+  try {
+    const discovery = await getOidcDiscovery(cfg);
+    const requestUrl = new URL(request.url);
+    const redirect = safeRedirectUrl(requestUrl.searchParams.get("redirect"), env, request.url);
+    const transaction = {
+      state: randomBase64url(),
+      nonce: randomBase64url(),
+      verifier: randomBase64url(),
+      redirect,
+      exp: Math.floor(Date.now() / 1000) + 10 * 60,
+    };
+    const cookieToken = await encodeSignedToken(transaction, sessionSecret(env));
+    const authUrl = new URL(discovery.authorization_endpoint);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("client_id", cfg.clientId);
+    authUrl.searchParams.set("redirect_uri", cfg.redirectUri);
+    authUrl.searchParams.set("scope", cfg.scope);
+    authUrl.searchParams.set("state", transaction.state);
+    authUrl.searchParams.set("nonce", transaction.nonce);
+    authUrl.searchParams.set("code_challenge", await sha256Base64url(transaction.verifier));
+    authUrl.searchParams.set("code_challenge_method", "S256");
+    return new Response(null, { status: 302, headers: { Location: authUrl.toString(), "Set-Cookie": bimojiTransactionCookie(env, cookieToken) } });
+  } catch {
+    return jsonResponse(503, { code: -1, message: "笔墨迹登录服务暂不可用" });
+  }
+}
+
+function decodeJwtPart(value) {
+  return JSON.parse(decoder.decode(b64urlDecode(value)));
+}
+
+async function verifyBimojiIdToken(idToken, cfg, discovery, expectedNonce) {
+  const parts = String(idToken || "").split(".");
+  if (parts.length !== 3) throw new Error("Invalid ID Token");
+  const header = decodeJwtPart(parts[0]);
+  const claims = decodeJwtPart(parts[1]);
+  if (header.alg !== "RS256" || !header.kid) throw new Error("Unsupported ID Token algorithm");
+  const jwks = await fetchJson(discovery.jwks_uri, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+  if (!jwks.resp.ok || !Array.isArray(jwks.json?.keys)) throw new Error("JWKS unavailable");
+  const jwk = jwks.json.keys.find((key) => key.kid === header.kid && key.kty === "RSA" && (!key.use || key.use === "sig"));
+  if (!jwk) throw new Error("Signing key not found");
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlDecode(parts[2]), encoder.encode(`${parts[0]}.${parts[1]}`));
+  if (!valid) throw new Error("Invalid ID Token signature");
+  const now = Math.floor(Date.now() / 1000);
+  const issuer = String(claims.iss || "").replace(/\/$/, "");
+  const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (issuer !== cfg.issuer || !audience.includes(cfg.clientId)) throw new Error("Invalid ID Token issuer or audience");
+  if (audience.length > 1 && String(claims.azp || "") !== cfg.clientId) throw new Error("Invalid ID Token authorized party");
+  if (!Number(claims.exp) || Number(claims.exp) <= now) throw new Error("Expired ID Token");
+  if (!claims.nonce || !safeEqual(String(claims.nonce), String(expectedNonce))) throw new Error("Invalid ID Token nonce");
+  return claims;
+}
+
+function appendLoginResult(redirect, result) {
+  const url = new URL(redirect);
+  url.searchParams.set("login", result);
+  return url.toString();
+}
+
+async function createBimojiSession(profile, env) {
+  const sub = String(profile.sub || "").trim();
+  const name = String(profile.bimoji_nickname || profile.name || profile.preferred_username || profile.email || `笔墨迹用户 ${sub.slice(0, 8)}`).trim();
+  const token = await createSessionToken({
+    type: "bimoji",
+    user: {
+      id: sub,
+      name,
+      bimoji_sub: sub,
+      email: String(profile.email || ""),
+      avatar: String(profile.picture || ""),
+      bimoji_exists: Boolean(profile.bimoji_exists),
+      bimoji_account_registered: Boolean(profile.bimoji_account_registered),
+      bimoji_email_verified: Boolean(profile.bimoji_email_verified),
+      bimoji_max_level: Number(profile.bimoji_max_level || 0),
+    },
+  }, env);
+  return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
+}
+
+async function handleBimojiLoginCallback(request, env) {
+  const cfg = getBimojiConfig(env);
+  const fallback = safeRedirectUrl("", env, request.url);
+  const clearTransaction = bimojiTransactionCookie(env, "", 0);
+  try {
+    if (!bimojiConfigured(cfg)) throw new Error("not_configured");
+    const url = new URL(request.url);
+    const code = String(url.searchParams.get("code") || "").trim();
+    const returnedState = String(url.searchParams.get("state") || "").trim();
+    const transaction = await decodeSignedToken(readBimojiTransactionCookie(request, env), sessionSecret(env));
+    if (!code || !returnedState || !transaction || Number(transaction.exp) < Math.floor(Date.now() / 1000)) throw new Error("state");
+    if (!safeEqual(returnedState, String(transaction.state || ""))) throw new Error("state");
+    const redirect = safeRedirectUrl(transaction.redirect, env, request.url);
+    const discovery = await getOidcDiscovery(cfg);
+    const tokenBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: cfg.clientId,
+      code,
+      redirect_uri: cfg.redirectUri,
+      code_verifier: String(transaction.verifier || ""),
+    });
+    if (cfg.clientSecret) tokenBody.set("client_secret", cfg.clientSecret);
+    const tokenResult = await fetchJson(discovery.token_endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: tokenBody,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!tokenResult.resp.ok || !tokenResult.json?.access_token || !tokenResult.json?.id_token) throw new Error("token");
+    const idClaims = await verifyBimojiIdToken(tokenResult.json.id_token, cfg, discovery, transaction.nonce);
+    const userResult = await fetchJson(discovery.userinfo_endpoint, {
+      headers: { Authorization: `Bearer ${tokenResult.json.access_token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!userResult.resp.ok || !userResult.json || String(userResult.json.sub || "") !== String(idClaims.sub || "")) throw new Error("userinfo");
+    const headers = new Headers({ Location: redirect });
+    headers.append("Set-Cookie", clearTransaction);
+    headers.append("Set-Cookie", await createBimojiSession({ ...idClaims, ...userResult.json }, env));
+    return new Response(null, { status: 302, headers });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown";
+    const code = reason === "state" ? "failed_bimoji_state" : "failed_bimoji";
+    return new Response(null, { status: 302, headers: { Location: appendLoginResult(fallback, code), "Set-Cookie": clearTransaction } });
+  }
 }
 
 async function handleAdminOverview(request, env) {

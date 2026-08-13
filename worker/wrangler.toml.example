@@ -23,6 +23,9 @@ crons = ["*/5 * * * *"]
 # - LINUXDO_CLIENT_ID
 # - LINUXDO_CLIENT_SECRET
 # - LINUXDO_REDIRECT_URI
+# - BIMOJI_CLIENT_ID
+# - BIMOJI_REDIRECT_URI
+# - BIMOJI_CLIENT_SECRET（仅机密应用）
 # - LDC_CLIENT_ID
 # - LDC_CLIENT_SECRET
 
@@ -35,6 +38,10 @@ LINUXDO_AUTHORIZATION_ENDPOINT = "https://connect.linux.do/oauth2/authorize"
 LINUXDO_TOKEN_ENDPOINT = "https://connect.linux.do/oauth2/token"
 LINUXDO_USER_ENDPOINT = "https://connect.linux.do/api/user"
 LINUXDO_SCOPE = "openid profile"
+
+# 笔墨迹通行证 OIDC；Client ID、回调地址及可选 Secret 请使用 wrangler secret 配置。
+BIMOJI_ISSUER = "https://oidc.621888.xyz"
+BIMOJI_SCOPE = "openid profile email bimoji"
 
 # 回调后跳转前端白名单（支持逗号分隔多个，建议填首页）
 FRONTEND_URLS = "https://music-t9apk03g.maozi.io/,https://zodyr0w32-music-t9apk03g.maozi.io/,https://music.xiangming.site/,https://music.621888.xyz/"

@@ -8,6 +8,7 @@
 2. Cloudflare Worker 负责：
    - 密码登录
    - Linux DO OAuth 登录
+   - 笔墨迹通行证 OIDC（Authorization Code + PKCE）登录
    - 会话鉴权
    - TuneHub/API 代理
 
@@ -45,6 +46,8 @@ window.APP_API_BASE = 'https://你的worker域名/api/proxy';
 - `LINUXDO_CLIENT_ID`
 - `LINUXDO_CLIENT_SECRET`
 - `LINUXDO_REDIRECT_URI`
+- `BIMOJI_CLIENT_ID`
+- `BIMOJI_REDIRECT_URI`
 - `ALLOWED_ORIGINS`（支持多个前端域名，逗号分隔）
 - `FRONTEND_URLS`（支持多个回跳地址，逗号分隔）
 
@@ -55,6 +58,14 @@ window.APP_API_BASE = 'https://你的worker域名/api/proxy';
 `https://你的worker域名/api/auth/callback/linuxdo`
 
 并确保与 `LINUXDO_REDIRECT_URI` 完全一致。
+
+## 笔墨迹通行证回调地址
+
+在笔墨迹应用后台填写：
+
+`https://你的worker域名/api/auth/callback/bimoji`
+
+并确保与 `BIMOJI_REDIRECT_URI` 完全一致。机密应用还需将只显示一次的 Client Secret 配置为 Worker Secret `BIMOJI_CLIENT_SECRET`；公开客户端无需配置 Secret。
 
 ## 用户 Key 策略
 

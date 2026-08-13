@@ -3,6 +3,7 @@
 这个 Worker 提供：
 - 密码登录
 - Linux DO OAuth 登录
+- 笔墨迹通行证 OIDC 登录（Authorization Code + PKCE S256，校验 ID Token 签名与标准 Claims）
 - 会话管理（HttpOnly Cookie）
 - 跨设备资料库同步：D1 保存收藏、最近播放与自建歌单（不保存音频、封面文件或 TuneHub Key）
 - Linux DO 月会员：Linux DO Credit 积分购买 30 天会员，价格由管理员在页面内调整
@@ -20,9 +21,12 @@
 - `POST /api/auth/login/password`
 - `GET /api/auth/login/linuxdo`
 - `GET /api/auth/callback/linuxdo`
+- `GET /api/auth/login/bimoji`
+- `GET /api/auth/callback/bimoji`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `GET /api/auth/linuxdo-status`
+- `GET /api/auth/bimoji-status`
 - `GET /api/membership`
 - `POST /api/billing/checkout`
 - `GET /api/billing/notify/linuxdo`
@@ -46,9 +50,13 @@ wrangler secret put TUNEHUB_API_KEY
 wrangler secret put LINUXDO_CLIENT_ID
 wrangler secret put LINUXDO_CLIENT_SECRET
 wrangler secret put LINUXDO_REDIRECT_URI
+wrangler secret put BIMOJI_CLIENT_ID
+wrangler secret put BIMOJI_REDIRECT_URI
 wrangler secret put LDC_CLIENT_ID
 wrangler secret put LDC_CLIENT_SECRET
 ```
+
+笔墨迹机密应用还需执行 `wrangler secret put BIMOJI_CLIENT_SECRET`，公开客户端不要配置该项。应用后台回调地址必须精确填写为 `https://你的worker域名/api/auth/callback/bimoji`。Issuer 默认是 `https://oidc.621888.xyz`，Worker 会通过 Discovery 自动读取 Authorization、Token、UserInfo 和 JWKS 端点。
 
 ## Linux DO 月会员配置
 

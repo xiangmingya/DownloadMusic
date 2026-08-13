@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>音楽 - Music Downloader</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
-    <link rel="stylesheet" href="style.css?v=20260810-13">
+    <link rel="stylesheet" href="style.css?v=20260813-14">
     <script>
         window.AUTH_API_BASE = window.AUTH_API_BASE || 'https://musicapi.621888.xyz/api/auth';
         window.APP_API_BASE = window.APP_API_BASE || 'https://musicapi.621888.xyz/api/proxy';
@@ -31,6 +31,11 @@
             </form>
 
             <div class="login-divider" id="linuxdoDivider">OR</div>
+            <a class="linuxdo-btn bimoji-btn" id="bimojiLoginBtn" href="#">
+                <img class="bimoji-logo" src="blogscn_icon.png" alt="" aria-hidden="true">
+                <span class="linuxdo-btn-label">笔墨迹通行证登录</span>
+            </a>
+            <p class="login-tip login-tip-subtle" id="bimojiLoginHint">正在检测笔墨迹通行证连通性...</p>
             <a class="linuxdo-btn" id="linuxdoLoginBtn" href="#">
                 <span class="linuxdo-logo" aria-hidden="true">
                     <svg viewBox="-158 -158 1890 1890" xmlns="http://www.w3.org/2000/svg" focusable="false">
@@ -399,7 +404,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260812-46';
+        const APP_ASSET_VERSION = '20260813-47';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
@@ -581,6 +586,31 @@
             }
         }
 
+        async function checkBimojiStatus() {
+            const btn = document.getElementById('bimojiLoginBtn');
+            const hint = document.getElementById('bimojiLoginHint');
+            if (!btn || !hint) return;
+            const redirect = encodeURIComponent(window.location.origin + window.location.pathname);
+            btn.href = `${AUTH_BASE}/login/bimoji?redirect=${redirect}`;
+            try {
+                const { response, data } = await authFetch('/bimoji-status');
+                const status = data && data.data ? data.data : {};
+                if (response.ok && status.configured && status.reachable) {
+                    hint.style.display = 'none';
+                    return;
+                }
+                btn.style.display = 'none';
+                hint.classList.add('warn');
+                hint.textContent = status.configured
+                    ? '当前服务器无法连接笔墨迹通行证，已隐藏该登录方式。'
+                    : '笔墨迹通行证未配置，已隐藏该登录方式。';
+            } catch {
+                btn.style.display = 'none';
+                hint.classList.add('warn');
+                hint.textContent = '笔墨迹通行证状态检测失败，已隐藏该登录方式。';
+            }
+        }
+
         function mountApp(meData) {
             if (appMounted) return;
             appMounted = true;
@@ -594,6 +624,7 @@
                     id: String(user.id || ''),
                     name: String(user.name || '用户'),
                     linuxdo_id: String(user.linuxdo_id || ''),
+                    bimoji_sub: String(user.bimoji_sub || ''),
                     avatar: String(user.avatar || '')
                 },
                 isAdmin: Boolean(meData.is_admin),
@@ -697,15 +728,17 @@
             }
         });
 
-        document.getElementById('linuxdoLoginBtn')?.addEventListener('click', function (e) {
-            e.preventDefault();
-            const href = this.getAttribute('href');
-            if (!href || href === '#') return;
-            const popup = window.open(href, 'linuxdo_auth', 'width=460,height=620,popup=yes');
-            if (!popup) {
-                window.location.href = href;
-            }
-        });
+        function bindPopupLogin(buttonId, popupName) {
+            document.getElementById(buttonId)?.addEventListener('click', function (e) {
+                e.preventDefault();
+                const href = this.getAttribute('href');
+                if (!href || href === '#') return;
+                const popup = window.open(href, popupName, 'width=460,height=620,popup=yes');
+                if (!popup) window.location.href = href;
+            });
+        }
+        bindPopupLogin('linuxdoLoginBtn', 'linuxdo_auth');
+        bindPopupLogin('bimojiLoginBtn', 'bimoji_auth');
 
         document.getElementById('logoutBtn').addEventListener('click', async function (e) {
             e.preventDefault();
@@ -718,14 +751,14 @@
             setLoginTip('此账号已被管理员禁用。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         } else if (loginState && loginState.startsWith('failed')) {
-            setLoginTip('Linux DO 登录失败，请稍后重试。', true);
+            setLoginTip(loginState.includes('bimoji') ? '笔墨迹通行证登录失败，请稍后重试。' : 'Linux DO 登录失败，请稍后重试。', true);
             history.replaceState(null, '', window.location.origin + window.location.pathname);
         }
 
         function notifyAuthPopup(success) {
             try {
                 if (window.opener) {
-                    window.opener.postMessage({ type: 'dm-linuxdo-auth', success: Boolean(success) }, window.location.origin);
+                    window.opener.postMessage({ type: 'dm-external-auth', success: Boolean(success) }, window.location.origin);
                 }
             } catch {
                 // 跨域等异常直接忽略。
@@ -736,11 +769,11 @@
         window.addEventListener('message', function (event) {
             if (event.origin !== window.location.origin) return;
             const data = event.data;
-            if (!data || data.type !== 'dm-linuxdo-auth') return;
+            if (!data || data.type !== 'dm-external-auth') return;
             if (data.success) {
                 window.location.reload();
             } else {
-                setLoginTip('Linux DO 登录失败，请稍后重试。', true);
+                setLoginTip('第三方登录失败，请稍后重试。', true);
             }
         });
 
@@ -753,6 +786,7 @@
             if (loggedIn) return;
             revealLogin();
             void checkLinuxdoStatus();
+            void checkBimojiStatus();
         })();
     })();
     </script>
