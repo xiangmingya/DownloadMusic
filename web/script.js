@@ -3294,10 +3294,22 @@ function renderMembership(data) {
     const hint = document.getElementById('membershipHint');
     const chip = document.getElementById('userChip');
     const badge = document.getElementById('membershipStateBadge');
+    const priceRow = price?.closest('.membership-popover-price');
     if (!status || !price || !button || !hint || !chip || !badge) return;
     if (window.APP_CONTEXT) window.APP_CONTEXT.membership = data;
     const userName = String(window.APP_CONTEXT?.user?.name || '用户');
     price.textContent = String(data.monthly_price || '10.00');
+    if (priceRow) priceRow.hidden = false;
+    if (data.source === 'bimoji') {
+        chip.textContent = `${userName} · 笔墨迹博友`;
+        badge.textContent = '专属免会员';
+        status.textContent = '笔墨迹博友专属免会员，无需开通或续费，可直接播放与下载。';
+        if (priceRow) priceRow.hidden = true;
+        button.hidden = true;
+        button.disabled = true;
+        hint.textContent = '已通过笔墨迹通行证获得博友专属完整使用权限。';
+        return;
+    }
     if (data.source === 'admin') {
         chip.textContent = `${userName} · 家庭账号`;
         badge.textContent = '无需会员';
