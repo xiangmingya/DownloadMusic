@@ -3428,15 +3428,21 @@ function memberTime(value) {
 function renderAdminMembers(members) {
     const list = document.getElementById('adminMemberList');
     if (!list) return;
-    list.innerHTML = members.length ? `<div class="admin-member-table" role="table"><div class="admin-member-table-head" role="row"><span>会员</span><span>Linux DO ID</span><span>注册时间</span><span>最近使用</span><span>会员开通</span><span>到期时间</span><span>API Key</span><span>用户操作</span></div>${members.map(item => {
+    list.innerHTML = members.length ? `<div class="admin-member-table" role="table"><div class="admin-member-table-head" role="row"><span>用户</span><span>来源 / ID</span><span>注册时间</span><span>最近使用</span><span>访问权益</span><span>到期时间</span><span>API Key</span><span>用户操作</span></div>${members.map(item => {
+        const provider = item.provider === 'bimoji' ? 'bimoji' : 'linuxdo';
+        const userId = String(item.user_id || item.linuxdo_id || item.bimoji_sub || '');
+        const sourceLabel = provider === 'bimoji' ? '笔墨迹' : 'Linux DO';
+        const accessLabel = provider === 'bimoji' ? '博友专属免会员' : memberTime(item.membership_started_at);
+        const expiryLabel = provider === 'bimoji' ? '长期有效' : memberTime(item.expires_at);
         const disabled = Boolean(item.disabled);
         const networkAttention = item.api_key_network_risk?.available !== false && item.api_key_network_risk?.status === 'attention';
         const apiLabel = item.has_api_key ? (networkAttention ? '⚠ 需关注' : (item.api_key_enabled ? '管理 Key' : 'Key 已禁用')) : '未申请';
-        return `<article class="admin-member-row${disabled ? ' is-disabled' : ''}${networkAttention ? ' has-api-alert' : ''}" role="row"><div class="admin-member-identity"><strong>${escapeHtml(item.name || item.linuxdo_id)}</strong>${item.is_admin ? '<span class="admin-member-admin-badge">管理员</span>' : ''}${disabled ? '<span class="admin-member-disabled-badge">已禁用</span>' : ''}</div><span class="admin-member-id">${escapeHtml(item.linuxdo_id)}</span><time>${escapeHtml(memberTime(item.registered_at))}</time><time>${escapeHtml(memberTime(item.last_used_at))}</time><time>${escapeHtml(memberTime(item.membership_started_at))}</time><time class="admin-member-expiry">${escapeHtml(memberTime(item.expires_at))}</time><button type="button" class="admin-member-action-btn${networkAttention ? ' is-warning' : ''}" data-member-api-key="${escapeHtml(item.linuxdo_id)}"${item.has_api_key ? '' : ' disabled'}>${escapeHtml(apiLabel)}</button><button type="button" class="admin-member-action-btn${disabled ? ' is-enable' : ' is-disable'}" data-member-toggle="${escapeHtml(item.linuxdo_id)}" data-disabled="${disabled ? '1' : '0'}"${item.is_admin ? ' disabled title="管理员账号不能禁用"' : ''}>${disabled ? '启用用户' : '禁用用户'}</button></article>`;
-    }).join('')}</div>` : '<p class="admin-muted admin-members-empty">没有找到有效会员。</p>';
+        return `<article class="admin-member-row${disabled ? ' is-disabled' : ''}${networkAttention ? ' has-api-alert' : ''}" role="row"><div class="admin-member-identity"><strong>${escapeHtml(item.name || userId)}</strong><span class="admin-member-provider-badge is-${provider}">${sourceLabel}</span>${item.is_admin ? '<span class="admin-member-admin-badge">管理员</span>' : ''}${disabled ? '<span class="admin-member-disabled-badge">已禁用</span>' : ''}</div><span class="admin-member-id" title="${escapeHtml(userId)}">${escapeHtml(`${sourceLabel} · ${userId}`)}</span><time>${escapeHtml(memberTime(item.registered_at))}</time><time>${escapeHtml(memberTime(item.last_used_at))}</time><time>${escapeHtml(accessLabel)}</time><time class="admin-member-expiry">${escapeHtml(expiryLabel)}</time><button type="button" class="admin-member-action-btn${networkAttention ? ' is-warning' : ''}" data-member-api-key="${escapeHtml(userId)}" data-provider="${provider}"${item.has_api_key ? '' : ' disabled'}>${escapeHtml(apiLabel)}</button><button type="button" class="admin-member-action-btn${disabled ? ' is-enable' : ' is-disable'}" data-member-toggle="${escapeHtml(userId)}" data-provider="${provider}" data-disabled="${disabled ? '1' : '0'}"${item.is_admin ? ' disabled title="管理员账号不能禁用"' : ''}>${disabled ? '启用用户' : '禁用用户'}</button></article>`;
+    }).join('')}</div>` : '<p class="admin-muted admin-members-empty">没有找到用户。</p>';
 }
 
 let activeAdminApiKeyLinuxdoId = '';
+let activeAdminApiKeyProvider = 'linuxdo';
 
 function renderAdminApiKeyDetails(data) {
     const userLine = document.getElementById('adminApiKeyDialogUser');
@@ -3444,7 +3450,8 @@ function renderAdminApiKeyDetails(data) {
     const toggle = document.getElementById('adminApiKeyToggleBtn');
     if (!userLine || !details || !toggle) return;
     const user = data?.user || {};
-    userLine.textContent = `${user.name || user.linuxdo_id || '用户'} · Linux DO ${user.linuxdo_id || '—'}${user.disabled ? ' · 用户已禁用' : ''}`;
+    const providerLabel = user.provider === 'bimoji' ? '笔墨迹' : 'Linux DO';
+    userLine.textContent = `${user.name || user.user_id || '用户'} · ${providerLabel} ${user.user_id || user.linuxdo_id || user.bimoji_sub || '—'}${user.disabled ? ' · 用户已禁用' : ''}`;
     if (!data?.has_key || !data?.key) {
         details.innerHTML = '<p class="monitoring-empty">该用户尚未申请 API Key。</p>';
         toggle.hidden = true;
@@ -3470,17 +3477,18 @@ function renderAdminApiKeyDetails(data) {
     toggle.classList.toggle('is-danger', key.enabled);
 }
 
-async function openAdminApiKeyDialog(linuxdoId) {
+async function openAdminApiKeyDialog(userId, provider = 'linuxdo') {
     const dialog = document.getElementById('adminApiKeyDialog');
     const details = document.getElementById('adminApiKeyDetails');
     const toggle = document.getElementById('adminApiKeyToggleBtn');
     if (!dialog || !details || !toggle) return;
-    activeAdminApiKeyLinuxdoId = String(linuxdoId || '');
+    activeAdminApiKeyLinuxdoId = String(userId || '');
+    activeAdminApiKeyProvider = provider === 'bimoji' ? 'bimoji' : 'linuxdo';
     details.textContent = '正在读取…';
     toggle.hidden = true;
     if (!dialog.open) dialog.showModal();
     try {
-        const data = await getJson(`${APP_API_ROOT}/admin/members/api-key?linuxdo_id=${encodeURIComponent(activeAdminApiKeyLinuxdoId)}`);
+        const data = await getJson(`${APP_API_ROOT}/admin/members/api-key?provider=${encodeURIComponent(activeAdminApiKeyProvider)}&user_id=${encodeURIComponent(activeAdminApiKeyLinuxdoId)}`);
         renderAdminApiKeyDetails(data);
     } catch (error) {
         details.textContent = error.message || '读取失败';
@@ -3494,9 +3502,9 @@ async function toggleAdminApiKey() {
     if (!enabled && !window.confirm('禁用后，该用户的客户端会立即无法使用此 API Key。继续吗？')) return;
     button.disabled = true;
     try {
-        await getJson(`${APP_API_ROOT}/admin/members/api-key`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ linuxdo_id: activeAdminApiKeyLinuxdoId, enabled }) });
+        await getJson(`${APP_API_ROOT}/admin/members/api-key`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: activeAdminApiKeyProvider, user_id: activeAdminApiKeyLinuxdoId, enabled }) });
         showToast(enabled ? 'API Key 已启用' : 'API Key 已禁用', 'success');
-        await Promise.all([openAdminApiKeyDialog(activeAdminApiKeyLinuxdoId), loadAdminMembers()]);
+        await Promise.all([openAdminApiKeyDialog(activeAdminApiKeyLinuxdoId, activeAdminApiKeyProvider), loadAdminMembers()]);
     } catch (error) {
         showToast(error.message || '操作失败', 'error');
     } finally {
@@ -3504,11 +3512,11 @@ async function toggleAdminApiKey() {
     }
 }
 
-async function toggleAdminMember(linuxdoId, currentlyDisabled) {
+async function toggleAdminMember(userId, provider, currentlyDisabled) {
     const disabled = !currentlyDisabled;
     if (disabled && !window.confirm('禁用后，该用户的网页会话和 API Key 都将无法继续使用。继续吗？')) return;
     try {
-        await getJson(`${APP_API_ROOT}/admin/members/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ linuxdo_id: linuxdoId, disabled }) });
+        await getJson(`${APP_API_ROOT}/admin/members/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, user_id: userId, disabled }) });
         showToast(disabled ? '用户已禁用' : '用户已启用', 'success');
         await loadAdminMembers();
     } catch (error) {
@@ -3910,16 +3918,16 @@ function initHomeInterface() {
     document.getElementById('adminMemberList')?.addEventListener('click', event => {
         const keyButton = event.target.closest('[data-member-api-key]');
         if (keyButton && !keyButton.disabled) {
-            void openAdminApiKeyDialog(keyButton.getAttribute('data-member-api-key'));
+            void openAdminApiKeyDialog(keyButton.getAttribute('data-member-api-key'), keyButton.getAttribute('data-provider'));
             return;
         }
         const userButton = event.target.closest('[data-member-toggle]');
         if (userButton && !userButton.disabled) {
-            void toggleAdminMember(userButton.getAttribute('data-member-toggle'), userButton.getAttribute('data-disabled') === '1');
+            void toggleAdminMember(userButton.getAttribute('data-member-toggle'), userButton.getAttribute('data-provider'), userButton.getAttribute('data-disabled') === '1');
         }
     });
     document.getElementById('adminApiKeyToggleBtn')?.addEventListener('click', () => void toggleAdminApiKey());
-    document.getElementById('adminApiKeyDialog')?.addEventListener('close', () => { activeAdminApiKeyLinuxdoId = ''; });
+    document.getElementById('adminApiKeyDialog')?.addEventListener('close', () => { activeAdminApiKeyLinuxdoId = ''; activeAdminApiKeyProvider = 'linuxdo'; });
     document.getElementById('adminMemberSearch')?.addEventListener('search', () => void loadAdminMembers());
     document.getElementById('adminMemberSearch')?.addEventListener('keydown', event => {
         if (event.key === 'Enter') { event.preventDefault(); void loadAdminMembers(); }

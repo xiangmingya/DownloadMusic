@@ -135,3 +135,21 @@ ON api_key_network_activity (last_seen_at DESC);
 -- linuxdo_users belongs to the base authentication schema. Migration 0003 adds
 -- last_used_at and this index so the admin list can sort by real recent use.
 CREATE INDEX IF NOT EXISTS idx_linuxdo_users_last_used ON linuxdo_users (last_used_at DESC);
+
+-- 笔墨迹通行证用户。只保存后台管理所需的最小身份与准入摘要。
+CREATE TABLE IF NOT EXISTS bimoji_users (
+  bimoji_sub TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT,
+  avatar TEXT,
+  bimoji_exists INTEGER NOT NULL DEFAULT 0,
+  account_registered INTEGER NOT NULL DEFAULT 0,
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  max_level INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL,
+  disabled_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_bimoji_users_last_used ON bimoji_users (last_used_at DESC);

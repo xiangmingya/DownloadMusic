@@ -93,6 +93,7 @@ const resolverNegativeCache = new Map();
 const resolverProviderHealth = new Map();
 const resolverProviderInFlight = new Map();
 const linuxdoUserAccessCache = new Map();
+const bimojiUserAccessCache = new Map();
 const userActivityWriteAt = new Map();
 const apiNetworkActivityWriteAt = new Map();
 const USER_ACCESS_CACHE_TTL_MS = 30 * 1000;
@@ -673,6 +674,37 @@ async function touchLinuxdoUserActivity(linuxdoId, env) {
   }
 }
 
+async function getBimojiUserAccess(sub, env, { force = false } = {}) {
+  const id = String(sub || "").trim();
+  const db = getDatabase(env);
+  if (!id || !db) return { disabled: false, disabled_at: null };
+  const cached = bimojiUserAccessCache.get(id);
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.value;
+  try {
+    const row = await db.prepare("SELECT disabled_at FROM bimoji_users WHERE bimoji_sub = ? LIMIT 1").bind(id).first();
+    const value = { disabled: Boolean(row?.disabled_at), disabled_at: row?.disabled_at || null };
+    bimojiUserAccessCache.set(id, { value, expiresAt: Date.now() + USER_ACCESS_CACHE_TTL_MS });
+    return value;
+  } catch {
+    return { disabled: false, disabled_at: null };
+  }
+}
+
+async function touchBimojiUserActivity(sub, env) {
+  const id = String(sub || "").trim();
+  const db = getDatabase(env);
+  if (!id || !db) return;
+  const cacheKey = `bimoji:${id}`;
+  const nowMs = Date.now();
+  if (nowMs - Number(userActivityWriteAt.get(cacheKey) || 0) < USER_ACTIVITY_WRITE_INTERVAL_MS) return;
+  userActivityWriteAt.set(cacheKey, nowMs);
+  try {
+    await db.prepare("UPDATE bimoji_users SET last_used_at = ? WHERE bimoji_sub = ?").bind(sqlNow(), id).run();
+  } catch {
+    // Activity tracking is informational and must never block the application.
+  }
+}
+
 async function requireSession(request, env) {
   const session = await getSession(request, env);
   if (!session) {
@@ -685,6 +717,14 @@ async function requireSession(request, env) {
       return { ok: false, response: jsonResponse(403, { code: 403, message: "账号已被管理员禁用" }) };
     }
     await touchLinuxdoUserActivity(linuxdoId, env);
+  }
+  if (session.type === "bimoji") {
+    const sub = String(session?.user?.bimoji_sub || session?.user?.id || "").trim();
+    const access = await getBimojiUserAccess(sub, env);
+    if (access.disabled) {
+      return { ok: false, response: jsonResponse(403, { code: 403, message: "账号已被管理员禁用" }) };
+    }
+    await touchBimojiUserActivity(sub, env);
   }
   return { ok: true, session };
 }
@@ -1651,6 +1691,28 @@ async function createBimojiSession(profile, env) {
   return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
 }
 
+async function recordBimojiLogin(profile, env) {
+  const db = getDatabase(env);
+  const sub = String(profile?.sub || "").trim();
+  if (!db || !sub) return { disabled: false, disabled_at: null };
+  const name = String(profile.bimoji_nickname || profile.name || profile.preferred_username || profile.email || `笔墨迹用户 ${sub.slice(0, 8)}`).trim();
+  const now = sqlNow();
+  await db.prepare(`INSERT INTO bimoji_users
+    (bimoji_sub, name, email, avatar, bimoji_exists, account_registered, email_verified, max_level, created_at, last_login_at, last_used_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(bimoji_sub) DO UPDATE SET
+      name = excluded.name, email = excluded.email, avatar = excluded.avatar,
+      bimoji_exists = excluded.bimoji_exists, account_registered = excluded.account_registered,
+      email_verified = excluded.email_verified, max_level = excluded.max_level,
+      last_login_at = excluded.last_login_at, last_used_at = excluded.last_used_at`)
+    .bind(sub, name, String(profile.email || ""), String(profile.picture || ""), profile.bimoji_exists ? 1 : 0,
+      profile.bimoji_account_registered ? 1 : 0, profile.bimoji_email_verified ? 1 : 0,
+      Number(profile.bimoji_max_level || 0), now, now, now)
+    .run();
+  userActivityWriteAt.set(`bimoji:${sub}`, Date.now());
+  return getBimojiUserAccess(sub, env, { force: true });
+}
+
 async function handleBimojiLoginCallback(request, env) {
   const cfg = getBimojiConfig(env);
   const fallback = safeRedirectUrl("", env, request.url);
@@ -1686,9 +1748,14 @@ async function handleBimojiLoginCallback(request, env) {
       signal: AbortSignal.timeout(15000),
     });
     if (!userResult.resp.ok || !userResult.json || String(userResult.json.sub || "") !== String(idClaims.sub || "")) throw new Error("userinfo");
+    const profile = { ...idClaims, ...userResult.json };
+    const userAccess = await recordBimojiLogin(profile, env);
+    if (userAccess.disabled) {
+      return new Response(null, { status: 302, headers: { Location: appendLoginResult(redirect, "disabled"), "Set-Cookie": clearTransaction } });
+    }
     const headers = new Headers({ Location: redirect });
     headers.append("Set-Cookie", clearTransaction);
-    headers.append("Set-Cookie", await createBimojiSession({ ...idClaims, ...userResult.json }, env));
+    headers.append("Set-Cookie", await createBimojiSession(profile, env));
     return new Response(null, { status: 302, headers });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown";
@@ -1827,8 +1894,23 @@ async function handleAdminMembers(request, env) {
     : db.prepare(`${selectMembers} WHERE m.expires_at > ? ORDER BY recent_used_at DESC, m.expires_at ASC LIMIT 500`).bind(now);
   const rows = await statement.all();
   const memberRows = rows.results || [];
-  const networkActivity = await loadApiKeyNetworkActivity(db, memberRows.map((row) => row.api_key_id));
-  return jsonResponse(200, { code: 0, message: "Success", data: { members: (rows.results || []).map((row) => ({
+  const bimojiSelect = `SELECT u.bimoji_sub, u.name, u.email, u.avatar, u.bimoji_exists, u.account_registered,
+    u.email_verified, u.max_level, u.created_at AS registered_at, u.last_login_at, u.last_used_at, u.disabled_at,
+    k.id AS api_key_id, k.enabled AS api_key_enabled
+    FROM bimoji_users u LEFT JOIN api_keys k ON k.owner_key = ('bimoji:' || u.bimoji_sub)`;
+  let bimojiRows = [];
+  try {
+    const bimojiResult = keyword
+      ? await db.prepare(`${bimojiSelect} WHERE u.bimoji_sub LIKE ? OR u.name LIKE ? OR u.email LIKE ? ORDER BY u.last_used_at DESC LIMIT 500`).bind(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`).all()
+      : await db.prepare(`${bimojiSelect} ORDER BY u.last_used_at DESC LIMIT 500`).all();
+    bimojiRows = bimojiResult.results || [];
+  } catch {
+    // During a rolling deploy the migration may not exist yet; keep Linux DO management available.
+  }
+  const networkActivity = await loadApiKeyNetworkActivity(db, [...memberRows, ...bimojiRows].map((row) => row.api_key_id));
+  const linuxdoMembers = memberRows.map((row) => ({
+    provider: "linuxdo",
+    user_id: String(row.linuxdo_id || ""),
     linuxdo_id: String(row.linuxdo_id || ""),
     name: String(row.name || row.linuxdo_id || ""),
     is_admin: getAdminLinuxdoIds(env).has(String(row.linuxdo_id || "")),
@@ -1848,7 +1930,37 @@ async function handleAdminMembers(request, env) {
     membership_started_at: row.membership_started_at || row.updated_at || null,
     expires_at: row.expires_at || null,
     updated_at: row.updated_at || null,
-  })) } });
+  }));
+  const bimojiMembers = bimojiRows.map((row) => ({
+    provider: "bimoji",
+    user_id: String(row.bimoji_sub || ""),
+    bimoji_sub: String(row.bimoji_sub || ""),
+    name: String(row.name || row.email || row.bimoji_sub || ""),
+    email: String(row.email || ""),
+    avatar: String(row.avatar || ""),
+    registered_at: row.registered_at || null,
+    last_login_at: row.last_login_at || null,
+    last_used_at: row.last_used_at || row.last_login_at || null,
+    disabled: Boolean(row.disabled_at),
+    disabled_at: row.disabled_at || null,
+    has_api_key: Boolean(row.api_key_id),
+    api_key_enabled: Boolean(row.api_key_id) && Number(row.api_key_enabled) === 1,
+    api_key_network_risk: row.api_key_id ? {
+      ...apiKeyNetworkRisk(networkActivity.rowsByKey.get(Number(row.api_key_id)) || []),
+      available: networkActivity.available,
+      recent_networks: undefined,
+    } : null,
+    access_label: "博友专属免会员",
+    bimoji_exists: Boolean(row.bimoji_exists),
+    account_registered: Boolean(row.account_registered),
+    email_verified: Boolean(row.email_verified),
+    max_level: Number(row.max_level || 0),
+    membership_started_at: null,
+    expires_at: null,
+  }));
+  const members = [...linuxdoMembers, ...bimojiMembers]
+    .sort((a, b) => Date.parse(b.last_used_at || "") - Date.parse(a.last_used_at || ""));
+  return jsonResponse(200, { code: 0, message: "Success", data: { members } });
 }
 
 async function handleAdminMemberStatus(request, env) {
@@ -1857,8 +1969,17 @@ async function handleAdminMemberStatus(request, env) {
   const db = getDatabase(env);
   if (!db) return apiError("D1 数据库未配置", 503);
   const body = await parseJsonBody(request);
-  const linuxdoId = String(body.linuxdo_id || "").trim().slice(0, 80);
-  if (!linuxdoId || typeof body.disabled !== "boolean") return apiError("用户和状态参数无效", 400);
+  const provider = body.provider === "bimoji" ? "bimoji" : "linuxdo";
+  const userId = String(body.user_id || body.linuxdo_id || "").trim().slice(0, 160);
+  if (!userId || typeof body.disabled !== "boolean") return apiError("用户和状态参数无效", 400);
+  if (provider === "bimoji") {
+    const disabledAt = body.disabled ? sqlNow() : null;
+    const result = await db.prepare("UPDATE bimoji_users SET disabled_at = ? WHERE bimoji_sub = ?").bind(disabledAt, userId).run();
+    if (!result.meta?.changes) return apiError("用户不存在", 404);
+    bimojiUserAccessCache.delete(userId);
+    return jsonResponse(200, { code: 0, message: "Success", data: { provider, user_id: userId, disabled: body.disabled, disabled_at: disabledAt } });
+  }
+  const linuxdoId = userId.slice(0, 80);
   if (body.disabled && getAdminLinuxdoIds(env).has(linuxdoId)) return apiError("不能禁用管理员账号", 400);
   const disabledAt = body.disabled ? sqlNow() : null;
   const result = await db.prepare("UPDATE linuxdo_users SET disabled_at = ? WHERE linuxdo_id = ?").bind(disabledAt, linuxdoId).run();
@@ -1872,18 +1993,30 @@ async function handleAdminMemberApiKey(request, env) {
   if (!auth.ok) return auth.response;
   const db = getDatabase(env);
   if (!db) return apiError("D1 数据库未配置", 503);
-  const linuxdoId = String(new URL(request.url).searchParams.get("linuxdo_id") || "").trim().slice(0, 80);
-  if (!linuxdoId) return apiError("缺少 Linux DO ID", 400);
+  const params = new URL(request.url).searchParams;
+  const provider = params.get("provider") === "bimoji" ? "bimoji" : "linuxdo";
+  const userId = String(params.get("user_id") || params.get("linuxdo_id") || "").trim().slice(0, 160);
+  if (!userId) return apiError("缺少用户 ID", 400);
+  if (provider === "bimoji") {
+    const user = await db.prepare("SELECT bimoji_sub, name, disabled_at FROM bimoji_users WHERE bimoji_sub = ? LIMIT 1").bind(userId).first();
+    if (!user) return apiError("用户不存在", 404);
+    return adminApiKeyResponse(db, { provider, userId, name: user.name, disabled: Boolean(user.disabled_at) });
+  }
+  const linuxdoId = userId.slice(0, 80);
   const user = await db.prepare("SELECT linuxdo_id, name, disabled_at FROM linuxdo_users WHERE linuxdo_id = ? LIMIT 1").bind(linuxdoId).first();
   if (!user) return apiError("用户不存在", 404);
-  const row = await db.prepare("SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at, enabled, expires_at FROM api_keys WHERE owner_key = ? LIMIT 1").bind(`linuxdo:${linuxdoId}`).first();
+  return adminApiKeyResponse(db, { provider, userId: linuxdoId, name: user.name, disabled: Boolean(user.disabled_at) });
+}
+
+async function adminApiKeyResponse(db, { provider, userId, name, disabled }) {
+  const row = await db.prepare("SELECT id, api_key, name, created_at, last_used_at, mi_uid, device_id, device_name, bound_at, enabled, expires_at FROM api_keys WHERE owner_key = ? LIMIT 1").bind(`${provider}:${userId}`).first();
   const networkActivity = row ? await loadApiKeyNetworkActivity(db, [row.id]) : { available: true, rowsByKey: new Map() };
   const networkRisk = row ? {
     ...apiKeyNetworkRisk(networkActivity.rowsByKey.get(Number(row.id)) || []),
     available: networkActivity.available,
   } : null;
   return jsonResponse(200, { code: 0, message: "Success", data: {
-    user: { linuxdo_id: linuxdoId, name: String(user.name || linuxdoId), disabled: Boolean(user.disabled_at) },
+    user: { provider, user_id: userId, linuxdo_id: provider === "linuxdo" ? userId : "", bimoji_sub: provider === "bimoji" ? userId : "", name: String(name || userId), disabled },
     has_key: Boolean(row),
     key: row ? {
       id: Number(row.id),
@@ -1908,11 +2041,12 @@ async function handleAdminMemberApiKeyStatus(request, env) {
   const db = getDatabase(env);
   if (!db) return apiError("D1 数据库未配置", 503);
   const body = await parseJsonBody(request);
-  const linuxdoId = String(body.linuxdo_id || "").trim().slice(0, 80);
-  if (!linuxdoId || typeof body.enabled !== "boolean") return apiError("用户和 API Key 状态参数无效", 400);
-  const result = await db.prepare("UPDATE api_keys SET enabled = ? WHERE owner_key = ?").bind(body.enabled ? 1 : 0, `linuxdo:${linuxdoId}`).run();
+  const provider = body.provider === "bimoji" ? "bimoji" : "linuxdo";
+  const userId = String(body.user_id || body.linuxdo_id || "").trim().slice(0, 160);
+  if (!userId || typeof body.enabled !== "boolean") return apiError("用户和 API Key 状态参数无效", 400);
+  const result = await db.prepare("UPDATE api_keys SET enabled = ? WHERE owner_key = ?").bind(body.enabled ? 1 : 0, `${provider}:${userId}`).run();
   if (!result.meta?.changes) return apiError("该用户尚未申请 API Key", 404);
-  return jsonResponse(200, { code: 0, message: "Success", data: { linuxdo_id: linuxdoId, enabled: body.enabled } });
+  return jsonResponse(200, { code: 0, message: "Success", data: { provider, user_id: userId, enabled: body.enabled } });
 }
 
 async function handleAdminMemberGrant(request, env) {

@@ -197,10 +197,10 @@
                     <section class="admin-card admin-gift-card" aria-labelledby="grantMembershipTitle"><p class="eyebrow">会员管理</p><h2 id="grantMembershipTitle">赠送会员</h2><p class="admin-muted">按 Linux DO ID 或完整昵称赠送会员，保存后立即生效。</p><form id="grantMembershipForm" class="grant-membership-form"><label><span>赠送对象</span><input id="grantMemberTarget" type="text" required placeholder="Linux DO ID 或完整昵称"></label><label><span>赠送天数</span><input id="grantMemberDays" type="number" min="1" max="3650" value="30" required></label><label class="grant-note-field"><span>备注（可选）</span><input id="grantMemberNote" type="text" maxlength="240" placeholder="例如：活动赠送"></label><button type="submit">赠送会员</button></form></section>
                 </div>
                 <div class="admin-tabs" role="tablist" aria-label="管理中心内容">
-                    <button id="adminMembersTab" class="admin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="adminMembersPanel" data-admin-tab="members">会员管理</button>
+                    <button id="adminMembersTab" class="admin-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="adminMembersPanel" data-admin-tab="members">用户管理</button>
                     <button id="adminMonitoringTab" class="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="adminMonitoringPanel" data-admin-tab="monitoring">实时服务监控</button>
                 </div>
-                <section id="adminMembersPanel" class="admin-card admin-members-card admin-tab-panel" role="tabpanel" aria-labelledby="adminMembersTab" data-admin-tab-panel="members"><div class="section-heading admin-members-heading"><div><p class="eyebrow">会员管理</p><h2 id="adminMembersTitle">有效会员</h2><p class="admin-muted">显示最近使用、注册和会员有效期；支持管理用户状态及其 API Key。</p></div><div class="admin-member-toolbar"><label class="sr-only" for="adminMemberSearch">查找会员</label><input id="adminMemberSearch" type="search" placeholder="搜索昵称或 Linux DO ID"><button id="refreshMembersBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div><div id="adminMemberList" class="admin-member-list">正在读取…</div></section>
+                <section id="adminMembersPanel" class="admin-card admin-members-card admin-tab-panel" role="tabpanel" aria-labelledby="adminMembersTab" data-admin-tab-panel="members"><div class="section-heading admin-members-heading"><div><p class="eyebrow">用户管理</p><h2 id="adminMembersTitle">登录用户</h2><p class="admin-muted">集中显示 Linux DO 有效会员与笔墨迹博友的注册、最近使用和访问权益；支持管理用户状态及其 API Key。</p></div><div class="admin-member-toolbar"><label class="sr-only" for="adminMemberSearch">查找用户</label><input id="adminMemberSearch" type="search" placeholder="搜索昵称、邮箱或用户 ID"><button id="refreshMembersBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div><div id="adminMemberList" class="admin-member-list">正在读取…</div></section>
                 <section id="adminMonitoringPanel" class="admin-monitoring admin-tab-panel" role="tabpanel" aria-labelledby="adminMonitoringTab" data-admin-tab-panel="monitoring" hidden>
                     <div class="section-heading admin-monitoring-heading"><div><p class="eyebrow">用户真实调用数据 · 每 30 秒刷新</p><h2 id="monitoringTitle">服务实时监控</h2><p id="monitoringSummaryText" class="admin-muted">正在读取最近服务状态…</p></div><div class="monitoring-actions"><label class="sr-only" for="monitoringRange">统计范围</label><select id="monitoringRange" aria-label="统计范围"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select><button id="refreshMonitoringBtn" type="button" class="secondary-quiet-btn">刷新</button></div></div>
                     <div id="monitoringKpis" class="monitoring-kpis" aria-live="polite"></div>
@@ -404,7 +404,7 @@
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260813-48';
+        const APP_ASSET_VERSION = '20260813-49';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 
