@@ -144,7 +144,7 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 ### 5.3 会员列表
 `GET /api/admin/members?q=<关键词>`
 
-返回有效会员列表（Linux DO ID、昵称、注册/最近使用、会员开通与到期时间、用户状态及 API Key 状态）。`last_used_at` 同时统计网页会话和该用户 API Key 的实际调用。申请过 Key 的用户还会返回 `api_key_network_risk`，用于标记外部接口的网络使用是否需要管理员关注；提醒不会自动禁用用户或 Key。
+返回有效会员列表（Linux DO ID、昵称、注册/最近使用、会员开通与到期时间、用户状态及 API Key 状态）。`last_used_at` 同时统计网页会话和该用户 API Key 的实际调用。申请过 Key 的用户还会返回 `api_key_network_risk`，用于标记外部接口的网络使用是否需要管理员关注；`resolve_security` 返回当前小时解析次数和安全提醒摘要。
 
 ### 5.4 赠送会员
 `POST /api/admin/members/grant`
@@ -155,7 +155,7 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 ### 5.5 用户状态
 `PUT /api/admin/members/status`
 
-启用或禁用用户，正文为 `{ "linuxdo_id": "123", "disabled": true }`。禁用后现有网页会话和该用户的 API Key 都会被拒绝；管理员账号不能被禁用。
+启用或禁用用户，正文为 `{ "linuxdo_id": "123", "disabled": true }`。禁用时会立即撤销该用户全部网页登录会话，API Key 也会被拒绝；管理员账号不能被禁用。
 
 ### 5.6 用户 API Key 管理
 `GET /api/admin/members/api-key?linuxdo_id=<ID>`
@@ -166,12 +166,23 @@ Cron 每 5 分钟运行一次并轮换平台，因此每个平台约 15 分钟�
 
 启用或禁用指定用户的 API Key，正文为 `{ "linuxdo_id": "123", "enabled": false }`。
 
-### 5.7 服务监控
+### 5.7 会员解析安全与登录会话
+`GET /api/admin/members/security?provider=linuxdo&user_id=<ID>`
+
+返回当前小时和最近 24 小时的解析请求数、成功/失败数、被限流数、脱敏 IP 网段数、User-Agent 数，以及最近 30 个登录会话。达到提醒阈值、高失败率、网络/客户端数量异常或活跃会话过多时返回提醒原因。
+
+`PUT /api/admin/members/session`
+
+撤销单个登录会话，正文为 `{ "provider": "linuxdo", "user_id": "123", "sid": "会话ID", "revoked": true }`。撤销后该设备的 Cookie 会在下一次请求时失效。
+
+默认提醒阈值为每会员每小时 120 次，硬限制为 300 次；可通过 `MEMBER_RESOLVE_WARNING_PER_HOUR`、`MEMBER_RESOLVE_LIMIT_PER_HOUR` 配置。统计覆盖网页 `parse`/`resolve` 与 API Key `topone` 请求，保留 30 天；IP 仅按 IPv4 `/24` 或 IPv6 `/64` 脱敏聚合，不保存完整地址。
+
+### 5.8 服务监控
 `GET /api/admin/monitoring?days=1|7|30`
 
 返回 `services`（各源调用/成功率/耗时/健康度/禁用状态）、`trend`（24 小时趋势）、`final_sources`（最终解析来源命中）。
 
-### 5.8 禁用 / 启用解析源
+### 5.9 禁用 / 启用解析源
 `PUT /api/admin/monitoring/sources`
 ```json
 { "source": "onrender", "disabled": true }

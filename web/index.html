@@ -398,13 +398,21 @@
                 <button id="adminApiKeyToggleBtn" type="button" class="secondary-quiet-btn" hidden>禁用 API Key</button>
             </div>
         </dialog>
+
+        <dialog id="adminSecurityDialog" class="admin-api-key-dialog" aria-labelledby="adminSecurityDialogTitle">
+            <div class="uptime-dialog-head">
+                <div><p class="eyebrow">管理员 · 安全审计</p><h2 id="adminSecurityDialogTitle">解析与会话</h2><p id="adminSecurityDialogUser" class="admin-muted">正在读取用户信息…</p></div>
+                <form method="dialog"><button class="uptime-dialog-close" type="submit" aria-label="关闭安全审计"></button></form>
+            </div>
+            <div id="adminSecurityDetails" class="admin-api-key-details" aria-live="polite">正在读取…</div>
+        </dialog>
     </div>
 
     <script>
     (function () {
         const AUTH_BASE = String(window.AUTH_API_BASE || '/api/auth').replace(/\/$/, '');
         const APP_BASE = String(window.APP_API_BASE || '/api/proxy').replace(/\/$/, '');
-        const APP_ASSET_VERSION = '20260813-49';
+        const APP_ASSET_VERSION = '20260814-50';
         window.AUTH_API_BASE = AUTH_BASE;
         window.APP_API_BASE = APP_BASE;
 

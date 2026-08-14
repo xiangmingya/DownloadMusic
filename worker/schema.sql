@@ -132,6 +132,56 @@ ON api_key_network_activity (api_key_id, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_key_network_activity_time
 ON api_key_network_activity (last_seen_at DESC);
 
+-- 可撤销网页登录会话。sid 为随机标识，不保存 Cookie 或签名 Token。
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  sid TEXT PRIMARY KEY,
+  owner_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  ip_preview TEXT,
+  network_hash TEXT,
+  user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_owner_time
+ON auth_sessions (owner_key, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
+ON auth_sessions (expires_at);
+
+-- 会员解析请求按小时聚合；不记录歌曲名、歌曲 ID 或完整 IP。
+CREATE TABLE IF NOT EXISTS member_resolve_hourly (
+  bucket_hour TEXT NOT NULL,
+  owner_key TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  successes INTEGER NOT NULL DEFAULT 0,
+  failures INTEGER NOT NULL DEFAULT 0,
+  rate_limited INTEGER NOT NULL DEFAULT 0,
+  last_request_at TEXT,
+  PRIMARY KEY (bucket_hour, owner_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_member_resolve_hourly_owner
+ON member_resolve_hourly (owner_key, bucket_hour DESC);
+
+-- 每小时去重后的网络与客户端维度。value_hash 使用服务端盐，不保存原始值。
+CREATE TABLE IF NOT EXISTS member_resolve_dimensions (
+  bucket_hour TEXT NOT NULL,
+  owner_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value_hash TEXT NOT NULL,
+  preview TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  observations INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (bucket_hour, owner_key, kind, value_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_member_resolve_dimensions_owner
+ON member_resolve_dimensions (owner_key, bucket_hour DESC, kind);
+
 -- linuxdo_users belongs to the base authentication schema. Migration 0003 adds
 -- last_used_at and this index so the admin list can sort by real recent use.
 CREATE INDEX IF NOT EXISTS idx_linuxdo_users_last_used ON linuxdo_users (last_used_at DESC);

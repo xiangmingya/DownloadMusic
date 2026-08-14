@@ -73,6 +73,8 @@ SESSION_COOKIE_NAME = "dm_session"
 SESSION_COOKIE_SAMESITE = "None"
 # SESSION_COOKIE_DOMAIN = ".your-domain.com"
 SESSION_TTL_SECONDS = "2592000"
+MEMBER_RESOLVE_WARNING_PER_HOUR = "120"
+MEMBER_RESOLVE_LIMIT_PER_HOUR = "300"
 
 # 统一解析器：默认启用。解析源由 Worker 自适应选择，前端不再调用旧 backup* 路由。
 RESOLVER_V2_ENABLED = "true"

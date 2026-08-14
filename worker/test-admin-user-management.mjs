@@ -28,6 +28,18 @@ const networkRows = [
   { api_key_id: 7, network_hash: "network-c", ip_preview: "122.3.*.*", country: "CN", region: "广东", city: "佛山", asn: 4134, user_agent: "Songloft", first_seen_at: recentNetworkTime, last_seen_at: recentNetworkTime, observations: 1 },
 ];
 let recordedNetworkActivity = null;
+let hourlyRequests = 1;
+let sessionRevokedAt = null;
+const securitySession = {
+  sid: "session-user1-abcdef",
+  owner_key: "linuxdo:user1",
+  created_at: recentNetworkTime,
+  last_seen_at: recentNetworkTime,
+  expires_at: "2027-01-01T00:00:00.000Z",
+  revoked_at: null,
+  ip_preview: "120.1.23.*",
+  user_agent: "Chrome Test",
+};
 
 const DB = {
   prepare(sql) {
@@ -35,6 +47,11 @@ const DB = {
       bind(...args) {
         return {
           async first() {
+            if (sql.includes("linuxdo_id AS user_id")) {
+              const user = users.get(String(args[0]));
+              return user ? { user_id: user.linuxdo_id, name: user.name } : null;
+            }
+            if (sql.includes("SELECT requests FROM member_resolve_hourly")) return { requests: hourlyRequests };
             if (sql.includes("FROM linuxdo_users WHERE linuxdo_id = ?")) return users.get(String(args[0])) || null;
             if (sql.includes("FROM api_keys WHERE owner_key = ?")) return args[0] === apiKey.owner_key ? { ...apiKey } : null;
             if (sql.includes("FROM api_keys WHERE api_key = ?")) return args[0] === apiKey.api_key ? { ...apiKey } : null;
@@ -43,6 +60,12 @@ const DB = {
             return null;
           },
           async all() {
+            if (sql.includes("FROM member_resolve_hourly WHERE owner_key = ?")) return { results: [{ bucket_hour: new Date().toISOString().slice(0, 13) + ":00:00.000Z", requests: hourlyRequests, successes: 1, failures: 0, rate_limited: 0, last_request_at: recentNetworkTime }] };
+            if (sql.includes("FROM member_resolve_dimensions WHERE owner_key = ?")) return { results: [
+              { bucket_hour: new Date().toISOString().slice(0, 13) + ":00:00.000Z", kind: "network", count: 2 },
+              { bucket_hour: new Date().toISOString().slice(0, 13) + ":00:00.000Z", kind: "user_agent", count: 1 },
+            ] };
+            if (sql.includes("FROM auth_sessions WHERE owner_key = ? ORDER BY")) return { results: [{ ...securitySession, revoked_at: sessionRevokedAt }] };
             if (sql.includes("FROM api_key_network_activity")) return { results: networkRows.map((row) => ({ ...row })) };
             if (sql.includes("FROM memberships m")) {
               const user = users.get("user1");
@@ -65,6 +88,18 @@ const DB = {
             return { results: [] };
           },
           async run() {
+            if (sql.includes("INSERT INTO member_resolve_hourly")) {
+              hourlyRequests += 1;
+              return { meta: { changes: 1 } };
+            }
+            if (sql.startsWith("UPDATE member_resolve_hourly SET rate_limited")) return { meta: { changes: 1 } };
+            if (sql.startsWith("UPDATE auth_sessions SET revoked_at")) {
+              if (args[1] === securitySession.sid && args[2] === securitySession.owner_key && !sessionRevokedAt) {
+                sessionRevokedAt = args[0];
+                return { meta: { changes: 1 } };
+              }
+              return { meta: { changes: 0 } };
+            }
             if (sql.includes("INSERT INTO api_key_network_activity")) {
               recordedNetworkActivity = { sql, args: [...args] };
               return { meta: { changes: 1 } };
@@ -114,7 +149,7 @@ async function sessionCookie(linuxdoId, name) {
   return `dm_session=${body}.${Buffer.from(signature).toString("base64url")}`;
 }
 
-const env = { DB, SESSION_SECRET: secret, ADMIN_LINUXDO_IDS: "admin1", MEMBERSHIP_REQUIRED: "true" };
+const env = { DB, SESSION_SECRET: secret, ADMIN_LINUXDO_IDS: "admin1", MEMBERSHIP_REQUIRED: "true", ALLOW_LEGACY_SESSIONS: "true", MEMBER_RESOLVE_WARNING_PER_HOUR: "1", MEMBER_RESOLVE_LIMIT_PER_HOUR: "1" };
 const adminCookie = await sessionCookie("admin1", "管理员");
 const userCookie = await sessionCookie("user1", "测试用户");
 const jsonRequest = (path, body) => new Request(`https://api.example.com${path}`, {
@@ -138,6 +173,24 @@ assert.equal(keyPayload.data.key.key_preview.includes("*"), true);
 assert.equal("api_key" in keyPayload.data.key, false, "admin API must not expose the full API key");
 assert.equal(keyPayload.data.key.network_risk.status, "attention");
 assert.equal(keyPayload.data.key.network_risk.recent_networks.length, 3);
+
+const securityResponse = await worker.fetch(new Request("https://api.example.com/api/admin/members/security?linuxdo_id=user1", { headers: { Cookie: adminCookie } }), env);
+const securityPayload = await securityResponse.json();
+assert.equal(securityResponse.status, 200);
+assert.equal(securityPayload.data.current_hour.requests, 1);
+assert.equal(securityPayload.data.current_hour.networks, 2);
+assert.equal(securityPayload.data.sessions[0].active, true);
+
+const revokeSession = await worker.fetch(jsonRequest("/api/admin/members/session", { linuxdo_id: "user1", sid: securitySession.sid, revoked: true }), env);
+assert.equal(revokeSession.status, 200);
+assert.ok(sessionRevokedAt, "an administrator should be able to revoke one session");
+
+const rateLimitedResolve = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+  method: "POST",
+  headers: { Cookie: userCookie, "Content-Type": "application/json", "CF-Connecting-IP": "120.1.23.45", "User-Agent": "Chrome Test" },
+  body: JSON.stringify({ platform: "qq", id: "rate-limit-test", quality: "320k" }),
+}), env);
+assert.equal(rateLimitedResolve.status, 429, "a member above the hourly limit must be blocked before upstream parsing");
 
 const backgroundTasks = [];
 const toponeMetadataResponse = await worker.fetch(new Request("https://api.example.com/api/topone?platform=invalid", {

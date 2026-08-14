@@ -102,6 +102,9 @@ const API_NETWORK_ACTIVITY_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const API_NETWORK_ACTIVITY_RETENTION_DAYS = 30;
 const API_NETWORK_ACTIVITY_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let lastApiNetworkActivityCleanupAt = 0;
+const MEMBER_SECURITY_RETENTION_DAYS = 30;
+const sessionActivityWriteAt = new Map();
+let lastMemberSecurityCleanupAt = 0;
 
 export default {
   async fetch(request, env, ctx) {
@@ -139,7 +142,7 @@ async function handleRequest(request, env, ctx) {
       return withCors(request, env, await handleBimojiLoginCallback(request, env));
     }
     if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-      return withCors(request, env, await handleLogout(env));
+      return withCors(request, env, await handleLogout(request, env));
     }
     if (url.pathname === "/api/auth/me" && request.method === "GET") {
       return withCors(request, env, await handleMe(request, env));
@@ -189,6 +192,12 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === "/api/admin/members/api-key" && request.method === "PUT") {
       return withCors(request, env, await handleAdminMemberApiKeyStatus(request, env));
     }
+    if (url.pathname === "/api/admin/members/security" && request.method === "GET") {
+      return withCors(request, env, await handleAdminMemberSecurity(request, env));
+    }
+    if (url.pathname === "/api/admin/members/session" && request.method === "PUT") {
+      return withCors(request, env, await handleAdminMemberSessionStatus(request, env));
+    }
     if (url.pathname === "/api/admin/monitoring" && request.method === "GET") {
       return withCors(request, env, await handleAdminMonitoring(request, env));
     }
@@ -213,14 +222,17 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === "/api/topone" && request.method === "POST") {
       return toponeCors(request, await handleTopone(request, env, ctx));
     }
+    let proxyAuth = null;
     if (url.pathname.startsWith("/api/proxy/")) {
       const sessionAuth = await requireClientAuth(request, env);
       if (!sessionAuth.ok) return withCors(request, env, sessionAuth.response);
+      proxyAuth = sessionAuth;
     }
     const membershipRequiredRoutes = new Set(["/api/proxy/parse", "/api/proxy/media", "/api/proxy/resolve"]);
     if (membershipRequiredRoutes.has(url.pathname)) {
       const access = await requireMusicAccess(request, env);
       if (!access.ok) return withCors(request, env, access.response);
+      proxyAuth = access;
     }
 
     if (url.pathname === "/api/proxy/methods" && request.method === "GET") {
@@ -242,10 +254,18 @@ async function handleRequest(request, env, ctx) {
       return withCors(request, env, await handlePlaylists(request, env));
     }
     if (url.pathname === "/api/proxy/parse" && request.method === "POST") {
-      return withCors(request, env, await handleParse(request, env));
+      const audit = await beginMemberResolveAudit(request, proxyAuth?.session, env);
+      if (!audit.allowed) return withCors(request, env, memberRateLimitResponse(audit));
+      const response = await handleParse(request, env);
+      await finishMemberResolveAudit(audit, response.status >= 200 && response.status < 300, env, ctx);
+      return withCors(request, env, response);
     }
     if (url.pathname === "/api/proxy/resolve" && request.method === "POST") {
-      return withCors(request, env, await handleResolve(request, env, ctx));
+      const audit = await beginMemberResolveAudit(request, proxyAuth?.session, env);
+      if (!audit.allowed) return withCors(request, env, memberRateLimitResponse(audit));
+      const response = await handleResolve(request, env, ctx);
+      await finishMemberResolveAudit(audit, response.status >= 200 && response.status < 300, env, ctx);
+      return withCors(request, env, response);
     }
     if (url.pathname === "/api/proxy/meta" && request.method === "GET") {
       return withCors(request, env, await handleMeta(request, env));
@@ -616,14 +636,39 @@ function buildSessionClearCookie(env) {
   return buildSessionCookie(env, "", 0);
 }
 
-async function createSessionToken(payload, env) {
+function sessionOwnerKey(payload) {
+  if (payload?.type === "linuxdo") {
+    const id = String(payload?.user?.linuxdo_id || payload?.user?.id || "").trim();
+    return id ? `linuxdo:${id}` : "";
+  }
+  if (payload?.type === "bimoji") {
+    const id = String(payload?.user?.bimoji_sub || payload?.user?.id || "").trim();
+    return id ? `bimoji:${id}` : "";
+  }
+  if (payload?.type === "password") return "password:family";
+  return "";
+}
+
+async function createSessionToken(payload, env, request = null) {
   const now = Math.floor(Date.now() / 1000);
   const ttl = Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600);
+  const sid = crypto.randomUUID();
   const data = {
     ...payload,
+    sid,
     iat: now,
     exp: now + ttl,
   };
+  const db = getDatabase(env);
+  const ownerKey = sessionOwnerKey(data);
+  if (db && ownerKey) {
+    const descriptor = request ? clientNetworkDescriptor(requestClientIp(request)) : null;
+    const networkHash = descriptor ? await sha256Hex(`${apiNetworkActivitySalt(env)}:${descriptor.network}`) : "";
+    const userAgent = String(request?.headers?.get("User-Agent") || "").trim().slice(0, 180);
+    await db.prepare(
+      "INSERT INTO auth_sessions (sid, owner_key, created_at, last_seen_at, expires_at, revoked_at, ip_preview, network_hash, user_agent) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+    ).bind(sid, ownerKey, new Date(now * 1000).toISOString(), new Date(now * 1000).toISOString(), new Date((now + ttl) * 1000).toISOString(), descriptor?.preview || "", networkHash, userAgent).run();
+  }
   return encodeSignedToken(data, sessionSecret(env));
 }
 
@@ -634,6 +679,24 @@ async function getSession(request, env) {
   const parsed = await decodeSignedToken(token, sessionSecret(env));
   if (!parsed || !parsed.exp || parsed.exp < Math.floor(Date.now() / 1000)) {
     return null;
+  }
+  const sid = String(parsed.sid || "").trim();
+  if (!sid) return String(env.ALLOW_LEGACY_SESSIONS || "").toLowerCase() === "true" ? parsed : null;
+  if (String(env.ALLOW_LEGACY_SESSIONS || "").toLowerCase() !== "true") {
+    const db = getDatabase(env);
+    if (!db) return null;
+    try {
+      const row = await db.prepare("SELECT owner_key, expires_at, revoked_at FROM auth_sessions WHERE sid = ? LIMIT 1").bind(sid).first();
+      if (!row || row.revoked_at || Date.parse(row.expires_at || "") <= Date.now()) return null;
+      if (row.owner_key !== sessionOwnerKey(parsed)) return null;
+      const nowMs = Date.now();
+      if (nowMs - Number(sessionActivityWriteAt.get(sid) || 0) >= USER_ACTIVITY_WRITE_INTERVAL_MS) {
+        sessionActivityWriteAt.set(sid, nowMs);
+        await db.prepare("UPDATE auth_sessions SET last_seen_at = ? WHERE sid = ? AND revoked_at IS NULL").bind(sqlNow(), sid).run();
+      }
+    } catch {
+      return null;
+    }
   }
   return parsed;
 }
@@ -936,6 +999,83 @@ async function recordApiKeyNetworkActivity(request, record, env) {
     apiNetworkActivityWriteAt.delete(throttleKey);
     console.warn(`[api-key-network] write skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function resolveAuditOwnerKey(session) {
+  if (session?.type === "apikey") return String(session.owner_key || "").trim();
+  return sessionOwnerKey(session);
+}
+
+function memberResolveLimits(env) {
+  const warning = Math.max(1, Math.min(100000, Number(env.MEMBER_RESOLVE_WARNING_PER_HOUR || 120) || 120));
+  const limit = Math.max(warning, Math.min(100000, Number(env.MEMBER_RESOLVE_LIMIT_PER_HOUR || 300) || 300));
+  return { warning, limit };
+}
+
+async function beginMemberResolveAudit(request, session, env) {
+  const db = getDatabase(env);
+  const ownerKey = resolveAuditOwnerKey(session);
+  if (!db || !ownerKey || session?.type === "password" || isAdminSession(session, env)) return { tracked: false, allowed: true };
+  const bucket = metricHour(Date.now());
+  const now = sqlNow();
+  const { warning, limit } = memberResolveLimits(env);
+  try {
+    await db.prepare(
+      `INSERT INTO member_resolve_hourly (bucket_hour, owner_key, requests, successes, failures, rate_limited, last_request_at)
+       VALUES (?, ?, 1, 0, 0, 0, ?)
+       ON CONFLICT(bucket_hour, owner_key) DO UPDATE SET requests = requests + 1, last_request_at = excluded.last_request_at`,
+    ).bind(bucket, ownerKey, now).run();
+    const row = await db.prepare("SELECT requests FROM member_resolve_hourly WHERE bucket_hour = ? AND owner_key = ?").bind(bucket, ownerKey).first();
+    const requests = Number(row?.requests || 1);
+    const descriptor = clientNetworkDescriptor(requestClientIp(request));
+    const userAgent = String(request.headers.get("User-Agent") || "未知客户端").trim().slice(0, 180) || "未知客户端";
+    const dimensions = [];
+    if (descriptor) dimensions.push({ kind: "network", raw: descriptor.network, preview: descriptor.preview });
+    dimensions.push({ kind: "user_agent", raw: userAgent, preview: userAgent.slice(0, 100) });
+    await db.batch(await Promise.all(dimensions.map(async (item) => db.prepare(
+      `INSERT INTO member_resolve_dimensions (bucket_hour, owner_key, kind, value_hash, preview, first_seen_at, last_seen_at, observations)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+       ON CONFLICT(bucket_hour, owner_key, kind, value_hash) DO UPDATE SET
+         preview = excluded.preview, last_seen_at = excluded.last_seen_at,
+         observations = member_resolve_dimensions.observations + 1`,
+    ).bind(bucket, ownerKey, item.kind, await sha256Hex(`${apiNetworkActivitySalt(env)}:${item.kind}:${item.raw}`), item.preview, now, now))));
+    if (requests > limit) {
+      await db.prepare("UPDATE member_resolve_hourly SET rate_limited = rate_limited + 1 WHERE bucket_hour = ? AND owner_key = ?").bind(bucket, ownerKey).run();
+      return { tracked: true, allowed: false, ownerKey, bucket, requests, warning, limit };
+    }
+    if (Date.now() - lastMemberSecurityCleanupAt > 6 * 60 * 60 * 1000) {
+      lastMemberSecurityCleanupAt = Date.now();
+      const cutoff = new Date(Date.now() - MEMBER_SECURITY_RETENTION_DAYS * 86400000).toISOString();
+      await db.batch([
+        db.prepare("DELETE FROM member_resolve_hourly WHERE bucket_hour < ?").bind(cutoff),
+        db.prepare("DELETE FROM member_resolve_dimensions WHERE bucket_hour < ?").bind(cutoff),
+        db.prepare("DELETE FROM auth_sessions WHERE expires_at < ?").bind(cutoff),
+      ]).catch(() => null);
+    }
+    return { tracked: true, allowed: true, ownerKey, bucket, requests, warning, limit };
+  } catch (error) {
+    console.warn(`[member-audit] begin skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return { tracked: false, allowed: true };
+  }
+}
+
+async function finishMemberResolveAudit(audit, success, env, ctx) {
+  if (!audit?.tracked || !audit.ownerKey || !audit.bucket) return;
+  const db = getDatabase(env);
+  if (!db) return;
+  const task = db.prepare(
+    `UPDATE member_resolve_hourly SET successes = successes + ?, failures = failures + ? WHERE bucket_hour = ? AND owner_key = ?`,
+  ).bind(success ? 1 : 0, success ? 0 : 1, audit.bucket, audit.ownerKey).run().catch(() => null);
+  if (ctx?.waitUntil) ctx.waitUntil(task);
+  else await task;
+}
+
+function memberRateLimitResponse(audit) {
+  return jsonResponse(429, {
+    code: 429,
+    message: `本小时解析次数已达到上限（${audit.limit} 次），请稍后再试`,
+    data: { requests: audit.requests, limit: audit.limit, resets_at: new Date(Date.parse(audit.bucket) + 3600000).toISOString() },
+  }, { "Retry-After": String(Math.max(1, Math.ceil((Date.parse(audit.bucket) + 3600000 - Date.now()) / 1000))) });
 }
 
 function apiKeyNetworkRisk(rows, nowMs = Date.now()) {
@@ -1350,7 +1490,7 @@ function serviceHealth(row, now = Date.now()) {
   return { state: "healthy", label: "正常", success_rate: successRate };
 }
 
-async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
+async function createLinuxdoSession(linuxdoId, userName, avatar, env, request) {
   const token = await createSessionToken(
     {
       type: "linuxdo",
@@ -1362,6 +1502,7 @@ async function createLinuxdoSession(linuxdoId, userName, avatar, env) {
       },
     },
     env,
+    request,
   );
   return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
 }
@@ -1399,6 +1540,7 @@ async function handlePasswordLogin(request, env) {
       },
     },
     env,
+    request,
   );
 
   return jsonResponse(
@@ -1578,7 +1720,7 @@ async function handleLinuxdoLoginCallback(request, env) {
     status: 302,
     headers: {
       Location: redirectTo,
-      "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env),
+      "Set-Cookie": await createLinuxdoSession(linuxdoId, userName, avatar, env, request),
     },
   });
 }
@@ -1671,7 +1813,7 @@ function appendLoginResult(redirect, result) {
   return url.toString();
 }
 
-async function createBimojiSession(profile, env) {
+async function createBimojiSession(profile, env, request) {
   const sub = String(profile.sub || "").trim();
   const name = String(profile.bimoji_nickname || profile.name || profile.preferred_username || profile.email || `笔墨迹用户 ${sub.slice(0, 8)}`).trim();
   const token = await createSessionToken({
@@ -1687,7 +1829,7 @@ async function createBimojiSession(profile, env) {
       bimoji_email_verified: Boolean(profile.bimoji_email_verified),
       bimoji_max_level: Number(profile.bimoji_max_level || 0),
     },
-  }, env);
+  }, env, request);
   return buildSessionCookie(env, token, Number(env.SESSION_TTL_SECONDS || 30 * 24 * 3600));
 }
 
@@ -1755,7 +1897,7 @@ async function handleBimojiLoginCallback(request, env) {
     }
     const headers = new Headers({ Location: redirect });
     headers.append("Set-Cookie", clearTransaction);
-    headers.append("Set-Cookie", await createBimojiSession(profile, env));
+    headers.append("Set-Cookie", await createBimojiSession(profile, env, request));
     return new Response(null, { status: 302, headers });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown";
@@ -1874,6 +2016,50 @@ async function handleAdminMembershipSettings(request, env) {
   return jsonResponse(200, { code: 0, message: "Success", data: { monthly_price: price } });
 }
 
+function memberSecurityState({ requests = 0, failures = 0, networks = 0, userAgents = 0, activeSessions = 0 }, env) {
+  const { warning, limit } = memberResolveLimits(env);
+  const reasons = [];
+  if (requests >= warning) reasons.push(`本小时已解析 ${requests} 次`);
+  if (networks >= 4) reasons.push(`本小时出现 ${networks} 个 IP 网段`);
+  if (userAgents >= 4) reasons.push(`本小时出现 ${userAgents} 种客户端`);
+  if (requests >= 10 && failures / Math.max(1, requests) >= 0.5) reasons.push(`本小时失败率 ${Math.round(failures / requests * 100)}%`);
+  if (activeSessions >= 5) reasons.push(`当前有 ${activeSessions} 个有效会话`);
+  return { status: reasons.length ? "attention" : "normal", reasons, warning, limit };
+}
+
+async function loadMemberSecuritySummaries(db, ownerKeys, env) {
+  const summaries = new Map();
+  ownerKeys.filter(Boolean).forEach((key) => summaries.set(key, { requests: 0, successes: 0, failures: 0, rate_limited: 0, networks: 0, user_agents: 0, active_sessions: 0 }));
+  if (!summaries.size) return { available: true, summaries };
+  const keys = [...summaries.keys()];
+  const placeholders = keys.map(() => "?").join(",");
+  const bucket = metricHour(Date.now());
+  try {
+    const [usage, dimensions, sessions] = await Promise.all([
+      db.prepare(`SELECT owner_key, requests, successes, failures, rate_limited FROM member_resolve_hourly WHERE bucket_hour = ? AND owner_key IN (${placeholders})`).bind(bucket, ...keys).all(),
+      db.prepare(`SELECT owner_key, kind, COUNT(*) AS count FROM member_resolve_dimensions WHERE bucket_hour = ? AND owner_key IN (${placeholders}) GROUP BY owner_key, kind`).bind(bucket, ...keys).all(),
+      db.prepare(`SELECT owner_key, COUNT(*) AS count FROM auth_sessions WHERE owner_key IN (${placeholders}) AND revoked_at IS NULL AND expires_at > ? GROUP BY owner_key`).bind(...keys, sqlNow()).all(),
+    ]);
+    (usage.results || []).forEach((row) => Object.assign(summaries.get(String(row.owner_key)) || {}, {
+      requests: Number(row.requests || 0), successes: Number(row.successes || 0), failures: Number(row.failures || 0), rate_limited: Number(row.rate_limited || 0),
+    }));
+    (dimensions.results || []).forEach((row) => {
+      const summary = summaries.get(String(row.owner_key));
+      if (!summary) return;
+      if (row.kind === "network") summary.networks = Number(row.count || 0);
+      if (row.kind === "user_agent") summary.user_agents = Number(row.count || 0);
+    });
+    (sessions.results || []).forEach((row) => {
+      const summary = summaries.get(String(row.owner_key));
+      if (summary) summary.active_sessions = Number(row.count || 0);
+    });
+    summaries.forEach((summary) => Object.assign(summary, memberSecurityState({ ...summary, activeSessions: summary.active_sessions, userAgents: summary.user_agents }, env)));
+    return { available: true, summaries };
+  } catch {
+    return { available: false, summaries };
+  }
+}
+
 async function handleAdminMembers(request, env) {
   const auth = await requireAdminSession(request, env);
   if (!auth.ok) return auth.response;
@@ -1908,6 +2094,10 @@ async function handleAdminMembers(request, env) {
     // During a rolling deploy the migration may not exist yet; keep Linux DO management available.
   }
   const networkActivity = await loadApiKeyNetworkActivity(db, [...memberRows, ...bimojiRows].map((row) => row.api_key_id));
+  const security = await loadMemberSecuritySummaries(db, [
+    ...memberRows.map((row) => `linuxdo:${row.linuxdo_id}`),
+    ...bimojiRows.map((row) => `bimoji:${row.bimoji_sub}`),
+  ], env);
   const linuxdoMembers = memberRows.map((row) => ({
     provider: "linuxdo",
     user_id: String(row.linuxdo_id || ""),
@@ -1927,6 +2117,7 @@ async function handleAdminMembers(request, env) {
       available: networkActivity.available,
       recent_networks: undefined,
     } : null,
+    resolve_security: { ...(security.summaries.get(`linuxdo:${row.linuxdo_id}`) || {}), available: security.available },
     membership_started_at: row.membership_started_at || row.updated_at || null,
     expires_at: row.expires_at || null,
     updated_at: row.updated_at || null,
@@ -1950,6 +2141,7 @@ async function handleAdminMembers(request, env) {
       available: networkActivity.available,
       recent_networks: undefined,
     } : null,
+    resolve_security: { ...(security.summaries.get(`bimoji:${row.bimoji_sub}`) || {}), available: security.available },
     access_label: "博友专属免会员",
     bimoji_exists: Boolean(row.bimoji_exists),
     account_registered: Boolean(row.account_registered),
@@ -1976,6 +2168,9 @@ async function handleAdminMemberStatus(request, env) {
     const disabledAt = body.disabled ? sqlNow() : null;
     const result = await db.prepare("UPDATE bimoji_users SET disabled_at = ? WHERE bimoji_sub = ?").bind(disabledAt, userId).run();
     if (!result.meta?.changes) return apiError("用户不存在", 404);
+    if (body.disabled) {
+      await db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE owner_key = ? AND revoked_at IS NULL").bind(disabledAt, `bimoji:${userId}`).run().catch(() => null);
+    }
     bimojiUserAccessCache.delete(userId);
     return jsonResponse(200, { code: 0, message: "Success", data: { provider, user_id: userId, disabled: body.disabled, disabled_at: disabledAt } });
   }
@@ -1984,6 +2179,9 @@ async function handleAdminMemberStatus(request, env) {
   const disabledAt = body.disabled ? sqlNow() : null;
   const result = await db.prepare("UPDATE linuxdo_users SET disabled_at = ? WHERE linuxdo_id = ?").bind(disabledAt, linuxdoId).run();
   if (!result.meta?.changes) return apiError("用户不存在", 404);
+  if (body.disabled) {
+    await db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE owner_key = ? AND revoked_at IS NULL").bind(disabledAt, `linuxdo:${linuxdoId}`).run().catch(() => null);
+  }
   linuxdoUserAccessCache.delete(linuxdoId);
   return jsonResponse(200, { code: 0, message: "Success", data: { linuxdo_id: linuxdoId, disabled: body.disabled, disabled_at: disabledAt } });
 }
@@ -2047,6 +2245,82 @@ async function handleAdminMemberApiKeyStatus(request, env) {
   const result = await db.prepare("UPDATE api_keys SET enabled = ? WHERE owner_key = ?").bind(body.enabled ? 1 : 0, `${provider}:${userId}`).run();
   if (!result.meta?.changes) return apiError("该用户尚未申请 API Key", 404);
   return jsonResponse(200, { code: 0, message: "Success", data: { provider, user_id: userId, enabled: body.enabled } });
+}
+
+async function adminSecurityUser(db, provider, userId) {
+  if (provider === "bimoji") {
+    const row = await db.prepare("SELECT bimoji_sub AS user_id, name FROM bimoji_users WHERE bimoji_sub = ? LIMIT 1").bind(userId).first();
+    return row ? { provider, user_id: String(row.user_id), name: String(row.name || row.user_id) } : null;
+  }
+  const row = await db.prepare("SELECT linuxdo_id AS user_id, name FROM linuxdo_users WHERE linuxdo_id = ? LIMIT 1").bind(userId).first();
+  return row ? { provider, user_id: String(row.user_id), name: String(row.name || row.user_id) } : null;
+}
+
+async function handleAdminMemberSecurity(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const params = new URL(request.url).searchParams;
+  const provider = params.get("provider") === "bimoji" ? "bimoji" : "linuxdo";
+  const userId = String(params.get("user_id") || params.get("linuxdo_id") || "").trim().slice(0, 160);
+  if (!userId) return apiError("缺少用户 ID", 400);
+  const user = await adminSecurityUser(db, provider, userId);
+  if (!user) return apiError("用户不存在", 404);
+  const ownerKey = `${provider}:${userId}`;
+  const since = metricHour(Date.now() - 23 * 3600000);
+  try {
+    const [usageResult, dimensionResult, sessionResult] = await Promise.all([
+      db.prepare("SELECT bucket_hour, requests, successes, failures, rate_limited, last_request_at FROM member_resolve_hourly WHERE owner_key = ? AND bucket_hour >= ? ORDER BY bucket_hour ASC").bind(ownerKey, since).all(),
+      db.prepare("SELECT bucket_hour, kind, COUNT(*) AS count FROM member_resolve_dimensions WHERE owner_key = ? AND bucket_hour >= ? GROUP BY bucket_hour, kind ORDER BY bucket_hour ASC").bind(ownerKey, since).all(),
+      db.prepare("SELECT sid, created_at, last_seen_at, expires_at, revoked_at, ip_preview, user_agent FROM auth_sessions WHERE owner_key = ? ORDER BY last_seen_at DESC LIMIT 30").bind(ownerKey).all(),
+    ]);
+    const dimensions = new Map();
+    (dimensionResult.results || []).forEach((row) => {
+      const bucket = String(row.bucket_hour);
+      const value = dimensions.get(bucket) || { networks: 0, user_agents: 0 };
+      if (row.kind === "network") value.networks = Number(row.count || 0);
+      if (row.kind === "user_agent") value.user_agents = Number(row.count || 0);
+      dimensions.set(bucket, value);
+    });
+    const hours = (usageResult.results || []).map((row) => ({
+      bucket_hour: row.bucket_hour,
+      requests: Number(row.requests || 0), successes: Number(row.successes || 0), failures: Number(row.failures || 0), rate_limited: Number(row.rate_limited || 0),
+      networks: dimensions.get(String(row.bucket_hour))?.networks || 0,
+      user_agents: dimensions.get(String(row.bucket_hour))?.user_agents || 0,
+      last_request_at: row.last_request_at || null,
+    }));
+    const current = hours.find((row) => row.bucket_hour === metricHour(Date.now())) || { requests: 0, successes: 0, failures: 0, rate_limited: 0, networks: 0, user_agents: 0 };
+    const activeSessions = (sessionResult.results || []).filter((row) => !row.revoked_at && Date.parse(row.expires_at || "") > Date.now()).length;
+    const state = memberSecurityState({ ...current, activeSessions, userAgents: current.user_agents }, env);
+    return jsonResponse(200, { code: 0, message: "Success", data: {
+      user,
+      current_hour: { ...current, ...state, active_sessions: activeSessions },
+      hours,
+      sessions: (sessionResult.results || []).map((row) => ({
+        sid: String(row.sid), sid_preview: `${String(row.sid).slice(0, 8)}…`, created_at: row.created_at, last_seen_at: row.last_seen_at, expires_at: row.expires_at,
+        revoked_at: row.revoked_at || null, active: !row.revoked_at && Date.parse(row.expires_at || "") > Date.now(), ip_preview: row.ip_preview || "未知网络", user_agent: row.user_agent || "未知客户端",
+      })),
+    } });
+  } catch {
+    return apiError("会员安全审计数据尚不可用，请先执行最新数据库迁移", 503);
+  }
+}
+
+async function handleAdminMemberSessionStatus(request, env) {
+  const auth = await requireAdminSession(request, env);
+  if (!auth.ok) return auth.response;
+  const db = getDatabase(env);
+  if (!db) return apiError("D1 数据库未配置", 503);
+  const body = await parseJsonBody(request);
+  const provider = body.provider === "bimoji" ? "bimoji" : "linuxdo";
+  const userId = String(body.user_id || body.linuxdo_id || "").trim().slice(0, 160);
+  const sid = String(body.sid || "").trim().slice(0, 80);
+  if (!userId || !sid || body.revoked !== true) return apiError("用户、会话或撤销参数无效", 400);
+  const result = await db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE sid = ? AND owner_key = ? AND revoked_at IS NULL").bind(sqlNow(), sid, `${provider}:${userId}`).run();
+  if (!result.meta?.changes) return apiError("会话不存在或已经撤销", 404);
+  sessionActivityWriteAt.delete(sid);
+  return jsonResponse(200, { code: 0, message: "Success", data: { provider, user_id: userId, sid, revoked: true } });
 }
 
 async function handleAdminMemberGrant(request, env) {
@@ -2412,7 +2686,14 @@ async function handleBillingNotify(request, env) {
   }
 }
 
-async function handleLogout(env) {
+async function handleLogout(request, env) {
+  const session = await getSession(request, env);
+  const sid = String(session?.sid || "").trim();
+  const db = getDatabase(env);
+  if (sid && db) {
+    await db.prepare("UPDATE auth_sessions SET revoked_at = ? WHERE sid = ? AND revoked_at IS NULL").bind(sqlNow(), sid).run().catch(() => null);
+    sessionActivityWriteAt.delete(sid);
+  }
   return jsonResponse(200, { code: 0, message: "Success" }, { "Set-Cookie": buildSessionClearCookie(env) });
 }
 
@@ -3452,6 +3733,8 @@ async function handleTopone(request, env, ctx) {
   if (platforms.length === 0) {
     return jsonResponse(400, { code: 400, msg: "platform 参数无效", data: null });
   }
+  const audit = await beginMemberResolveAudit(request, auth.session, env);
+  if (!audit.allowed) return memberRateLimitResponse(audit);
 
   const overallBudgetMs = 5500;
   const deadlineAt = startedAt + overallBudgetMs;
@@ -3485,6 +3768,7 @@ async function handleTopone(request, env, ctx) {
     abortPending();
     const { hit, parseData } = result;
     console.log(`[topone] hit platform=${result.platform} id=${hit.id} elapsed=${Date.now() - startedAt}ms`);
+    await finishMemberResolveAudit(audit, true, env, ctx);
     return jsonResponse(200, {
       code: 0,
       msg: "success",
@@ -3505,6 +3789,7 @@ async function handleTopone(request, env, ctx) {
   abortPending();
 
   console.log(`[topone] done 404 elapsed=${Date.now() - startedAt}ms keyword=${keyword}`);
+  await finishMemberResolveAudit(audit, false, env, ctx);
   return jsonResponse(404, { code: 404, msg: "未找到歌曲", data: null });
 }
 

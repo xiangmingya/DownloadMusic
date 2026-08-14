@@ -41,6 +41,7 @@ const DB = {
 const env = {
   ADMIN_PASSWORD: "family-password",
   SESSION_SECRET: "test-session-secret",
+  ALLOW_LEGACY_SESSIONS: "true",
   DB,
   RESOLVER_TOTAL_BUDGET_MS: "3000",
   RESOLVER_EXPANSION_DELAY_MS: "150",

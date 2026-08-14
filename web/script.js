@@ -3428,7 +3428,7 @@ function memberTime(value) {
 function renderAdminMembers(members) {
     const list = document.getElementById('adminMemberList');
     if (!list) return;
-    list.innerHTML = members.length ? `<div class="admin-member-table" role="table"><div class="admin-member-table-head" role="row"><span>用户</span><span>来源 / ID</span><span>注册时间</span><span>最近使用</span><span>访问权益</span><span>到期时间</span><span>API Key</span><span>用户操作</span></div>${members.map(item => {
+    list.innerHTML = members.length ? `<div class="admin-member-table" role="table"><div class="admin-member-table-head" role="row"><span>用户</span><span>来源 / ID</span><span>注册时间</span><span>最近使用</span><span>访问权益</span><span>到期时间</span><span>解析 / 安全</span><span>API Key</span><span>用户操作</span></div>${members.map(item => {
         const provider = item.provider === 'bimoji' ? 'bimoji' : 'linuxdo';
         const userId = String(item.user_id || item.linuxdo_id || item.bimoji_sub || '');
         const sourceLabel = provider === 'bimoji' ? '笔墨迹' : 'Linux DO';
@@ -3436,8 +3436,11 @@ function renderAdminMembers(members) {
         const expiryLabel = provider === 'bimoji' ? '长期有效' : memberTime(item.expires_at);
         const disabled = Boolean(item.disabled);
         const networkAttention = item.api_key_network_risk?.available !== false && item.api_key_network_risk?.status === 'attention';
+        const security = item.resolve_security || {};
+        const securityAttention = security.available !== false && security.status === 'attention';
+        const securityLabel = security.available === false ? '待迁移' : `${Number(security.requests || 0)} 次${securityAttention ? ' ⚠' : ''}`;
         const apiLabel = item.has_api_key ? (networkAttention ? '⚠ 需关注' : (item.api_key_enabled ? '管理 Key' : 'Key 已禁用')) : '未申请';
-        return `<article class="admin-member-row${disabled ? ' is-disabled' : ''}${networkAttention ? ' has-api-alert' : ''}" role="row"><div class="admin-member-identity"><strong>${escapeHtml(item.name || userId)}</strong><span class="admin-member-provider-badge is-${provider}">${sourceLabel}</span>${item.is_admin ? '<span class="admin-member-admin-badge">管理员</span>' : ''}${disabled ? '<span class="admin-member-disabled-badge">已禁用</span>' : ''}</div><span class="admin-member-id" title="${escapeHtml(userId)}">${escapeHtml(`${sourceLabel} · ${userId}`)}</span><time>${escapeHtml(memberTime(item.registered_at))}</time><time>${escapeHtml(memberTime(item.last_used_at))}</time><time>${escapeHtml(accessLabel)}</time><time class="admin-member-expiry">${escapeHtml(expiryLabel)}</time><button type="button" class="admin-member-action-btn${networkAttention ? ' is-warning' : ''}" data-member-api-key="${escapeHtml(userId)}" data-provider="${provider}"${item.has_api_key ? '' : ' disabled'}>${escapeHtml(apiLabel)}</button><button type="button" class="admin-member-action-btn${disabled ? ' is-enable' : ' is-disable'}" data-member-toggle="${escapeHtml(userId)}" data-provider="${provider}" data-disabled="${disabled ? '1' : '0'}"${item.is_admin ? ' disabled title="管理员账号不能禁用"' : ''}>${disabled ? '启用用户' : '禁用用户'}</button></article>`;
+        return `<article class="admin-member-row${disabled ? ' is-disabled' : ''}${networkAttention || securityAttention ? ' has-api-alert' : ''}" role="row"><div class="admin-member-identity"><strong>${escapeHtml(item.name || userId)}</strong><span class="admin-member-provider-badge is-${provider}">${sourceLabel}</span>${item.is_admin ? '<span class="admin-member-admin-badge">管理员</span>' : ''}${disabled ? '<span class="admin-member-disabled-badge">已禁用</span>' : ''}</div><span class="admin-member-id" title="${escapeHtml(userId)}">${escapeHtml(`${sourceLabel} · ${userId}`)}</span><time>${escapeHtml(memberTime(item.registered_at))}</time><time>${escapeHtml(memberTime(item.last_used_at))}</time><time>${escapeHtml(accessLabel)}</time><time class="admin-member-expiry">${escapeHtml(expiryLabel)}</time><button type="button" class="admin-member-action-btn${securityAttention ? ' is-warning' : ''}" data-member-security="${escapeHtml(userId)}" data-provider="${provider}">${escapeHtml(securityLabel)}</button><button type="button" class="admin-member-action-btn${networkAttention ? ' is-warning' : ''}" data-member-api-key="${escapeHtml(userId)}" data-provider="${provider}"${item.has_api_key ? '' : ' disabled'}>${escapeHtml(apiLabel)}</button><button type="button" class="admin-member-action-btn${disabled ? ' is-enable' : ' is-disable'}" data-member-toggle="${escapeHtml(userId)}" data-provider="${provider}" data-disabled="${disabled ? '1' : '0'}"${item.is_admin ? ' disabled title="管理员账号不能禁用"' : ''}>${disabled ? '启用用户' : '禁用用户'}</button></article>`;
     }).join('')}</div>` : '<p class="admin-muted admin-members-empty">没有找到用户。</p>';
 }
 
@@ -3509,6 +3512,54 @@ async function toggleAdminApiKey() {
         showToast(error.message || '操作失败', 'error');
     } finally {
         button.disabled = false;
+    }
+}
+
+let activeAdminSecurityUserId = '';
+let activeAdminSecurityProvider = 'linuxdo';
+
+function renderAdminSecurityDetails(data) {
+    const userLine = document.getElementById('adminSecurityDialogUser');
+    const details = document.getElementById('adminSecurityDetails');
+    if (!userLine || !details) return;
+    const user = data?.user || {};
+    const current = data?.current_hour || {};
+    const hours = Array.isArray(data?.hours) ? data.hours : [];
+    const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    userLine.textContent = `${user.name || user.user_id || '用户'} · ${user.provider === 'bimoji' ? '笔墨迹' : 'Linux DO'} ${user.user_id || '—'}`;
+    const reasons = Array.isArray(current.reasons) ? current.reasons : [];
+    const summary = `<section class="admin-api-network-panel${current.status === 'attention' ? ' is-attention' : ''}"><div class="admin-api-network-heading"><div><small>本小时解析</small><strong>${Number(current.requests || 0)} / ${Number(current.limit || 0)} 次</strong></div><span>${current.status === 'attention' ? '需关注' : '正常'}</span></div>${reasons.length ? `<ul>${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : ''}<div class="admin-api-network-summary"><span>成功 ${Number(current.successes || 0)}</span><span>失败 ${Number(current.failures || 0)}</span><span>限流 ${Number(current.rate_limited || 0)}</span><span>IP 网段 ${Number(current.networks || 0)}</span><span>客户端 ${Number(current.user_agents || 0)}</span><span>有效会话 ${Number(current.active_sessions || 0)}</span></div></section>`;
+    const recentHours = hours.slice(-8).reverse();
+    const hourly = `<section class="admin-security-section"><h3>最近小时统计</h3>${recentHours.length ? `<div class="admin-security-hour-list">${recentHours.map(row => `<div><time>${escapeHtml(memberTime(row.bucket_hour))}</time><span>${Number(row.requests || 0)} 次</span><span class="is-success">成功 ${Number(row.successes || 0)}</span><span class="is-failure">失败 ${Number(row.failures || 0)}</span><span>${Number(row.networks || 0)} 网段 / ${Number(row.user_agents || 0)} 客户端</span></div>`).join('')}</div>` : '<p class="admin-muted">最近 24 小时暂无解析记录。</p>'}</section>`;
+    const sessionList = `<section class="admin-security-section"><h3>登录会话</h3>${sessions.length ? `<div class="admin-security-session-list">${sessions.map(session => `<div class="${session.active ? '' : 'is-revoked'}"><div><strong>${escapeHtml(session.user_agent || '未知客户端')}</strong><span>${escapeHtml(session.ip_preview || '未知网络')} · 最近 ${escapeHtml(memberTime(session.last_seen_at))}</span><small>${escapeHtml(session.sid_preview || '')} · 创建 ${escapeHtml(memberTime(session.created_at))}</small></div>${session.active ? `<button type="button" class="admin-member-action-btn is-disable" data-revoke-session="${escapeHtml(session.sid)}">撤销</button>` : `<span class="admin-muted">${session.revoked_at ? '已撤销' : '已过期'}</span>`}</div>`).join('')}</div>` : '<p class="admin-muted">暂无新版登录会话；用户下次登录后会生成。</p>'}</section>`;
+    details.innerHTML = `${summary}${hourly}${sessionList}`;
+}
+
+async function openAdminSecurityDialog(userId, provider = 'linuxdo') {
+    const dialog = document.getElementById('adminSecurityDialog');
+    const details = document.getElementById('adminSecurityDetails');
+    if (!dialog || !details) return;
+    activeAdminSecurityUserId = String(userId || '');
+    activeAdminSecurityProvider = provider === 'bimoji' ? 'bimoji' : 'linuxdo';
+    details.textContent = '正在读取…';
+    if (!dialog.open) dialog.showModal();
+    try {
+        const data = await getJson(`${APP_API_ROOT}/admin/members/security?provider=${encodeURIComponent(activeAdminSecurityProvider)}&user_id=${encodeURIComponent(activeAdminSecurityUserId)}`);
+        renderAdminSecurityDetails(data);
+    } catch (error) {
+        details.textContent = error.message || '读取失败';
+    }
+}
+
+async function revokeAdminSession(sid) {
+    if (!activeAdminSecurityUserId || !sid) return;
+    if (!window.confirm('撤销后，该设备需要重新登录。继续吗？')) return;
+    try {
+        await getJson(`${APP_API_ROOT}/admin/members/session`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: activeAdminSecurityProvider, user_id: activeAdminSecurityUserId, sid, revoked: true }) });
+        showToast('会话已撤销', 'success');
+        await Promise.all([openAdminSecurityDialog(activeAdminSecurityUserId, activeAdminSecurityProvider), loadAdminMembers()]);
+    } catch (error) {
+        showToast(error.message || '撤销失败', 'error');
     }
 }
 
@@ -3916,6 +3967,11 @@ function initHomeInterface() {
     });
     document.getElementById('refreshMembersBtn')?.addEventListener('click', () => void loadAdminMembers());
     document.getElementById('adminMemberList')?.addEventListener('click', event => {
+        const securityButton = event.target.closest('[data-member-security]');
+        if (securityButton) {
+            void openAdminSecurityDialog(securityButton.getAttribute('data-member-security'), securityButton.getAttribute('data-provider'));
+            return;
+        }
         const keyButton = event.target.closest('[data-member-api-key]');
         if (keyButton && !keyButton.disabled) {
             void openAdminApiKeyDialog(keyButton.getAttribute('data-member-api-key'), keyButton.getAttribute('data-provider'));
@@ -3928,6 +3984,11 @@ function initHomeInterface() {
     });
     document.getElementById('adminApiKeyToggleBtn')?.addEventListener('click', () => void toggleAdminApiKey());
     document.getElementById('adminApiKeyDialog')?.addEventListener('close', () => { activeAdminApiKeyLinuxdoId = ''; activeAdminApiKeyProvider = 'linuxdo'; });
+    document.getElementById('adminSecurityDialog')?.addEventListener('click', event => {
+        const button = event.target.closest('[data-revoke-session]');
+        if (button) void revokeAdminSession(button.getAttribute('data-revoke-session'));
+    });
+    document.getElementById('adminSecurityDialog')?.addEventListener('close', () => { activeAdminSecurityUserId = ''; activeAdminSecurityProvider = 'linuxdo'; });
     document.getElementById('adminMemberSearch')?.addEventListener('search', () => void loadAdminMembers());
     document.getElementById('adminMemberSearch')?.addEventListener('keydown', event => {
         if (event.key === 'Enter') { event.preventDefault(); void loadAdminMembers(); }

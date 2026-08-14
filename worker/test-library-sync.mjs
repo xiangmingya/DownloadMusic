@@ -27,6 +27,7 @@ const DB = {
 const env = {
   ADMIN_PASSWORD: "family-password",
   SESSION_SECRET: "test-session-secret",
+  ALLOW_LEGACY_SESSIONS: "true",
   DB,
   ALLOWED_ORIGINS: "https://music.example.com",
 };

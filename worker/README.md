@@ -10,6 +10,7 @@
 - Linux DO 白名单管理员：只有 `ADMIN_LINUXDO_IDS` 中的账号能进入管理页；密码登录不具备管理权限
 - 公开 Uptime：Cloudflare Cron 每 5 分钟轮换探测一个平台，独立保存 7 天，不暴露内部解析源
 - 管理员服务监控：D1 只聚合用户真实流量中的各主源和备用源调用、成功率、耗时、最近错误与最终解析来源，自动保留最近 30 天；不记录搜索词、歌曲名、用户资料或 Key
+- 会员安全审计：按小时汇总每位会员的解析成功/失败、脱敏 IP 网段数和 User-Agent 数；支持异常提醒、单会话撤销和会员级解析限流
 - 代理接口：`/api/proxy/methods` `/api/proxy/method` `/api/proxy/search` `/api/proxy/resolve` `/api/proxy/parse` `/api/proxy/meta` `/api/proxy/media`
   - `/api/proxy/search`：主搜索失败时在 Worker 内部走多源兜底
   - `/api/proxy/resolve`：统一解析入口，短期缓存、同歌并发合并、健康排序与两批智能竞速（首批健康源，短延迟后放出全部剩余源）
@@ -37,6 +38,8 @@
 - `PUT /api/admin/members/status`
 - `GET /api/admin/members/api-key`
 - `PUT /api/admin/members/api-key`
+- `GET /api/admin/members/security?provider=<linuxdo|bimoji>&user_id=<ID>`
+- `PUT /api/admin/members/session`
 - `GET /api/admin/monitoring?days=1|7|30`
 - `GET /api/library`
 - `PUT /api/library`
@@ -104,6 +107,8 @@ wrangler d1 execute downloadmusic-auth --remote --file=schema.sql
 公开页脚的 Uptime 与管理员监控是两套独立数据：前者来自 Cron 主动探测，后者来自用户真实调用。主动检测轮换样本，主样本失败时最多用两首不同样本复核，任一首成功即判本轮可用；公开百分比应理解为“测试歌曲可播率”。部署前需执行 `migrations/0002_uptime_checks.sql`，并保留 `wrangler.toml` 中的 `*/5 * * * *` Cron 配置。
 
 API Key 网络异常提醒需要执行 `migrations/0004_api_key_network_activity.sql`。该表只保存加盐后的网络段哈希、脱敏地址和 Cloudflare 地区/ASN；提醒不会自动禁用用户或 Key。
+
+会员解析审计和可撤销登录会话需要执行 `migrations/0006_member_security_audit.sql`。默认每小时达到 120 次时在管理端提醒，超过 300 次时拒绝本小时后续解析；可用 `MEMBER_RESOLVE_WARNING_PER_HOUR` 和 `MEMBER_RESOLVE_LIMIT_PER_HOUR` 调整。统计与过期会话保留 30 天，IP 只按 IPv4 `/24` 或 IPv6 `/64` 脱敏聚合。迁移上线后，旧版无会话 ID 的 Cookie 会要求重新登录一次。
 
 用户状态和最近使用时间需要执行 `migrations/0003_user_activity.sql`。最近使用最多每 5 分钟写入一次，网页与 API Key 调用都会更新；禁用用户会同时阻止其现有会话和 API Key。
 
