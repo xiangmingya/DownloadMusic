@@ -75,15 +75,41 @@ globalThis.fetch = async (input, init = {}) => {
     assert.equal(init.headers?.["X-Api-Key"], "test-apibyte-key");
     assert.doesNotMatch(url, /action=music_url/, "APIByte must never be used to resolve playback URLs");
     if (url.includes("action=playlist_detail")) {
+      assert.match(url, /page=0/);
+      assert.match(url, /size=200/);
       return new Response(JSON.stringify({ code: 200, msg: "success", data: { music_list: [
         { rid: 228741121, name: "暖暖", artist: "香皂泡", album: "暖暖", images: { pic: "https://img.kuwo.test/song.jpg" } },
       ] } }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     assert.match(url, /action=search/);
     assert.match(url, /type=playlist/);
+    if (url.includes("keyword=DJ")) {
+      assert.match(url, /page=1/);
+      assert.match(url, /size=10/);
+    } else {
+      assert.match(url, /keyword=%E7%83%AD%E9%97%A8/);
+      assert.match(url, /page=0/);
+      assert.match(url, /size=30/);
+    }
     return new Response(JSON.stringify({ code: 200, msg: "success", data: [
       { id: "3706893759", name: "热门DJ歌单", img: "https://img.kuwo.test/playlist.jpg", total: "482", listencnt: "37921273" },
     ] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  if (url.startsWith("https://music.163.com/api/search/get/web") && url.includes("type=1000")) {
+    assert.match(url, /s=%E6%91%87%E6%BB%9A/);
+    assert.match(url, /offset=20/);
+    assert.match(url, /limit=20/);
+    return new Response(JSON.stringify({ result: { playlistCount: 21, playlists: [
+      { id: 123, name: "摇滚现场", coverImgUrl: "https://img.163.test/playlist.jpg", trackCount: 36, playCount: 9000, creator: { nickname: "测试用户" } },
+    ] } }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+  if (url.startsWith("http://c.y.qq.com/soso/fcgi-bin/client_music_search_songlist")) {
+    assert.match(url, /query=%E6%91%87%E6%BB%9A/);
+    assert.match(url, /page_no=1/);
+    assert.match(url, /num_per_page=20/);
+    return new Response(JSON.stringify({ data: { sum: 21, list: [
+      { dissid: "qq-123", dissname: "QQ 摇滚", imgurl: "https://img.qq.test/playlist.jpg", song_count: 24, listennum: 8000, creator: { name: "QQ 用户" } },
+    ] } }), { status: 200, headers: { "Content-Type": "application/json; charset=utf-8" } });
   }
   if (url.includes("qq-primary-fail")) {
     if (url.startsWith("https://api.bugpk.com/")) {
@@ -328,6 +354,30 @@ try {
     trackCount: 482,
     playCount: 37921273,
   });
+  assert.equal(kuwoPlaylistsPayload.data.page, 1);
+  assert.equal(kuwoPlaylistsPayload.data.limit, 30);
+  assert.equal(kuwoPlaylistsPayload.data.returnedCount, 1);
+
+  const kuwoPlaylistSearch = await worker.fetch(new Request("https://api.example.com/api/proxy/playlists?platform=kuwo&keyword=DJ&page=2&limit=10", {
+    headers: { Cookie: cookie },
+  }), env);
+  const kuwoPlaylistSearchPayload = await kuwoPlaylistSearch.json();
+  assert.equal(kuwoPlaylistSearch.status, 200);
+  assert.equal(kuwoPlaylistSearchPayload.data.page, 2);
+  assert.equal(kuwoPlaylistSearchPayload.data.limit, 10);
+  assert.equal(kuwoPlaylistSearchPayload.data.playlists[0].name, "热门DJ歌单");
+
+  for (const [platform, expectedName] of [["netease", "摇滚现场"], ["qq", "QQ 摇滚"]]) {
+    const response = await worker.fetch(new Request(`https://api.example.com/api/proxy/playlists?platform=${platform}&keyword=${encodeURIComponent("摇滚")}&page=2&limit=20`, {
+      headers: { Cookie: cookie },
+    }), env);
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.playlists[0].name, expectedName);
+    assert.equal(payload.data.page, 2);
+    assert.equal(payload.data.total, 21);
+    assert.equal(payload.data.hasMore, false);
+  }
 
   const kuwoPlaylistDetail = await worker.fetch(new Request("https://api.example.com/api/proxy/method?platform=kuwo&functionName=playlist&id=3706893759", {
     headers: { Cookie: cookie },
@@ -341,7 +391,13 @@ try {
     album: "暖暖",
     cover: "https://img.kuwo.test/song.jpg",
   });
-  assert.equal(apibytePlaylistCalls, 2, "APIByte should only serve the playlist list and detail requests");
+  assert.deepEqual({
+    page: kuwoPlaylistDetailPayload.data.page,
+    limit: kuwoPlaylistDetailPayload.data.limit,
+    returnedCount: kuwoPlaylistDetailPayload.data.returnedCount,
+    hasMore: kuwoPlaylistDetailPayload.data.hasMore,
+  }, { page: 1, limit: 200, returnedCount: 1, hasMore: false });
+  assert.equal(apibytePlaylistCalls, 3, "APIByte should only serve playlist list, search, and detail requests");
 
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();

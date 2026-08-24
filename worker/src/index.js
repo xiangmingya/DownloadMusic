@@ -3011,6 +3011,25 @@ function parseSearchKuwo(resp) {
   });
 }
 
+function pagedResult(list, total, page, limit, hasKnownTotal = true) {
+  const safeList = Array.isArray(list) ? list : [];
+  const safeTotal = Math.max(safeList.length, Number(total) || 0);
+  return {
+    list: safeList,
+    total: hasKnownTotal ? safeTotal : null,
+    page,
+    limit,
+    returnedCount: safeList.length,
+    hasMore: hasKnownTotal ? page * limit < safeTotal : safeList.length === limit,
+  };
+}
+
+function slicePagedResult(result, page, limit) {
+  const all = Array.isArray(result?.list) ? result.list : [];
+  const start = (page - 1) * limit;
+  return pagedResult(all.slice(start, start + limit), result?.total || all.length, page, limit, true);
+}
+
 function parsePlaylistNetease(resp) {
   const tracks = Array.isArray(resp?.result?.tracks) ? resp.result.tracks : [];
   return {
@@ -3021,6 +3040,7 @@ function parsePlaylistNetease(resp) {
       album: String(item?.album?.name || ""),
       cover: normalizeMediaUrl(item?.album?.picUrl || ""),
     })),
+    total: Number(resp?.result?.trackCount || resp?.result?.trackIds?.length || tracks.length),
   };
 }
 
@@ -3035,6 +3055,7 @@ function parsePlaylistQQ(resp) {
       album: String(item?.album?.name || ""),
       cover: normalizeMediaUrl(qqAlbumCoverUrl(item?.album || {})),
     })),
+    total: Number(first?.songnum || songs.length),
   };
 }
 
@@ -3049,6 +3070,8 @@ function parsePlaylistKuwo(resp) {
       album: String(item?.album || ""),
       cover: normalizeMediaUrl(kuwoAlbumCoverUrl(item)),
     })),
+    total: Number(resp?.total || songs.length),
+    hasKnownTotal: resp?.total !== undefined,
   };
 }
 
@@ -3097,29 +3120,32 @@ function parseApibyteKuwoPlaylistSongs(data) {
       album: String(item?.album || ""),
       cover: normalizeMediaUrl(item?.images?.pic || item?.images?.album_pic || ""),
     })).filter((item) => item.id),
+    total: Number(data?.total || data?.music_total || items.length),
+    hasKnownTotal: data?.total !== undefined || data?.music_total !== undefined,
   };
 }
 
-async function callApibyteKuwoPlaylist(env, id) {
+async function callApibyteKuwoPlaylist(env, id, page, limit) {
   const data = await apibyteKuwoJson(env, {
     action: "playlist_detail",
     playlist_id: id,
-    page: 0,
-    size: 1000,
+    page: page - 1,
+    size: limit,
   }, 60 * 60);
-  return parseApibyteKuwoPlaylistSongs(data);
+  const parsed = parseApibyteKuwoPlaylistSongs(data);
+  return pagedResult(parsed.list, parsed.total, page, limit, parsed.hasKnownTotal);
 }
 
-async function callApibyteKuwoPlaylists(env) {
+async function callApibyteKuwoPlaylists(env, keyword, page, limit) {
   const data = await apibyteKuwoJson(env, {
     action: "search",
     type: "playlist",
-    keyword: "热门",
-    page: 0,
-    size: 30,
+    keyword: keyword || "热门",
+    page: page - 1,
+    size: limit,
   }, 30 * 60);
   const seen = new Set();
-  return (Array.isArray(data) ? data : [])
+  const playlists = (Array.isArray(data) ? data : [])
     .map((item) => ({
       id: String(item?.id || ""),
       name: String(item?.name || "热门歌单"),
@@ -3128,7 +3154,8 @@ async function callApibyteKuwoPlaylists(env) {
       playCount: Number(item?.listencnt || 0),
     }))
     .filter((item) => item.id && !seen.has(item.id) && seen.add(item.id))
-    .slice(0, 30);
+    .slice(0, limit);
+  return pagedResult(playlists, playlists.length, page, limit, false);
 }
 
 const NETEASE_WEB_HEADERS = {
@@ -3291,7 +3318,7 @@ async function callSearch(platform, keyword, page, limit) {
   throw new Error("不支持的平台");
 }
 
-async function callPlaylist(platform, id, env) {
+async function callPlaylist(platform, id, env, page = 1, limit = 200) {
   if (platform === "netease") {
     const endpoint = new URL("https://music.163.com/api/playlist/detail");
     endpoint.searchParams.set("id", id);
@@ -3301,7 +3328,7 @@ async function callPlaylist(platform, id, env) {
       headers: NETEASE_WEB_HEADERS,
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
-    return parsePlaylistNetease(json);
+    return slicePagedResult(parsePlaylistNetease(json), page, limit);
   }
 
   if (platform === "qq") {
@@ -3331,13 +3358,13 @@ async function callPlaylist(platform, id, env) {
       },
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
-    return parsePlaylistQQ(json);
+    return slicePagedResult(parsePlaylistQQ(json), page, limit);
   }
 
   if (platform === "kuwo") {
     if (String(env?.APIBYTE_KUWO_API_KEY || "").trim()) {
       try {
-        return await callApibyteKuwoPlaylist(env, id);
+        return await callApibyteKuwoPlaylist(env, id, page, limit);
       } catch {
         // Preserve the existing Kuwo endpoint as a no-quota fallback.
       }
@@ -3346,8 +3373,8 @@ async function callPlaylist(platform, id, env) {
     const query = {
       op: "getlistinfo",
       pid: id,
-      pn: "0",
-      rn: "1000",
+      pn: String(page - 1),
+      rn: String(limit),
       encode: "utf8",
       keyset: "pl2012",
       identity: "kuwo",
@@ -3361,7 +3388,8 @@ async function callPlaylist(platform, id, env) {
       headers: { "User-Agent": "Mozilla/5.0" },
     });
     if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
-    return parsePlaylistKuwo(json);
+    const parsed = parsePlaylistKuwo(json);
+    return pagedResult(parsed.list, parsed.total, page, limit, parsed.hasKnownTotal);
   }
 
   throw new Error("不支持的平台");
@@ -3552,60 +3580,135 @@ function parseJsonpJson(text) {
   }
 }
 
-async function callPlaylists(platform, env) {
-  if (platform === "netease") {
-    const endpoint = new URL("https://music.163.com/api/playlist/list");
-    endpoint.searchParams.set("cat", "全部");
-    endpoint.searchParams.set("order", "hot");
-    endpoint.searchParams.set("limit", "30");
-    endpoint.searchParams.set("offset", "0");
-    const { status, json } = await upstreamJson(endpoint.toString(), {
-      headers: NETEASE_WEB_HEADERS,
-    });
-    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
-    const playlists = Array.isArray(json?.playlists) ? json.playlists : [];
-    return playlists.slice(0, 30).map((item) => ({
+function normalizePlaylistCards(items, platform) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (platform === "netease") return {
       id: String(item?.id || ""),
       name: String(item?.name || "热门歌单"),
       cover: normalizeMediaUrl(item?.coverImgUrl || item?.picUrl || ""),
       trackCount: Number(item?.trackCount || 0),
       playCount: Number(item?.playCount || item?.subscribedCount || 0),
-    })).filter((item) => item.id);
-  }
-
-  if (platform === "qq") {
-    const endpoint = new URL("https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg");
-    endpoint.searchParams.set("new_format", "1");
-    endpoint.searchParams.set("picmid", "1");
-    endpoint.searchParams.set("rnd", String(Math.random()));
-    endpoint.searchParams.set("categoryId", "10000000");
-    endpoint.searchParams.set("sortId", "5");
-    endpoint.searchParams.set("sin", "0");
-    endpoint.searchParams.set("ein", "29");
-    // 此接口仍会以 GBK/GB18030 回传中文；默认 UTF-8 解码会产生 � 字符。
-    const { status, text } = await upstreamJson(endpoint.toString(), {
-      headers: {
-        Origin: "https://y.qq.com",
-        Referer: "https://y.qq.com/",
-        "User-Agent": "Mozilla/5.0",
-      },
-    }, "gb18030");
-    if (status < 200 || status >= 300) throw new Error(`上游请求失败 (${status})`);
-    const json = parseJsonpJson(text);
-    const list = Array.isArray(json?.data?.list) ? json.data.list : [];
-    return list.slice(0, 30).map((item) => ({
+      author: String(item?.creator?.nickname || ""),
+    };
+    if (platform === "qq") return {
       id: String(item?.dissid || ""),
       name: String(item?.dissname || "热门歌单"),
       cover: normalizeMediaUrl(item?.imgurl || item?.picurl || ""),
-      trackCount: Number(item?.songnum || item?.song_cnt || 0),
+      trackCount: Number(item?.song_count || item?.songnum || item?.song_cnt || 0),
       playCount: Number(item?.listennum || 0),
-    })).filter((item) => item.id);
+      author: String(item?.creator?.name || item?.creator?.nickname || ""),
+    };
+    return {
+      id: String(item?.playlistid || item?.id || ""),
+      name: String(item?.name || "热门歌单"),
+      cover: normalizeMediaUrl(item?.pic || item?.img || ""),
+      trackCount: Number(item?.songnum || item?.total || 0),
+      playCount: Number(item?.playcnt || item?.listencnt || 0),
+      author: String(item?.nickname || ""),
+    };
+  }).filter((item) => item.id && !seen.has(item.id) && seen.add(item.id));
+}
+
+async function callKuwoPlaylistSearch(keyword, page, limit) {
+  const endpoint = new URL("http://search.kuwo.cn/r.s");
+  const query = {
+    all: keyword || "热门",
+    pn: String(page - 1),
+    rn: String(limit),
+    rformat: "json",
+    encoding: "utf8",
+    ver: "mbox",
+    vipver: "MUSIC_8.7.7.0_BCS37",
+    plat: "pc",
+    devid: "28156413",
+    ft: "playlist",
+    pay: "0",
+    needliveshow: "0",
+  };
+  Object.entries(query).forEach(([key, value]) => endpoint.searchParams.set(key, value));
+  const { status, json } = await upstreamJson(endpoint.toString(), {
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
+  if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+  const playlists = normalizePlaylistCards(json?.abslist, "kuwo").slice(0, limit);
+  return pagedResult(playlists, Number(json?.TOTAL || playlists.length), page, limit, json?.TOTAL !== undefined);
+}
+
+async function callPlaylists(platform, env, options = {}) {
+  const keyword = String(options.keyword || "").trim();
+  const page = Math.max(1, Number(options.page) || 1);
+  const limit = Math.max(1, Number(options.limit) || 30);
+  const sort = String(options.sort || "hot");
+  const tag = String(options.tag || "").trim();
+  if (platform === "netease") {
+    const endpoint = new URL(keyword
+      ? "https://music.163.com/api/search/get/web"
+      : "https://music.163.com/api/playlist/list");
+    if (keyword) {
+      endpoint.searchParams.set("s", keyword);
+      endpoint.searchParams.set("type", "1000");
+    } else {
+      endpoint.searchParams.set("cat", tag || "全部");
+      endpoint.searchParams.set("order", sort === "new" ? "new" : "hot");
+    }
+    endpoint.searchParams.set("limit", String(limit));
+    endpoint.searchParams.set("offset", String((page - 1) * limit));
+    const { status, json } = await upstreamJson(endpoint.toString(), {
+      headers: NETEASE_WEB_HEADERS,
+    });
+    if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
+    const raw = keyword ? json?.result?.playlists : json?.playlists;
+    const playlists = normalizePlaylistCards(raw, "netease").slice(0, limit);
+    const total = keyword ? json?.result?.playlistCount : json?.total;
+    return pagedResult(playlists, Number(total || playlists.length), page, limit, total !== undefined);
+  }
+
+  if (platform === "qq") {
+    const endpoint = new URL(keyword
+      ? "http://c.y.qq.com/soso/fcgi-bin/client_music_search_songlist"
+      : "https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_diss_by_tag.fcg");
+    if (keyword) {
+      endpoint.searchParams.set("page_no", String(page - 1));
+      endpoint.searchParams.set("num_per_page", String(limit));
+      endpoint.searchParams.set("format", "json");
+      endpoint.searchParams.set("query", keyword);
+      endpoint.searchParams.set("remoteplace", "txt.yqq.playlist");
+      endpoint.searchParams.set("inCharset", "utf8");
+      endpoint.searchParams.set("outCharset", "utf-8");
+    } else {
+      endpoint.searchParams.set("new_format", "1");
+      endpoint.searchParams.set("picmid", "1");
+      endpoint.searchParams.set("rnd", String(Math.random()));
+      endpoint.searchParams.set("categoryId", tag || "10000000");
+      endpoint.searchParams.set("sortId", sort === "new" ? "2" : "5");
+      endpoint.searchParams.set("sin", String((page - 1) * limit));
+      endpoint.searchParams.set("ein", String(page * limit - 1));
+    }
+    // 推荐列表仍会回传 GB18030；关键词搜索按请求参数回传 UTF-8。
+    const { status, text } = await upstreamJson(endpoint.toString(), {
+      headers: {
+        Origin: "https://y.qq.com",
+        Referer: keyword ? "http://y.qq.com/portal/search.html" : "https://y.qq.com/",
+        "User-Agent": "Mozilla/5.0",
+      },
+    }, keyword ? "utf-8" : "gb18030");
+    if (status < 200 || status >= 300) throw new Error(`上游请求失败 (${status})`);
+    const json = parseJsonpJson(text);
+    const list = normalizePlaylistCards(json?.data?.list, "qq").slice(0, limit);
+    const total = json?.data?.sum;
+    return pagedResult(list, Number(total || list.length), page, limit, total !== undefined);
   }
 
   if (platform === "kuwo") {
-    const playlists = await callApibyteKuwoPlaylists(env);
-    if (playlists.length > 0) return playlists;
-    throw new Error("未找到酷我推荐歌单");
+    if (String(env?.APIBYTE_KUWO_API_KEY || "").trim()) {
+      try {
+        return await callApibyteKuwoPlaylists(env, keyword, page, limit);
+      } catch {
+        // APIByte 不可用或配额耗尽时，回退到酷我歌单搜索。
+      }
+    }
+    return callKuwoPlaylistSearch(keyword, page, limit);
   }
 
   throw new Error("不支持的平台");
@@ -3614,13 +3717,18 @@ async function callPlaylists(platform, env) {
 async function handlePlaylists(request, env) {
   const url = new URL(request.url);
   const platform = String(url.searchParams.get("platform") || "netease").trim();
+  const keyword = String(url.searchParams.get("keyword") || "").trim();
+  const page = toPositiveInt(url.searchParams.get("page"), 1);
+  const limit = Math.min(50, toPositiveInt(url.searchParams.get("limit"), 30));
+  const sort = String(url.searchParams.get("sort") || "hot").trim();
+  const tag = String(url.searchParams.get("tag") || "").trim();
   if (await isSourceDisabled(env, platform)) {
     return jsonResponse(503, { code: -1, message: "该平台已被管理员禁用" });
   }
   try {
     const source = platform === "kuwo" ? "apibyte_kuwo" : platform;
-    const playlists = await monitoredServiceCall(env, { source, operation: "playlists" }, () => callPlaylists(platform, env));
-    return jsonResponse(200, { code: 0, message: "Success", data: { playlists } });
+    const data = await monitoredServiceCall(env, { source, operation: "playlists" }, () => callPlaylists(platform, env, { keyword, page, limit, sort, tag }));
+    return jsonResponse(200, { code: 0, message: "Success", data: { ...data, playlists: data.list } });
   } catch (err) {
     return jsonResponse(502, { code: -1, message: err instanceof Error ? err.message : "获取歌单列表失败" });
   }
@@ -3651,7 +3759,9 @@ async function handleMethod(request, env) {
     if (functionName === "playlist") {
       const id = String(url.searchParams.get("id") || "").trim();
       if (!id) return jsonResponse(400, { code: -1, message: "缺少参数: id" });
-      const data = await monitoredServiceCall(env, { source: platform, operation: "playlist" }, () => callPlaylist(platform, id, env));
+      const page = toPositiveInt(url.searchParams.get("page"), 1);
+      const limit = Math.min(500, toPositiveInt(url.searchParams.get("limit"), 200));
+      const data = await monitoredServiceCall(env, { source: platform, operation: "playlist" }, () => callPlaylist(platform, id, env, page, limit));
       return jsonResponse(200, { code: 0, message: "Success", data });
     }
 

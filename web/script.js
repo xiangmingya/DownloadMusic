@@ -1936,16 +1936,33 @@ async function fetchBackupCoverForPrimarySong(song) {
 }
 
 async function fetchPlaylistSongsPrimary(platform, playlistId) {
-    const result = await callPlatformMethod(platform, 'playlist', {
-        id: playlistId
-    }, {
-        timeoutMs: 15000,
-        retries: 1,
-        retryDelayMs: 600
-    });
+    const pageLimit = 500;
+    const songs = [];
+    const seen = new Set();
+    // ponytail: cap pagination so a broken upstream cannot keep the browser fetching forever.
+    for (let page = 1; page <= 10; page += 1) {
+        const result = await callPlatformMethod(platform, 'playlist', {
+            id: playlistId,
+            page,
+            limit: pageLimit
+        }, {
+            timeoutMs: 15000,
+            retries: 1,
+            retryDelayMs: 600
+        });
+        const pageSongs = Array.isArray(result?.list) ? result.list : [];
+        let added = 0;
+        pageSongs.forEach(song => {
+            const key = String(song?.id || '');
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            songs.push(song);
+            added += 1;
+        });
+        if (!pageSongs.length || !added || result?.hasMore !== true || songs.length >= Number(result?.total || Infinity)) break;
+    }
 
-    const list = Array.isArray(result?.list) ? result.list : [];
-    return list.map(song => ({
+    return songs.map(song => ({
         id: String(song.id || ''),
         name: song.name || '未知歌曲',
         artist: song.artist || '未知歌手',
@@ -1958,61 +1975,48 @@ async function fetchPlaylistSongsPrimary(platform, playlistId) {
     }));
 }
 
-async function fetchPlaylistSongsBackup(platform, playlistId) {
-    const primaryPlatform = toPrimaryPlatform(platform);
-    const backupSource = toBackupSource(primaryPlatform);
-    if (!primaryPlatform || !backupSource) return [];
-
-    const queryAlbum = async () => {
-        const data = await callBackupApi({
-            types: 'search',
-            source: `${backupSource}_album`,
-            name: playlistId,
-            count: 200,
-            pages: 1
-        }, {
-            timeoutMs: 15000,
-            retries: 1,
-            retryDelayMs: 600
-        });
-        return Array.isArray(data) ? data : [];
-    };
-
-    const querySearch = async () => {
-        const data = await callBackupApi({
-            types: 'search',
-            source: backupSource,
-            name: playlistId,
-            count: 100,
-            pages: 1
-        }, {
-            timeoutMs: 15000,
-            retries: 1,
-            retryDelayMs: 600
-        });
-        return Array.isArray(data) ? data : [];
-    };
-
-    let items = [];
-    try {
-        items = await queryAlbum();
-    } catch {
-        items = [];
-    }
-    if (!items.length) {
-        try {
-            items = await querySearch();
-        } catch {
-            items = [];
-        }
-    }
-    return items
-        .filter(item => item && item.id)
-        .map(item => normalizeBackupSong(item, primaryPlatform, backupSource));
+async function fetchPlaylistSongs(platform, playlistId) {
+    return fetchPlaylistSongsPrimary(platform, playlistId);
 }
 
-async function fetchPlaylistSongs(platform, playlistId, options = {}) {
-    return fetchPlaylistSongsPrimary(platform, playlistId);
+async function searchPlaylists(keyword, platform) {
+    const platforms = String(platform) === PLATFORM_ALL_VALUE ? supportedPlatforms : [platform];
+    const settled = await Promise.allSettled(platforms.map(async itemPlatform => {
+        const url = new URL(API_ROUTES.playlists, window.location.href);
+        url.searchParams.set('platform', itemPlatform);
+        url.searchParams.set('keyword', keyword);
+        url.searchParams.set('page', '1');
+        url.searchParams.set('limit', '20');
+        const response = await apiFetch(url.toString(), { timeoutMs: 15000 });
+        const payload = await response.json();
+        if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '歌单搜索失败');
+        const list = Array.isArray(payload?.data?.playlists) ? payload.data.playlists : [];
+        return list.map(item => ({ ...item, platform: itemPlatform }));
+    }));
+    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+}
+
+function renderPlaylistSearchResults(playlists) {
+    const results = document.getElementById('results');
+    if (!playlists.length) {
+        results.innerHTML = '<div class="empty-state">没有找到相关歌单，请换个关键词</div>';
+        return;
+    }
+    results.innerHTML = `<div class="mood-grid playlist-search-grid">${playlists.map(item => `
+        <button class="mood-card playlist-mood-card" type="button" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeHtml(item.name)}">
+            <img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover || ''))}" alt="" onerror="this.style.display='none'">
+            <span>${escapeHtml(platformDisplayName(item.platform))} 歌单</span>
+            <strong>${escapeHtml(item.name)}</strong>
+            <small>${Number(item.playCount || 0) > 0 ? `${formatPlayCount(item.playCount)} 次播放` : `${Number(item.trackCount || 0)} 首歌曲`}</small>
+        </button>`).join('')}</div>`;
+    results.querySelectorAll('[data-playlist-id]').forEach(button => {
+        button.addEventListener('click', () => openToplistSongs(
+            button.dataset.playlistPlatform,
+            button.dataset.playlistId,
+            button.dataset.playlistName,
+            { loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId) }
+        ));
+    });
 }
 
 // 搜索
@@ -2040,7 +2044,7 @@ async function search() {
 
         if (searchMode === 'keyword') {
             if (currentSearchType === 'playlist') {
-                resultsDiv.innerHTML = '<div class="empty-state">关键词歌单搜索暂不可用，请切换 ID 模式</div>';
+                renderPlaylistSearchResults(await searchPlaylists(input, platform));
                 return;
             }
 
@@ -3800,7 +3804,18 @@ async function fetchHomePlaylistCards() {
         return list.map(item => ({ ...item, platform }));
     });
     const settled = await Promise.allSettled(tasks);
-    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    const cards = settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    if (!cards.some(item => item.platform === 'kuwo')) {
+        cards.push({
+            id: '__kuwo_search__',
+            platform: 'kuwo',
+            name: '酷我热门歌单',
+            trackCount: 0,
+            playCount: 0,
+            searchKeyword: '热门'
+        });
+    }
+    return cards;
 }
 
 function playlistCardKey(item) {
@@ -3858,14 +3873,24 @@ function renderHomePlaylistCards(cards, options = {}) {
     homePlaylistKeys = picked.map(playlistCardKey);
 
     grid.innerHTML = picked.map((item, index) => `
-        <button class="mood-card playlist-mood-card${options.animate ? ' is-entering' : ''}" type="button" style="--playlist-card-delay:${index * 42}ms" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}">
-            <img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover || ''))}" alt="" onerror="this.style.display='none'">
+        <button class="mood-card playlist-mood-card${options.animate ? ' is-entering' : ''}" type="button" style="--playlist-card-delay:${index * 42}ms" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}" data-playlist-keyword="${escapeHtml(item.searchKeyword || '')}">
+            ${item.cover
+                ? `<img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover))}" alt="" onerror="this.style.display='none'">`
+                : '<div class="playlist-card-cover playlist-card-fallback" aria-hidden="true">KW</div>'}
             <span>${escapeHtml(platformDisplayName(item.platform))} 歌单</span>
             <strong>${escapeHtml(item.name)}</strong>
             <small>${Number(item.playCount || 0) > 0 ? `${formatPlayCount(item.playCount)} 次播放` : `${Number(item.trackCount || 0)} 首歌曲`}</small>
         </button>`).join('');
     grid.querySelectorAll('[data-playlist-id]').forEach(button => {
         button.addEventListener('click', () => {
+            if (button.dataset.playlistKeyword) {
+                currentSearchType = 'playlist';
+                document.querySelectorAll('.type-btn').forEach(item => item.classList.toggle('active', item.dataset.type === 'playlist'));
+                const platformSelect = document.getElementById('platform');
+                if (platformSelect) platformSelect.value = button.dataset.playlistPlatform;
+                runHomeSearch(button.dataset.playlistKeyword);
+                return;
+            }
             openToplistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, button.dataset.playlistName, {
                 loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId)
             });
