@@ -3804,18 +3804,7 @@ async function fetchHomePlaylistCards() {
         return list.map(item => ({ ...item, platform }));
     });
     const settled = await Promise.allSettled(tasks);
-    const cards = settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
-    if (!cards.some(item => item.platform === 'kuwo')) {
-        cards.push({
-            id: '__kuwo_search__',
-            platform: 'kuwo',
-            name: '酷我热门歌单',
-            trackCount: 0,
-            playCount: 0,
-            searchKeyword: '热门'
-        });
-    }
-    return cards;
+    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
 }
 
 function playlistCardKey(item) {
@@ -3873,24 +3862,14 @@ function renderHomePlaylistCards(cards, options = {}) {
     homePlaylistKeys = picked.map(playlistCardKey);
 
     grid.innerHTML = picked.map((item, index) => `
-        <button class="mood-card playlist-mood-card${options.animate ? ' is-entering' : ''}" type="button" style="--playlist-card-delay:${index * 42}ms" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}" data-playlist-keyword="${escapeHtml(item.searchKeyword || '')}">
-            ${item.cover
-                ? `<img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover))}" alt="" onerror="this.style.display='none'">`
-                : '<div class="playlist-card-cover playlist-card-fallback" aria-hidden="true">KW</div>'}
+        <button class="mood-card playlist-mood-card${options.animate ? ' is-entering' : ''}" type="button" style="--playlist-card-delay:${index * 42}ms" data-playlist-platform="${escapeHtml(item.platform)}" data-playlist-id="${escapeHtml(item.id)}" data-playlist-name="${escapeForSingleQuote(item.name)}">
+            <img class="playlist-card-cover" src="${escapeHtml(getProxiedCoverUrl(item.cover || ''))}" alt="" onerror="this.style.display='none'">
             <span>${escapeHtml(platformDisplayName(item.platform))} 歌单</span>
             <strong>${escapeHtml(item.name)}</strong>
             <small>${Number(item.playCount || 0) > 0 ? `${formatPlayCount(item.playCount)} 次播放` : `${Number(item.trackCount || 0)} 首歌曲`}</small>
         </button>`).join('');
     grid.querySelectorAll('[data-playlist-id]').forEach(button => {
         button.addEventListener('click', () => {
-            if (button.dataset.playlistKeyword) {
-                currentSearchType = 'playlist';
-                document.querySelectorAll('.type-btn').forEach(item => item.classList.toggle('active', item.dataset.type === 'playlist'));
-                const platformSelect = document.getElementById('platform');
-                if (platformSelect) platformSelect.value = button.dataset.playlistPlatform;
-                runHomeSearch(button.dataset.playlistKeyword);
-                return;
-            }
             openToplistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, button.dataset.playlistName, {
                 loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId)
             });

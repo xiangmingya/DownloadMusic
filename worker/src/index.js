@@ -3580,6 +3580,40 @@ function parseJsonpJson(text) {
   }
 }
 
+function parseKuwoObjectText(text) {
+  const direct = parseJsonText(text);
+  if (direct) return direct;
+  const raw = String(text || "").trim();
+  let normalized = "";
+  let inSingleQuote = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (!inSingleQuote) {
+      if (char === "'") {
+        inSingleQuote = true;
+        normalized += '"';
+      } else {
+        normalized += char;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inSingleQuote = false;
+      normalized += '"';
+    } else if (char === "\\" && raw[index + 1] === "'") {
+      normalized += "'";
+      index += 1;
+    } else if (char === '"') {
+      normalized += '\\"';
+    } else if (char === "\n") {
+      normalized += "\\n";
+    } else if (char !== "\r") {
+      normalized += char;
+    }
+  }
+  return inSingleQuote ? null : parseJsonText(normalized);
+}
+
 function normalizePlaylistCards(items, platform) {
   const seen = new Set();
   return (Array.isArray(items) ? items : []).map((item) => {
@@ -3627,12 +3661,13 @@ async function callKuwoPlaylistSearch(keyword, page, limit) {
     needliveshow: "0",
   };
   Object.entries(query).forEach(([key, value]) => endpoint.searchParams.set(key, value));
-  const { status, json } = await upstreamJson(endpoint.toString(), {
+  const { status, json, text } = await upstreamJson(endpoint.toString(), {
     headers: { "User-Agent": "Mozilla/5.0" },
   });
-  if (status < 200 || status >= 300 || !json) throw new Error(`上游请求失败 (${status})`);
-  const playlists = normalizePlaylistCards(json?.abslist, "kuwo").slice(0, limit);
-  return pagedResult(playlists, Number(json?.TOTAL || playlists.length), page, limit, json?.TOTAL !== undefined);
+  const payload = json || parseKuwoObjectText(text);
+  if (status < 200 || status >= 300 || !payload) throw new Error(`上游请求失败 (${status})`);
+  const playlists = normalizePlaylistCards(payload?.abslist, "kuwo").slice(0, limit);
+  return pagedResult(playlists, Number(payload?.TOTAL || playlists.length), page, limit, payload?.TOTAL !== undefined);
 }
 
 async function callPlaylists(platform, env, options = {}) {

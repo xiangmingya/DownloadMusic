@@ -95,6 +95,12 @@ globalThis.fetch = async (input, init = {}) => {
       { id: "3706893759", name: "热门DJ歌单", img: "https://img.kuwo.test/playlist.jpg", total: "482", listencnt: "37921273" },
     ] }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
+  if (url.startsWith("http://search.kuwo.cn/r.s") && url.includes("ft=playlist")) {
+    return new Response(String.raw`{'TOTAL':'1','abslist':[{'playlistid':'kw-real-1','name':'Today\'s 酷我歌单','pic':'http://img1.kuwo.cn/playlist.jpg','songnum':'18','playcnt':'12345','nickname':'酷我用户'}]}`, {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
   if (url.startsWith("https://music.163.com/api/search/get/web") && url.includes("type=1000")) {
     assert.match(url, /s=%E6%91%87%E6%BB%9A/);
     assert.match(url, /offset=20/);
@@ -398,6 +404,20 @@ try {
     hasMore: kuwoPlaylistDetailPayload.data.hasMore,
   }, { page: 1, limit: 200, returnedCount: 1, hasMore: false });
   assert.equal(apibytePlaylistCalls, 3, "APIByte should only serve playlist list, search, and detail requests");
+
+  const kuwoDirect = await worker.fetch(new Request("https://api.example.com/api/proxy/playlists?platform=kuwo", {
+    headers: { Cookie: cookie },
+  }), { ...env, APIBYTE_KUWO_API_KEY: "" });
+  const kuwoDirectPayload = await kuwoDirect.json();
+  assert.equal(kuwoDirect.status, 200);
+  assert.deepEqual(kuwoDirectPayload.data.playlists[0], {
+    id: "kw-real-1",
+    name: "Today's 酷我歌单",
+    cover: "http://img1.kuwo.cn/playlist.jpg",
+    trackCount: 18,
+    playCount: 12345,
+    author: "酷我用户",
+  });
 
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();
