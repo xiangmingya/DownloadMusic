@@ -40,6 +40,7 @@ const PREVIEW_MAX_BYTES = 1048576;
 const BACKUP4_CHKSZ_API_URL = "https://api.chksz.com/api";
 const BACKUP4_BUGPK_API_ROOT = "https://api.bugpk.com/api";
 const BACKUP4_PAUGRAM_NETEASE_URL = "https://api.paugram.com/netease/";
+const BACKUP4_IKUN_URL = "https://c.wwwweb.top/music/url";
 const SERVICE_METRICS_RETENTION_DAYS = 30;
 const SERVICE_METRICS_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const UPTIME_CHECK_RETENTION_DAYS = 7;
@@ -79,6 +80,7 @@ const MONITORING_SERVICE_CATALOG = [
   { source: "chksz_qq", category: "resolve", order: 91, name: "CHKSZ 音乐接口", detail: "网易云 / QQ 音乐接口 · 搜索与播放链接解析", endpoint: "api.chksz.com" },
   { source: "bugpk", category: "resolve", order: 95, name: "BugPK 音乐解析聚合", detail: "QQ / 网易云音乐接口 · 播放链接解析", endpoint: "api.bugpk.com" },
   { source: "paugram_netease", category: "resolve", order: 96, name: "Paugram 网易云接口", detail: "网易云音乐专用接口 · 播放链接解析", endpoint: "api.paugram.com" },
+  { source: "ikun", category: "resolve", order: 97, name: "ikun 公益音源", detail: "网易云 / 酷我备用接口 · 公共额度", endpoint: "c.wwwweb.top" },
   { source: "qqmp3", category: "resolve", order: 100, name: "QQMP3 酷我接口", detail: "酷我音乐专用接口 · 播放链接解析", endpoint: "qqmp3.vip" },
   { source: "nxvav", category: "resolve", order: 101, name: "NXVAV 音乐解析", detail: "网易云 / QQ 音乐 · 搜索与播放链接解析", endpoint: "api.nxvav.cn" },
   { source: "11na", category: "resolve", order: 102, name: "11NA 音乐接口", detail: "网易云 / QQ / 酷我 · 搜索与播放链接解析", endpoint: "api.11na.cn" },
@@ -4549,6 +4551,26 @@ async function backup4TryPaugramNetease(platform, id, _quality, _name, _artist, 
   throw error;
 }
 
+async function backup4TryIkun(platform, id, quality, _name, _artist, signal) {
+  const source = platform === "netease" ? "wy" : platform === "kuwo" ? "kw" : "";
+  if (!source) return null;
+  const response = await upstreamJson(BACKUP4_IKUN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": "lx-music-request/2.9.0" },
+    body: JSON.stringify({ source, musicId: String(id), quality: backup4NormalizeQuality(quality) }),
+    redirect: "follow",
+    signal: resolverAbortSignal(BACKUP4_TIMEOUT_MS, signal),
+  });
+  const parsed = response.json;
+  const url = normalizeMediaUrl(parsed?.url || "");
+  if (response.status >= 200 && response.status < 300 && Number(parsed?.code) === 200 && url) {
+    return { url, provider: "ikun" };
+  }
+  const error = new Error(String(parsed?.message || `ikun failed (${response.status})`));
+  error.status = response.status;
+  throw error;
+}
+
 async function backup4TryOiapiKuwo(platform, id, quality, name, artist, signal) {
   if (platform !== "kuwo") return null;
 
@@ -5035,6 +5057,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "chksz_163", run: (p, id, quality, _name, _artist, signal) => backup4TryChkszMusic163(p, id, quality, env, signal) },
       { source: "bugpk", run: backup4TryBugpk },
       { source: "paugram_netease", run: backup4TryPaugramNetease },
+      { source: "ikun", run: backup4TryIkun },
       { source: "nxvav", run: (p, id, quality, name, artist, signal) => backup4TryNxvav(p, id, quality, name, artist, env, signal) },
       { source: "11na", run: (p, id, quality, name, artist, signal) => backup4Try11na(p, id, quality, name, artist, signal) },
     ];
@@ -5047,6 +5070,7 @@ function getBackup4ProviderChain(platform, env) {
       { source: "lxmusic_signed", run: (p, id, quality, _name, _artist, signal) => backup4TryLxmusicSigned(p, id, quality, env, signal) },
       { source: "oiapi_kuwo", run: backup4TryOiapiKuwo },
       { source: "qqmp3", run: backup4TryQqmp3 },
+      { source: "ikun", run: backup4TryIkun },
       { source: "11na", run: (p, id, quality, name, artist, signal) => backup4Try11na(p, id, quality, name, artist, signal) },
     ];
   }

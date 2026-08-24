@@ -66,6 +66,7 @@ let unconfiguredProviderCalls = 0;
 let cancelledHedgedRequests = 0;
 let trustedCanaryMediaProbes = 0;
 let apibytePlaylistCalls = 0;
+let ikunFallbackCalls = 0;
 const twoWaveStartedAt = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
@@ -115,6 +116,21 @@ globalThis.fetch = async (input, init = {}) => {
     });
     throw new Error("first-wave provider intentionally slow");
   }
+  if (url === "https://c.wwwweb.top/music/url") {
+    const body = JSON.parse(String(init.body || "{}"));
+    if (body.musicId === "ikun-fallback") {
+      ikunFallbackCalls += 1;
+      assert.deepEqual(body, { source: "wy", musicId: "ikun-fallback", quality: "320k" });
+      return new Response(JSON.stringify({ code: 200, url: "https://cdn.example.test/music.mp3" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ code: 500, message: "unavailable" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   if (url.startsWith("https://music-api.gdstudio.xyz/api.php")) {
     resolverUpstreamCalls += 1;
     const uptimeCanary = url.includes("id=108914") || url.includes("id=66842");
@@ -131,6 +147,7 @@ globalThis.fetch = async (input, init = {}) => {
       });
     }
     const smallAudio = url.includes("id=small-audio");
+    const ikunFallback = url.includes("id=ikun-fallback");
     if (url.includes("id=flac-ok")) losslessRequested = url.includes("br=999");
     const flacFallback = url.includes("id=flac-fallback");
     if (flacFallback && url.includes("br=320")) qualityFallbackUsed = true;
@@ -141,7 +158,9 @@ globalThis.fetch = async (input, init = {}) => {
         headers: { "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify(uptimeCanary
+    return new Response(JSON.stringify(ikunFallback
+      ? { message: "fallback only" }
+      : uptimeCanary
       ? { url: "https://m8.music.126.net/song/canary.mp3", size: 2_000_000 }
       : { url: smallAudio ? "https://cdn.example.test/short-prompt.mp3" : "https://cdn.example.test/music.mp3" }), {
       status: 200,
@@ -245,6 +264,14 @@ try {
   }), env);
   assert.equal(flacFallback.status, 200);
   assert.equal(qualityFallbackUsed, true, "unavailable lossless audio should fall back to 320k");
+
+  const ikunFallback = await worker.fetch(new Request("https://api.example.com/api/proxy/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ platform: "netease", id: "ikun-fallback", quality: "320k" }),
+  }), env);
+  assert.equal(ikunFallback.status, 200, "ikun should rescue a failed Netease resolver chain");
+  assert.equal(ikunFallbackCalls, 1, "ikun should receive the Netease source code and normalized quality");
 
   const createShortAudioRequest = () => new Request("https://api.example.com/api/proxy/resolve", {
     method: "POST",
