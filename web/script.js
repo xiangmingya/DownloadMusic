@@ -982,121 +982,16 @@ function getAvailableSearchPlatforms() {
     return filtered.length > 0 ? filtered : [...PRIMARY_ALLOWED_PLATFORMS];
 }
 
-async function callBackupApi(params, options = {}) {
-    if (isBackupTemporarilyBlocked()) {
-        throw new Error(getBackupUnavailableMessage());
-    }
-
-    const timeoutMs = Number(options.timeoutMs || 15000);
-    const retries = Math.max(0, Number(options.retries || 1));
-    const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        try {
-            const url = new URL(API_ROUTES.backup, window.location.href);
-            Object.entries(params || {}).forEach(([k, v]) => {
-                if (v !== undefined && v !== null && String(v) !== '') {
-                    url.searchParams.set(k, String(v));
-                }
-            });
-
-            const dialogOn402 = String(params?.types || '') === 'url';
-            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
-            const text = await response.text();
-            const data = parseResponseText(text);
-            if (!response.ok) {
-                const err = new Error(getApiErrorMessage(data, response.status, `备用源请求失败 (${response.status})`));
-                err._statusCode = Number(response.status || 0);
-                throw err;
-            }
-            if (data && typeof data === 'object' && !Array.isArray(data) && data.detail) {
-                throw new Error(localizeErrorMessage(data.detail, '备用源请求失败'));
-            }
-            markBackupSuccess();
-            return data;
-        } catch (error) {
-            lastError = error;
-            markBackupFailure(error, Number(error?._statusCode || 0));
-            if (attempt < retries) {
-                await wait(retryDelayMs);
-            }
-        }
-    }
-
-    throw lastError || new Error('备用源请求失败');
+async function callBackupApi() {
+    throw new Error('旧备用接口已停用');
 }
 
-async function callBackup3Api(params, options = {}) {
-    const timeoutMs = Number(options.timeoutMs || 40000);
-    const retries = Math.max(0, Number(options.retries || 1));
-    const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        try {
-            const url = new URL(API_ROUTES.backup3, window.location.href);
-            Object.entries(params || {}).forEach(([k, v]) => {
-                if (v !== undefined && v !== null && String(v) !== '') {
-                    url.searchParams.set(k, String(v));
-                }
-            });
-
-            const dialogOn402 = String(params?.filter || '') === 'id';
-            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
-            const text = await response.text();
-            const data = parseResponseText(text);
-            if (!response.ok) {
-                throw new Error(getApiErrorMessage(data, response.status, `备用源3请求失败 (${response.status})`));
-            }
-            const code = Number(data?.code);
-            if (Number.isFinite(code) && code !== 200 && code !== 0) {
-                throw new Error(localizeErrorMessage(data?.error || data?.message, '备用源3请求失败'));
-            }
-            return data;
-        } catch (error) {
-            lastError = error;
-            if (attempt < retries) {
-                await wait(retryDelayMs);
-            }
-        }
-    }
-
-    throw lastError || new Error('备用源3请求失败');
+async function callBackup3Api() {
+    throw new Error('旧备用接口已停用');
 }
 
-async function callBackup4Api(params, options = {}) {
-    const timeoutMs = Number(options.timeoutMs || 18000);
-    const retries = Math.max(0, Number(options.retries || 1));
-    const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 500));
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        try {
-            const url = new URL(API_ROUTES.backup4, window.location.href);
-            Object.entries(params || {}).forEach(([k, v]) => {
-                if (v !== undefined && v !== null && String(v) !== '') {
-                    url.searchParams.set(k, String(v));
-                }
-            });
-
-            const dialogOn402 = String(params?.mode || 'url') !== 'search';
-            const response = await apiFetch(url.toString(), { timeoutMs, dialogOn402 });
-            const text = await response.text();
-            const data = parseResponseText(text);
-            if (!response.ok || Number(data?.code) !== 0) {
-                throw new Error(getApiErrorMessage(data, response.status, `备用源4请求失败 (${response.status})`));
-            }
-            return data;
-        } catch (error) {
-            lastError = error;
-            if (attempt < retries) {
-                await wait(retryDelayMs);
-            }
-        }
-    }
-
-    throw lastError || new Error('备用源4请求失败');
+async function callBackup4Api() {
+    throw new Error('旧备用接口已停用');
 }
 
 async function searchSongsByKeywordPagePrimary(keyword, selectedPlatform, options = {}) {
@@ -2251,36 +2146,6 @@ function hydrateMissingCovers(pageSongs, startIndex) {
             }
         };
 
-        if (song.dataSource === 'backup') {
-            if (isBackupTemporarilyBlocked()) return;
-            try {
-                const coverUrl = await fetchBackupPicUrl(song);
-                if (coverUrl) {
-                    setCover(coverUrl);
-                }
-            } catch {
-                // ignore backup cover errors
-            }
-            return;
-        }
-
-        if (song.dataSource === 'backup3') {
-            if (song?.backup3?.streamUrl) {
-                setCover(normalizeMediaUrl(song.cover || ''));
-                return;
-            }
-            try {
-                const refreshed = await fetchSongByIdBackup3(platform, song.id);
-                const coverUrl = normalizeMediaUrl(refreshed?.cover || '');
-                if (coverUrl) {
-                    setCover(coverUrl);
-                }
-            } catch {
-                // ignore backup3 cover errors
-            }
-            return;
-        }
-
         // 不消耗积分的补全方式：网易云优先读取公开 H5 元数据。
         if (platform === 'netease') {
             try {
@@ -2295,28 +2160,6 @@ function hydrateMissingCovers(pageSongs, startIndex) {
             }
         }
 
-        // 主源无封面时，先尝试备用源2（GD）补封面，若不可用再尝试备用源3。
-        if (!isBackupTemporarilyBlocked()) {
-            try {
-                const backupCover = await fetchBackupCoverForPrimarySong(song);
-                if (backupCover) {
-                    setCover(backupCover);
-                    return;
-                }
-            } catch {
-                // ignore backup cover errors
-            }
-        }
-
-        // 第二备用（QQ 专用）补封面。
-        try {
-            const backup3Cover = await fetchBackup3CoverForPrimarySong(song);
-            if (backup3Cover) {
-                setCover(backup3Cover);
-            }
-        } catch {
-            // ignore backup3 cover errors
-        }
     });
 }
 
