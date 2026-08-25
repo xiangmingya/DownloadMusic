@@ -73,6 +73,7 @@ let currentLyrics = [];
 let activePlayRequestId = 0;
 let currentPlayingSong = null;
 let currentPlaylistIndex = -1;
+let activePlaylistLoadId = 0;
 const audio = document.getElementById('audio');
 let nextTrackPreloadTimer = 0;
 let nextTrackPreloadToken = 0;
@@ -1935,8 +1936,8 @@ async function fetchBackupCoverForPrimarySong(song) {
     return normalizeMediaUrl(coverUrl || '');
 }
 
-async function fetchPlaylistSongsPrimary(platform, playlistId) {
-    const pageLimit = 500;
+async function fetchPlaylistSongsPrimary(platform, playlistId, options = {}) {
+    const pageLimit = platform === 'kuwo' ? 100 : 500;
     const songs = [];
     const seen = new Set();
     // ponytail: cap pagination so a broken upstream cannot keep the browser fetching forever.
@@ -1956,32 +1957,36 @@ async function fetchPlaylistSongsPrimary(platform, playlistId) {
             const key = String(song?.id || '');
             if (!key || seen.has(key)) return;
             seen.add(key);
-            songs.push(song);
+            songs.push({
+                id: key,
+                name: song.name || '未知歌曲',
+                artist: song.artist || '未知歌手',
+                album: song.album || '',
+                source: platform,
+                platform,
+                cover: normalizeMediaUrl(song.cover || ''),
+                dataSource: 'primary',
+                backup: null
+            });
             added += 1;
         });
+        if (added && typeof options.onPage === 'function') {
+            options.onPage([...songs], result);
+        }
         if (!pageSongs.length || !added || result?.hasMore !== true || songs.length >= Number(result?.total || Infinity)) break;
     }
 
-    return songs.map(song => ({
-        id: String(song.id || ''),
-        name: song.name || '未知歌曲',
-        artist: song.artist || '未知歌手',
-        album: song.album || '',
-        source: platform,
-        platform,
-        cover: normalizeMediaUrl(song.cover || ''),
-        dataSource: 'primary',
-        backup: null
-    }));
+    return songs;
 }
 
-async function fetchPlaylistSongs(platform, playlistId) {
-    return fetchPlaylistSongsPrimary(platform, playlistId);
+async function fetchPlaylistSongs(platform, playlistId, options = {}) {
+    return fetchPlaylistSongsPrimary(platform, playlistId, options);
 }
 
-async function searchPlaylists(keyword, platform) {
+async function searchPlaylists(keyword, platform, onUpdate) {
     const platforms = String(platform) === PLATFORM_ALL_VALUE ? supportedPlatforms : [platform];
-    const settled = await Promise.allSettled(platforms.map(async itemPlatform => {
+    const playlists = [];
+    await Promise.allSettled(platforms.map(async itemPlatform => {
         const url = new URL(API_ROUTES.playlists, window.location.href);
         url.searchParams.set('platform', itemPlatform);
         url.searchParams.set('keyword', keyword);
@@ -1991,9 +1996,10 @@ async function searchPlaylists(keyword, platform) {
         const payload = await response.json();
         if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '歌单搜索失败');
         const list = Array.isArray(payload?.data?.playlists) ? payload.data.playlists : [];
-        return list.map(item => ({ ...item, platform: itemPlatform }));
+        playlists.push(...list.map(item => ({ ...item, platform: itemPlatform })));
+        if (list.length && typeof onUpdate === 'function') onUpdate([...playlists]);
     }));
-    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    return playlists;
 }
 
 function renderPlaylistSearchResults(playlists) {
@@ -2014,7 +2020,7 @@ function renderPlaylistSearchResults(playlists) {
             button.dataset.playlistPlatform,
             button.dataset.playlistId,
             button.dataset.playlistName,
-            { loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId) }
+            { loader: onPage => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, { onPage }) }
         ));
     });
 }
@@ -2044,7 +2050,8 @@ async function search() {
 
         if (searchMode === 'keyword') {
             if (currentSearchType === 'playlist') {
-                renderPlaylistSearchResults(await searchPlaylists(input, platform));
+                const playlists = await searchPlaylists(input, platform, renderPlaylistSearchResults);
+                if (!playlists.length) renderPlaylistSearchResults([]);
                 return;
             }
 
@@ -3749,6 +3756,7 @@ function resetSearchViewMode() {
 }
 
 async function openToplistSongs(platform, id, name, options = {}) {
+    const loadId = ++activePlaylistLoadId;
     const heading = document.getElementById('searchViewEyebrow');
     const title = document.getElementById('searchViewTitle');
     const description = document.getElementById('searchViewDescription');
@@ -3765,8 +3773,26 @@ async function openToplistSongs(platform, id, name, options = {}) {
     resetKeywordPagingState();
     try {
         let songs = [];
+        let renderedProgress = false;
         if (typeof options.loader === 'function') {
-            songs = await options.loader();
+            songs = await options.loader((partialSongs, pageMeta = {}) => {
+                if (loadId !== activePlaylistLoadId || !partialSongs.length) return;
+                if (!renderedProgress) {
+                    displaySongsWithPagination(partialSongs);
+                    renderedProgress = true;
+                } else {
+                    allSongs = partialSongs;
+                    renderLocalPage();
+                }
+                if (description) {
+                    description.textContent = pageMeta?.hasMore === true
+                        ? `已加载 ${partialSongs.length} 首，继续加载中…`
+                        : `共 ${partialSongs.length} 首，可直接播放、收藏或加入你的歌单。`;
+                }
+                if (toplistActions && partialSongs.length > 1) {
+                    toplistActions.innerHTML = `<button class="toplist-play-all-btn" type="button" onclick="playAllResultSongs()">${getIconSvg('play', 17)} 全部播放（${partialSongs.length} 首）</button>`;
+                }
+            });
         } else {
             const url = new URL(API_ROUTES.toplist, window.location.href);
             url.searchParams.set('platform', platform);
@@ -3776,12 +3802,15 @@ async function openToplistSongs(platform, id, name, options = {}) {
             if (!response.ok || Number(payload?.code) !== 0) throw new Error(payload?.message || '榜单歌曲加载失败');
             songs = (Array.isArray(payload?.data?.songs) ? payload.data.songs : []).map(song => ({ ...song, platform }));
         }
+        if (loadId !== activePlaylistLoadId) return;
         if (!Array.isArray(songs) || songs.length === 0) throw new Error('这里暂时没有可播放歌曲');
-        displaySongsWithPagination(songs);
+        if (!renderedProgress) displaySongsWithPagination(songs);
+        else if (description) description.textContent = `共 ${songs.length} 首，可直接播放、收藏或加入你的歌单。`;
         if (toplistActions && songs.length > 1) {
             toplistActions.innerHTML = `<button class="toplist-play-all-btn" type="button" onclick="playAllResultSongs()">${getIconSvg('play', 17)} 全部播放（${songs.length} 首）</button>`;
         }
     } catch (error) {
+        if (loadId !== activePlaylistLoadId) return;
         results.innerHTML = `<div class="empty-state">${escapeHtml(localizeErrorMessage(error?.message, '内容加载失败'))}</div>`;
     }
 }
@@ -3793,7 +3822,8 @@ function formatPlayCount(count) {
     return String(n);
 }
 
-async function fetchHomePlaylistCards() {
+async function fetchHomePlaylistCards(onUpdate) {
+    const cards = [];
     const tasks = ['netease', 'qq', 'kuwo'].map(async platform => {
         const url = new URL(API_ROUTES.playlists, window.location.href);
         url.searchParams.set('platform', platform);
@@ -3801,10 +3831,11 @@ async function fetchHomePlaylistCards() {
         const payload = await response.json();
         if (!response.ok || Number(payload?.code) !== 0) throw new Error('歌单列表加载失败');
         const list = Array.isArray(payload?.data?.playlists) ? payload.data.playlists : [];
-        return list.map(item => ({ ...item, platform }));
+        cards.push(...list.map(item => ({ ...item, platform })));
+        if (list.length && typeof onUpdate === 'function') onUpdate([...cards]);
     });
-    const settled = await Promise.allSettled(tasks);
-    return settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    await Promise.allSettled(tasks);
+    return cards;
 }
 
 function playlistCardKey(item) {
@@ -3871,7 +3902,7 @@ function renderHomePlaylistCards(cards, options = {}) {
     grid.querySelectorAll('[data-playlist-id]').forEach(button => {
         button.addEventListener('click', () => {
             openToplistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, button.dataset.playlistName, {
-                loader: () => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId)
+                loader: onPage => fetchPlaylistSongs(button.dataset.playlistPlatform, button.dataset.playlistId, { onPage })
             });
         });
     });
@@ -3888,17 +3919,19 @@ async function initHomePlaylists({ animate = false } = {}) {
     }
     const grid = document.querySelector('.mood-grid');
     try {
-        const cards = await fetchHomePlaylistCards();
         if (animate && grid?.querySelector('.playlist-mood-card')) {
             grid.classList.add('is-refreshing');
-            await new Promise(resolve => setTimeout(resolve, 150));
         }
-        const rendered = renderHomePlaylistCards(cards, { animate });
-        if (rendered && grid?.classList.contains('is-refreshing')) {
-            requestAnimationFrame(() => requestAnimationFrame(() => grid.classList.remove('is-refreshing')));
-        } else {
-            grid?.classList.remove('is-refreshing');
-        }
+        let firstRender = true;
+        const cards = await fetchHomePlaylistCards(partialCards => {
+            const rendered = renderHomePlaylistCards(partialCards, { animate: animate && firstRender });
+            if (rendered) {
+                firstRender = false;
+                requestAnimationFrame(() => requestAnimationFrame(() => grid?.classList.remove('is-refreshing')));
+            }
+        });
+        if (firstRender) renderHomePlaylistCards(cards, { animate });
+        grid?.classList.remove('is-refreshing');
     } catch {
         // 歌单列表不可用时保留原有关键词卡片。
         grid?.classList.remove('is-refreshing');
