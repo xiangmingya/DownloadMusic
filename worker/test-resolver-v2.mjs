@@ -78,7 +78,7 @@ globalThis.fetch = async (input, init = {}) => {
       assert.match(url, /page=0/);
       assert.match(url, /size=200/);
       return new Response(JSON.stringify({ code: 200, msg: "success", data: { music_list: [
-        { rid: 228741121, name: "暖暖", artist: "香皂泡", album: "暖暖", images: { pic: "https://img.kuwo.test/song.jpg" } },
+        { rid: 228741121, name: "暖暖", artist: "香皂泡", album: "暖暖", albumpic: "https://img.kuwo.test/song.jpg" },
       ] } }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     assert.match(url, /action=search/);

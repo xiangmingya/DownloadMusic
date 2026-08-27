@@ -2955,6 +2955,11 @@ function qqAlbumCoverUrl(album) {
 }
 
 function kuwoAlbumCoverUrl(item) {
+  const albumPic = String(
+    item?.images?.pic || item?.images?.album_pic || item?.albumpic || item?.album_pic || item?.musicPic || "",
+  ).trim();
+  if (albumPic) return normalizeMediaUrl(albumPic);
+
   const short = String(item?.web_albumpic_short || "").trim();
   if (short) {
     if (short.startsWith("http://") || short.startsWith("https://") || short.startsWith("//")) {
@@ -3118,7 +3123,7 @@ function parseApibyteKuwoPlaylistSongs(data) {
       name: String(item?.name || "未知歌曲"),
       artist: String(item?.artist || "未知歌手"),
       album: String(item?.album || ""),
-      cover: normalizeMediaUrl(item?.images?.pic || item?.images?.album_pic || ""),
+      cover: kuwoAlbumCoverUrl(item),
     })).filter((item) => item.id),
     total: Number(data?.total || data?.music_total || items.length),
     hasKnownTotal: data?.total !== undefined || data?.music_total !== undefined,
