@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import worker from "./src/index.js";
 
 const uptimeRows = [];
+let publicStatusReads = 0;
 const DB = {
   prepare(sql) {
     return {
@@ -12,7 +13,10 @@ const DB = {
             return null;
           },
           async all() {
-            if (sql.includes("FROM service_uptime_checks")) return { results: [...uptimeRows] };
+            if (sql.includes("FROM service_uptime_checks")) {
+              publicStatusReads += 1;
+              return { results: [...uptimeRows] };
+            }
             return { results: [] };
           },
           async run() {
@@ -59,6 +63,7 @@ const login = await worker.fetch(new Request("https://api.example.com/api/auth/l
 const cookie = login.headers.get("Set-Cookie").split(";", 1)[0];
 
 const originalFetch = globalThis.fetch;
+const originalCaches = globalThis.caches;
 let resolverUpstreamCalls = 0;
 let losslessRequested = false;
 let qualityFallbackUsed = false;
@@ -419,12 +424,25 @@ try {
     author: "酷我用户",
   });
 
+  const publicStatusCache = new Map();
+  globalThis.caches = { default: {
+    async match(request) {
+      return publicStatusCache.get(request.url)?.clone();
+    },
+    async put(request, response) {
+      publicStatusCache.set(request.url, response.clone());
+    },
+  } };
+  const readsBeforePublicStatus = publicStatusReads;
   const publicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
   const publicStatusPayload = await publicStatus.json();
   assert.equal(publicStatus.status, 200);
   assert.equal(publicStatusPayload.data.platforms[0].state, "healthy");
   assert.equal(publicStatusPayload.data.platforms[0].history.length, 24);
   assert.equal("provider" in publicStatusPayload.data.platforms[0], false, "public uptime must not expose resolver sources");
+  const cachedPublicStatus = await worker.fetch(new Request("https://api.example.com/api/public/service-status"), env);
+  assert.equal(cachedPublicStatus.status, 200);
+  assert.equal(publicStatusReads - readsBeforePublicStatus, 1, "public uptime should read D1 once per cache window");
 
   const parseResponse = await worker.fetch(new Request("https://api.example.com/api/proxy/parse", {
     method: "POST",
@@ -442,6 +460,8 @@ try {
   assert.equal(retiredRoute.status, 404, "legacy backup routes must no longer be exposed");
 } finally {
   globalThis.fetch = originalFetch;
+  if (originalCaches === undefined) delete globalThis.caches;
+  else globalThis.caches = originalCaches;
 }
 
 console.log("resolver v2 cache and request coalescing: ok");

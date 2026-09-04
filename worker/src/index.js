@@ -156,7 +156,7 @@ async function handleRequest(request, env, ctx) {
       return withCors(request, env, await handleBimojiStatus(env));
     }
     if (url.pathname === "/api/public/service-status" && request.method === "GET") {
-      return withCors(request, env, await handlePublicServiceStatus(env));
+      return withCors(request, env, await handlePublicServiceStatus(env, ctx));
     }
     if (url.pathname === "/api/membership" && request.method === "GET") {
       return withCors(request, env, await handleMembership(request, env));
@@ -1981,12 +1981,32 @@ function aggregatePublicUptime(platform, allRows, now) {
   };
 }
 
-async function handlePublicServiceStatus(env) {
+async function handlePublicServiceStatus(env, ctx) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request("https://cache.internal/public-service-status");
+  if (cache) {
+    try {
+      const cached = await cache.match(cacheKey);
+      if (cached) return cached;
+    } catch {}
+  }
+
   const db = getDatabase(env);
   const generatedAt = sqlNow();
   const platforms = ["netease", "qq", "kuwo"];
   const emptyPlatforms = () => platforms.map((platform) => ({ platform, state: "unknown", label: "待检测", last_checked_at: null, checks: 0, availability: null, average_duration_ms: 0, history: [] }));
-  if (!db) return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() } }, { "Cache-Control": "public, max-age=30" });
+  const respond = async (data) => {
+    const response = jsonResponse(200, { code: 0, message: "Success", data }, { "Cache-Control": "public, max-age=300" });
+    if (cache) {
+      try {
+        const cacheWrite = cache.put(cacheKey, response.clone());
+        if (ctx?.waitUntil) ctx.waitUntil(cacheWrite.catch(() => {}));
+        else await cacheWrite;
+      } catch {}
+    }
+    return response;
+  };
+  if (!db) return respond({ generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() });
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -2001,9 +2021,9 @@ async function handlePublicServiceStatus(env) {
           : states.some((state) => state === "slow") ? "slow"
             : "unknown";
     const overallLabel = ({ healthy: "全部正常", slow: "部分服务较慢", unstable: "部分服务波动", down: "服务不可用", unknown: "等待主动检测" })[overall];
-    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall, overall_label: overallLabel, platforms: platformStates } }, { "Cache-Control": "public, max-age=30" });
+    return respond({ generated_at: generatedAt, window_hours: 24, overall, overall_label: overallLabel, platforms: platformStates });
   } catch {
-    return jsonResponse(200, { code: 0, message: "Success", data: { generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() } }, { "Cache-Control": "public, max-age=30" });
+    return respond({ generated_at: generatedAt, window_hours: 24, overall: "unknown", overall_label: "等待主动检测", platforms: emptyPlatforms() });
   }
 }
 
